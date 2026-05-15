@@ -70,6 +70,7 @@ function handleAction(data) {
 
     case "listMov": {
       const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      autoFillIds(sh, r => r[4] || r[6] || r[7] || r[8]); // Rubro, Concepto o montos
       const all = sh.getDataRange().getValues();
       if (all.length <= 1) return { ok: true, movimientos: [] };
       let rows = all.slice(1).filter(r => r[0]);
@@ -154,6 +155,7 @@ function handleAction(data) {
 
     case "listJugadores": {
       const sh  = getOrCreateSheet(JUG_SHEET, JUG_COLS);
+      autoFillIds(sh, r => r[1], r => !r[2] ? [r[0], r[1], "true"] : null);
       const all = sh.getDataRange().getValues();
       if (all.length <= 1) return { ok: true, jugadores: [] };
       const jugadores = all.slice(1)
@@ -195,6 +197,7 @@ function handleAction(data) {
 
     case "listGrupos": {
       const sh  = getOrCreateSheet(GRP_SHEET, GRP_COLS);
+      autoFillIds(sh, r => r[1], r => !r[3] ? [r[0], r[1], r[2]||"[]", "true"] : null);
       const all = sh.getDataRange().getValues();
       if (all.length <= 1) return { ok: true, grupos: [] };
       const grupos = all.slice(1)
@@ -241,6 +244,7 @@ function handleAction(data) {
 
     case "listAdherentes": {
       const sh  = getOrCreateSheet(ADH_SHEET, ADH_COLS);
+      autoFillIds(sh, r => r[1], r => !r[2] ? [r[0], r[1], "true"] : null);
       const all = sh.getDataRange().getValues();
       if (all.length <= 1) return { ok: true, adherentes: [] };
       const adherentes = all.slice(1)
@@ -393,6 +397,27 @@ function handleAction(data) {
 // ════════════════════════════════════════════════════════════
 // HELPERS
 // ════════════════════════════════════════════════════════════
+
+/**
+ * Auto-genera IDs para filas que tienen datos pero ID vacío.
+ * hasData(row) → truthy si la fila merece un ID
+ * fixRow(row)  → opcional; retorna el array completo a escribir (para completar Activo, etc.)
+ */
+function autoFillIds(sh, hasData, fixRow) {
+  const all = sh.getDataRange().getValues();
+  for (let i = 1; i < all.length; i++) {
+    const r = all[i];
+    if (!r[0] && hasData(r)) {
+      const newId = uid_gs();
+      r[0] = newId;
+      if (fixRow) {
+        const fixed = fixRow(r);
+        if (fixed) { sh.getRange(i + 1, 1, 1, fixed.length).setValues([fixed]); continue; }
+      }
+      sh.getRange(i + 1, 1).setValue(newId);
+    }
+  }
+}
 
 function isAdherentesRubro(rubro) {
   return rubro && rubro.toUpperCase().includes("ADHERENTE");

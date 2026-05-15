@@ -1,0 +1,1874 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0f0f1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Tesorería Club</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+*, *::before, *::after {
+  box-sizing: border-box; margin: 0; padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+:root {
+  --bg:       #0f0f1a;
+  --bg2:      #171728;
+  --bg3:      #1e1e32;
+  --bg4:      #252540;
+  --border:   rgba(255,255,255,0.08);
+  --border2:  rgba(255,255,255,0.15);
+  --text:     #f0f0f8;
+  --text2:    #9090b0;
+  --text3:    #606080;
+  --accent:   #2563EB;
+  --accent-bg:rgba(37,99,235,0.13);
+  --green:    #4ade80;
+  --green-bg: rgba(74,222,128,0.10);
+  --red:      #f87171;
+  --red-bg:   rgba(248,113,113,0.10);
+  --int:      #9090b0;
+  --int-bg:   rgba(144,144,176,0.12);
+  --blue:     #60a5fa;
+  --blue-bg:  rgba(96,165,250,0.10);
+  --warn:     #fbbf24;
+  --warn-bg:  rgba(251,191,36,0.10);
+  --r:  12px;
+  --rs:  8px;
+  --font: 'DM Sans', sans-serif;
+  --mono: 'DM Mono', monospace;
+}
+html, body {
+  background: var(--bg); color: var(--text);
+  font-family: var(--font); font-size: 15px;
+  line-height: 1.5; min-height: 100vh;
+  overscroll-behavior: none;
+}
+#app { max-width: 480px; margin: 0 auto; padding-bottom: 88px; min-height: 100vh; }
+
+/* ── Header ── */
+.hdr { padding: 18px 18px 0; display:flex; align-items:center; justify-content:space-between; margin-bottom:2px; }
+.hdr-title { font-size:21px; font-weight:600; letter-spacing:-.5px; }
+.hdr-title .accent { color:var(--accent); }
+.hdr-sub { font-size:12px; color:var(--text3); padding:0 18px 12px; }
+.badge { font-size:11px; color:var(--text2); background:var(--bg3); border:1px solid var(--border); padding:4px 10px; border-radius:20px; font-family:var(--mono); }
+
+/* ── Bottom nav ── */
+.bnav {
+  position:fixed; bottom:0; left:0; right:0; max-width:480px; margin:0 auto;
+  background:var(--bg); border-top:1px solid var(--border);
+  display:flex; padding:8px 0 max(8px, env(safe-area-inset-bottom)); z-index:50;
+}
+.bnav-btn { flex:1; background:none; border:none; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 0; color:var(--text3); transition:color .15s; font-family:var(--font); }
+.bnav-btn.active { color:var(--accent); }
+.bnav-icon { font-size:19px; line-height:1; }
+.bnav-lbl  { font-size:10px; font-weight:500; }
+
+/* ── Content ── */
+.content { padding:14px 18px 0; }
+
+/* ── Fields ── */
+.field { display:flex; flex-direction:column; gap:5px; }
+.field label { font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.07em; }
+.field.highlighted label { color:var(--accent); }
+.inp {
+  width:100%; background:var(--bg3); border:1px solid var(--border);
+  border-radius:var(--rs); padding:11px 14px; color:var(--text);
+  font-family:var(--font); font-size:15px; outline:none;
+  transition:border-color .15s; -webkit-appearance:none; appearance:none;
+}
+.inp:focus { border-color:var(--border2); }
+.inp::placeholder { color:var(--text3); }
+.inp[readonly] { background:var(--bg4); color:var(--text2); cursor:default; }
+select.inp {
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236060a0' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 14px center; padding-right:36px;
+}
+textarea.inp { resize:none; }
+.row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.fgrid { display:flex; flex-direction:column; gap:14px; }
+
+/* ── Tipo pills ── */
+.tipo-row { display:flex; gap:0; border:1px solid var(--border); border-radius:var(--r); overflow:hidden; }
+.tipo-pill {
+  flex:1; background:none; border:none; color:var(--text2);
+  font-family:var(--font); font-size:13px; font-weight:500;
+  padding:11px 8px; cursor:pointer; text-align:center; transition:all .15s;
+}
+.tipo-pill + .tipo-pill { border-left:1px solid var(--border); }
+.tipo-pill.active-ing { background:var(--green-bg); color:var(--green); }
+.tipo-pill.active-egr { background:var(--red-bg);   color:var(--red);   }
+.tipo-pill.active-int { background:var(--int-bg);   color:var(--int);   }
+
+/* ── General pills ── */
+.pill-row { display:flex; gap:6px; flex-wrap:wrap; }
+.pill {
+  background:none; border:1px solid var(--border); color:var(--text2);
+  font-family:var(--font); font-size:13px; font-weight:400;
+  padding:7px 12px; border-radius:var(--rs); cursor:pointer; white-space:nowrap; user-select:none; transition:all .12s;
+}
+.pill.active { background:var(--accent-bg); color:var(--accent); border-color:var(--accent); font-weight:500; }
+.pill.sm { padding:5px 9px; font-size:12px; }
+
+/* ── Buttons ── */
+.btn-main {
+  width:100%; padding:15px; background:var(--accent);
+  color:#fff; font-family:var(--font); font-size:15px; font-weight:600;
+  border:none; border-radius:var(--r); cursor:pointer; letter-spacing:-.2px; transition:opacity .15s;
+}
+.btn-main:active { opacity:.82; }
+.btn-main.editing { background:linear-gradient(135deg,#f59e0b,#d97706); }
+.btn-secondary {
+  width:100%; padding:11px; background:var(--bg4); color:var(--text2);
+  border:1px solid var(--border); border-radius:var(--rs);
+  font-family:var(--font); font-size:14px; font-weight:500; cursor:pointer; transition:opacity .15s;
+}
+.btn-sm {
+  background:none; border:1px solid var(--border); color:var(--text2);
+  font-family:var(--font); font-size:12px; padding:5px 10px; border-radius:6px; cursor:pointer;
+}
+.btn-sm.danger { color:var(--red); border-color:rgba(248,113,113,.3); }
+.btn-sm.accent { color:var(--accent); border-color:rgba(37,99,235,.3); }
+
+/* ── Edit banner ── */
+.edit-banner {
+  background:var(--warn-bg); border:1px solid rgba(251,191,36,.3);
+  border-radius:var(--rs); padding:10px 14px; font-size:13px; color:var(--warn);
+  display:flex; justify-content:space-between; align-items:center;
+}
+.edit-banner button { background:none; border:none; color:inherit; font-size:20px; cursor:pointer; padding:0 2px; }
+
+/* ── Month selector ── */
+.mes-sel {
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--bg2); border:1px solid var(--border); border-radius:var(--r);
+  padding:10px 14px; margin-bottom:14px;
+}
+.mes-sel-btn { background:none; border:none; color:var(--text2); font-size:20px; cursor:pointer; padding:2px 6px; line-height:1; }
+.mes-sel-label { font-size:15px; font-weight:600; }
+
+/* ── Summary cards ── */
+.sum-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px; }
+.sum-grid.three { grid-template-columns:1fr 1fr 1fr; }
+.stat-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:13px 12px; }
+.stat-label { font-size:10px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.07em; margin-bottom:5px; }
+.stat-val   { font-size:18px; font-weight:600; font-family:var(--mono); line-height:1.2; }
+.stat-val.ing { color:var(--green); }
+.stat-val.egr { color:var(--red); }
+.stat-val.acc { color:var(--accent); }
+.stat-sub   { font-size:11px; color:var(--text3); margin-top:3px; }
+
+/* ── Filters ── */
+.filter-row { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; margin-bottom:10px; padding-bottom:2px; }
+.filter-row::-webkit-scrollbar { display:none; }
+.search-wrap { position:relative; margin-bottom:10px; }
+.search-wrap .inp { padding-left:34px; }
+.search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text3); font-size:14px; pointer-events:none; }
+.count-line { font-size:12px; color:var(--text3); margin-bottom:8px; }
+
+/* ── Movement cards ── */
+.mov-card {
+  background:var(--bg2); border:1px solid var(--border); border-radius:var(--r);
+  padding:12px 14px; margin-bottom:8px; display:flex; gap:10px; align-items:flex-start;
+  cursor:pointer; transition:background .12s;
+}
+.mov-card:active { background:var(--bg3); }
+.mov-card-info { flex:1; min-width:0; }
+.mov-card-top  { display:flex; align-items:baseline; gap:8px; margin-bottom:3px; }
+.mov-card-rubro { font-weight:500; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mov-card-fecha { font-size:11px; color:var(--text3); flex-shrink:0; font-family:var(--mono); }
+.mov-card-concepto { font-size:12px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:4px; }
+.mov-card-tags { display:flex; gap:4px; flex-wrap:wrap; }
+.tag { font-size:10px; padding:2px 6px; border-radius:4px; border:1px solid transparent; white-space:nowrap; }
+.tag-cuenta { color:var(--accent); background:var(--accent-bg); }
+.tag-jug    { color:var(--blue);   background:var(--blue-bg); }
+.tag-adh    { color:var(--warn);   background:var(--warn-bg); }
+.tag-int    { color:var(--int);    background:var(--int-bg); }
+.mov-card-amt { text-align:right; flex-shrink:0; }
+.monto { font-weight:600; font-size:15px; font-family:var(--mono); }
+.monto.ing { color:var(--green); }
+.monto.egr { color:var(--red);   }
+.monto.int { color:var(--int);   }
+
+/* ── Searchable Select (rubro) ── */
+.ss-wrap { position:relative; }
+.ss-drop {
+  position:absolute; left:0; right:0; top:calc(100% + 4px);
+  background:var(--bg3); border:1px solid var(--border2);
+  border-radius:var(--rs); max-height:240px; overflow-y:auto;
+  z-index:100; box-shadow:0 8px 24px rgba(0,0,0,.5);
+}
+.ss-group { font-size:10px; font-weight:600; color:var(--text3); text-transform:uppercase;
+  letter-spacing:.07em; padding:8px 14px 4px; }
+.ss-item { padding:10px 14px; font-size:14px; color:var(--text); cursor:pointer; transition:background .1s; }
+.ss-item:hover, .ss-item:active { background:var(--bg4); }
+.ss-empty { padding:12px 14px; font-size:13px; color:var(--text3); }
+
+/* ── Section header ── */
+.sec-hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.sec-title { font-size:13px; font-weight:600; color:var(--text2); }
+
+/* ── Category bars (dashboard) ── */
+.cat-list { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
+.cat-row { }
+.cat-name { font-size:12px; color:var(--text2); display:flex; justify-content:space-between; margin-bottom:4px; }
+.cat-total { font-family:var(--mono); font-size:11px; color:var(--text3); }
+.bar-bg { height:8px; background:var(--bg4); border-radius:4px; overflow:hidden; }
+.bar-fill { height:100%; border-radius:4px; transition:width .3s; }
+.bar-egr { background:var(--red);   }
+.bar-ing { background:var(--green); }
+
+/* ── Summary table ── */
+.sum-table { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px; }
+.sum-table th { text-align:left; color:var(--text3); font-size:10px; text-transform:uppercase; letter-spacing:.07em; padding:6px 8px; border-bottom:1px solid var(--border); font-weight:600; }
+.sum-table td { padding:8px 8px; border-bottom:1px solid var(--border); color:var(--text2); vertical-align:top; }
+.sum-table td:first-child { color:var(--text); max-width:140px; word-break:break-word; }
+.sum-table td.ing { color:var(--green); font-family:var(--mono); text-align:right; }
+.sum-table td.egr { color:var(--red);   font-family:var(--mono); text-align:right; }
+.sum-table td.net { color:var(--text);  font-family:var(--mono); text-align:right; font-weight:600; }
+.sum-table tr:last-child td { border-bottom:none; }
+
+/* ── Entity list ── */
+.entity-tabs { display:flex; gap:0; border:1px solid var(--border); border-radius:var(--r); overflow:hidden; margin-bottom:14px; }
+.entity-tab { flex:1; background:none; border:none; color:var(--text3); font-family:var(--font); font-size:13px; font-weight:500; padding:10px 8px; cursor:pointer; text-align:center; transition:all .15s; }
+.entity-tab + .entity-tab { border-left:1px solid var(--border); }
+.entity-tab.active { background:var(--accent-bg); color:var(--accent); }
+.entity-item {
+  background:var(--bg2); border:1px solid var(--border); border-radius:var(--rs);
+  padding:11px 14px; margin-bottom:7px; display:flex; align-items:center; gap:10px;
+}
+.entity-name { flex:1; font-size:14px; }
+.entity-sub  { font-size:11px; color:var(--text3); }
+.add-row { display:flex; gap:8px; margin-bottom:12px; }
+.add-row .inp { flex:1; }
+
+/* ── Adherentes historial grid ── */
+.adh-grid-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:16px; }
+.adh-grid { border-collapse:collapse; font-size:12px; min-width:100%; }
+.adh-grid th { background:var(--bg3); color:var(--text3); font-size:10px; text-transform:uppercase; letter-spacing:.06em; padding:7px 8px; border:1px solid var(--border); text-align:center; white-space:nowrap; font-weight:600; }
+.adh-grid th:first-child { text-align:left; min-width:130px; }
+.adh-grid td { padding:6px 8px; border:1px solid var(--border); text-align:center; vertical-align:middle; }
+.adh-grid td:first-child { text-align:left; color:var(--text2); background:var(--bg2); white-space:nowrap; }
+.adh-grid tr:hover td { background:var(--bg3); }
+.pago-btn { background:none; border:none; font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:transform .1s; }
+.pago-btn:active { transform:scale(0.85); }
+
+/* ── Config sections ── */
+.cfg-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:16px; margin-bottom:12px; }
+.cfg-title { font-size:14px; font-weight:600; margin-bottom:10px; }
+.cfg-item { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.cfg-item .inp { flex:1; }
+.cfg-note { font-size:12px; color:var(--text3); line-height:1.6; margin-top:8px; }
+.conn-row { display:flex; gap:8px; margin-top:10px; }
+.conn-row .inp { flex:1; font-size:13px; }
+
+/* ── Modal ── */
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(15,15,26,.88);
+  display:flex; align-items:flex-end; justify-content:center;
+  z-index:300; backdrop-filter:blur(2px);
+}
+.modal-card {
+  background:var(--bg2); border:1px solid var(--border2);
+  border-radius:var(--r) var(--r) 0 0;
+  width:100%; max-width:480px; max-height:86vh; overflow-y:auto;
+  padding:20px 18px 28px;
+}
+.modal-handle { width:36px; height:4px; background:var(--bg4); border-radius:2px; margin:0 auto 16px; }
+.modal-title { font-size:16px; font-weight:600; margin-bottom:14px; }
+.modal-footer { display:flex; gap:10px; margin-top:16px; }
+.modal-detail-row { display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.modal-detail-row:last-child { border-bottom:none; }
+.modal-detail-lbl { color:var(--text3); flex-shrink:0; width:110px; }
+.modal-detail-val { color:var(--text2); text-align:right; word-break:break-word; }
+.modal-monto-big { font-size:28px; font-weight:600; font-family:var(--mono); text-align:center; padding:12px 0; }
+
+/* ── Spinner / overlay ── */
+#overlay {
+  position:fixed; inset:0; background:rgba(15,15,26,.88);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:14px; z-index:200; backdrop-filter:blur(2px);
+}
+#overlay.hidden { display:none; }
+.spinner { width:34px; height:34px; border:2px solid var(--border2); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+#overlay p { font-size:13px; color:var(--text2); }
+
+/* ── Toast ── */
+.toast {
+  position:fixed; bottom:94px; left:50%; transform:translateX(-50%);
+  padding:10px 20px; border-radius:var(--rs); font-size:14px; font-weight:500;
+  z-index:999; white-space:nowrap; pointer-events:none;
+  animation:tin .2s ease;
+}
+.toast.ok  { background:var(--green-bg); color:var(--green); border:1px solid rgba(74,222,128,.3); }
+.toast.err { background:var(--red-bg);   color:var(--red);   border:1px solid rgba(248,113,113,.3); }
+@keyframes tin { from { opacity:0; transform:translateX(-50%) translateY(8px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
+
+/* ── Empty state ── */
+.empty { text-align:center; padding:48px 20px; color:var(--text3); }
+.empty .ico { font-size:36px; margin-bottom:10px; }
+.empty p { font-size:14px; line-height:1.6; }
+
+/* ── No URL notice ── */
+.notice {
+  background:var(--warn-bg); border:1px solid rgba(251,191,36,.3);
+  border-radius:var(--rs); padding:12px 14px; font-size:13px; color:var(--warn);
+  margin-bottom:16px; line-height:1.6;
+}
+
+/* ── Saldo por cuenta ── */
+.cuenta-list { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
+.cuenta-item { background:var(--bg2); border:1px solid var(--border); border-radius:var(--rs); padding:11px 14px; display:flex; justify-content:space-between; align-items:center; }
+.cuenta-nombre { font-size:13px; color:var(--text2); }
+.cuenta-saldo { font-family:var(--mono); font-size:15px; font-weight:600; }
+.cuenta-saldo.pos { color:var(--green); }
+.cuenta-saldo.neg { color:var(--red);   }
+.cuenta-saldo.zer { color:var(--text3); }
+
+/* ── Adherentes resumen ── */
+.adh-resumen { display:flex; flex-direction:column; gap:6px; margin-bottom:16px; }
+.adh-item-res { display:flex; align-items:center; justify-content:space-between; background:var(--bg2); border:1px solid var(--border); border-radius:var(--rs); padding:10px 14px; }
+.adh-item-res .nombre { font-size:13px; color:var(--text2); }
+.adh-estado { font-size:11px; font-weight:600; padding:3px 8px; border-radius:20px; }
+.adh-estado.pagado   { background:var(--green-bg); color:var(--green); }
+.adh-estado.pendiente { background:var(--red-bg);  color:var(--red);   }
+
+/* ── Import/Export buttons ── */
+.btn-export { display:block; width:100%; padding:12px; background:var(--blue-bg); color:var(--blue); border:1px solid rgba(96,165,250,.3); border-radius:var(--rs); font-family:var(--font); font-size:14px; font-weight:500; cursor:pointer; text-align:center; margin-bottom:8px; transition:opacity .15s; }
+.btn-export:active { opacity:.8; }
+.file-input-label { display:block; width:100%; padding:12px; background:var(--bg4); color:var(--text2); border:1px solid var(--border); border-radius:var(--rs); font-family:var(--font); font-size:14px; font-weight:500; cursor:pointer; text-align:center; margin-bottom:8px; }
+.file-input-label input { display:none; }
+
+/* ── Grupo modal checkboxes ── */
+.grupo-jug-list { display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; padding-right:4px; }
+.grupo-jug-item { display:flex; align-items:center; gap:10px; padding:8px 10px; background:var(--bg3); border-radius:var(--rs); cursor:pointer; }
+.grupo-jug-item input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); flex-shrink:0; cursor:pointer; }
+.grupo-jug-name { font-size:14px; cursor:pointer; }
+
+/* ── Misc ── */
+.divider { height:1px; background:var(--border); margin:14px 0; }
+.note { font-size:12px; color:var(--text3); line-height:1.6; }
+.accent-text { color:var(--accent); font-weight:600; }
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <div class="spinner"></div>
+  <p id="overlay-msg">Cargando datos…</p>
+</div>
+
+<div id="app">
+  <div class="hdr">
+    <div>
+      <div class="hdr-title">⚽ Tesorería <span class="accent">Club</span></div>
+    </div>
+    <span class="badge" id="badge-count">—</span>
+  </div>
+  <div class="hdr-sub" id="hdr-sub">Gestión de tesorería</div>
+  <div class="content" id="content"></div>
+
+  <nav class="bnav">
+    <button class="bnav-btn" id="nav-nuevo"       onclick="goTab('nuevo')">
+      <span class="bnav-icon">＋</span><span class="bnav-lbl">Nuevo</span>
+    </button>
+    <button class="bnav-btn" id="nav-movimientos" onclick="goTab('movimientos')">
+      <span class="bnav-icon">📋</span><span class="bnav-lbl">Movim.</span>
+    </button>
+    <button class="bnav-btn" id="nav-resumen"     onclick="goTab('resumen')">
+      <span class="bnav-icon">📊</span><span class="bnav-lbl">Resumen</span>
+    </button>
+    <button class="bnav-btn" id="nav-entidades"   onclick="goTab('entidades')">
+      <span class="bnav-icon">👥</span><span class="bnav-lbl">Entidades</span>
+    </button>
+    <button class="bnav-btn" id="nav-config"      onclick="goTab('config')">
+      <span class="bnav-icon">⚙️</span><span class="bnav-lbl">Config</span>
+    </button>
+  </nav>
+</div>
+
+<div id="toasts"></div>
+<div id="modal-root"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// CONSTANTES
+// ══════════════════════════════════════════════════════════════
+
+const RUBROS = [
+  {cod:"1",   nombre:"ENTRADAS / CANCHA",                    cat:"Ingresos de cancha"},
+  {cod:"2",   nombre:"UTILIDAD BAR Y PARRILLA / CANCHA",    cat:"Ingresos de cancha"},
+  {cod:"3",   nombre:"VENTA NÚMERO EN CANCHA / CANCHA",     cat:"Ingresos de cancha"},
+  {cod:"4",   nombre:"TRIBUNA / CANCHA",                    cat:"Ingresos de cancha"},
+  {cod:"14a", nombre:"GOPASS (ingreso filmación)",          cat:"Ingresos de cancha"},
+  {cod:"7",   nombre:"PEÑAS - INGRESOS VARIOS",             cat:"Ingresos varios"},
+  {cod:"8",   nombre:"COMISIONES VENTA RIFAS ETC.",         cat:"Ingresos varios"},
+  {cod:"5",   nombre:"PUBLICIDAD - Lonas y otros",          cat:"Publicidad, Aportes y Sponsors"},
+  {cod:"24",  nombre:"PUBLICIDAD - PAGOS VARIOS",           cat:"Publicidad, Aportes y Sponsors"},
+  {cod:"6",   nombre:"ADHERENTES / COLABORADORES",          cat:"Publicidad, Aportes y Sponsors"},
+  {cod:"18",  nombre:"SUELDO DT Y CT",                      cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"19",  nombre:"SUELDO JUGADORES",                    cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"20",  nombre:"GASTOS ATENCIÓN JUGADORES",           cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"37",  nombre:"GASTOS ATENCIÓN REFUERZOS/DT",        cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"11",  nombre:"COBROS Y PAGOS PASE JUGADOR",         cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"17",  nombre:"SERVICIO GIMNASIO",                   cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"21",  nombre:"GASTOS MÉDICOS Y FARMACIA",           cat:"Gastos Médicos"},
+  {cod:"23",  nombre:"SEGURO JUGADORES Y CANCHA",           cat:"Gastos Médicos"},
+  {cod:"12",  nombre:"SERVICIO DE ÁRBITROS / CANCHA",       cat:"Gastos Operativos Cancha"},
+  {cod:"13",  nombre:"SERVICIO POLICÍA ADICIONAL / CANCHA", cat:"Gastos Operativos Cancha"},
+  {cod:"31",  nombre:"LIMPIEZA - Servicio y elementos",     cat:"Gastos Operativos Cancha"},
+  {cod:"26",  nombre:"ENERGÍA ELÉCTRICA",                   cat:"Gastos Operativos Cancha"},
+  {cod:"25",  nombre:"GAS",                                 cat:"Gastos Operativos Cancha"},
+  {cod:"36",  nombre:"SERVICIO MÉDICO Y AMBULANCIA/CANCHA", cat:"Gastos Operativos Cancha"},
+  {cod:"14b", nombre:"SERVICIO DE FILMACIÓN (egreso)",      cat:"Gastos Operativos Cancha"},
+  {cod:"29",  nombre:"MANT. CANCHA Y INSTALACIONES",        cat:"Obras y Mant. Cancha"},
+  {cod:"32",  nombre:"OBRAS",                               cat:"Obras y Mant. Cancha"},
+  {cod:"33",  nombre:"BIENES DE USO",                       cat:"Obras y Mant. Cancha"},
+  {cod:"35",  nombre:"INDUMENTARIA Y MERCH.",               cat:"Indumentaria y Equipamiento"},
+  {cod:"27",  nombre:"PELOTAS - EQUIPO DEPORTIVO",          cat:"Indumentaria y Equipamiento"},
+  {cod:"9",   nombre:"INTERESES Y GASTOS CUENTA",           cat:"Administrativos y Financieros"},
+  {cod:"10",  nombre:"LIGA - FICHAJES Y MULTAS",            cat:"Administrativos y Financieros"},
+  {cod:"28",  nombre:"LIBRERÍA",                            cat:"Administrativos y Financieros"},
+  {cod:"30",  nombre:"SERVICIOS GENERALES / M. de Obra",    cat:"Administrativos y Financieros"},
+  {cod:"16",  nombre:"MOVILIDAD - APORTES Y GASTOS",        cat:"Movilidad"},
+  {cod:"34",  nombre:"CEREAL - INGRESOS Y GASTOS",          cat:"Otros / Internos"},
+  {cod:"38",  nombre:"INGRESOS Y GASTOS SUBCOM",            cat:"Otros / Internos"},
+  {cod:"39",  nombre:"SALDO NOCTURNO",                      cat:"Otros / Internos"},
+  {cod:"49",  nombre:"TRANSFERENCIA ENTRE CUENTAS",         cat:"Internos"},
+];
+
+const MESES_LABELS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
+                       "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+const DEFAULT_CUENTAS = ["MACRO","NARANJA X","MUTUAL","EFECTIVO","MP","UALA"];
+const DEFAULT_METODOS = ["EFECTIVO","TRANSFERENCIA","CHEQUE"];
+
+const SEED_JUGADORES = [
+  "IRAZOSQUI Pablo","FOSSARELLI Adrian","GAMARINO Emiliano","CARRANZA Matias",
+  "LANDRIEL Federico","LECUIMA Esteban","LENCINA Nicolás","PAIRETTI Franco",
+  "VILLARRUEL Daniel","BERNAUS Agustin","BERNAUS Federico","FOSSARELLI Antonio",
+  "ÑAÑEZ Rubén","VIJARRA Nahuel","MENDOZA Alexis","POCHETTINO Dante",
+  "Del Valle Jonatan","Diaz Jonatan","Nieto Fabio Armando","Gomez Juan Pablo",
+  "SANCHEZ Hernan","GOMEZ Gustavo","Lazaneo Juan Manuel","Lovera Ignacio",
+  "BERGAMASCO Nicolas","Gastaudo Maximo","Calandra Francisco","MANCILLA Alexis",
+  "Ferreyra Francisco"
+];
+
+const SEED_ADHERENTES = [
+  "Albrecht Pablo","Almacen Los Hermanitos","Avila Gustavo","BAR D'MICHELIN",
+  "Benedetto Jorge","Bosso Rogelio","Camurri","Clucelac","Comuna Landeta",
+  "Cugat Maxi","Depetris Marcelo Comeliebre","Di Tondo G.","Ellena Hector",
+  "Ferri Matias","Francioni Refrigeracion","Franco Ale y Damian","Gamarra Alberto",
+  "Gerlero Ezequiel","Gerlero Nacho (TMG)","Giordana Victor","Giuliani Flavia",
+  "Heladeria Mucho Gusto (Enfermera)","Heladeria Mucho Gusto Ropa entrenamiento",
+  "Ibarra Cont. Rural","La brujula","Lacelli Ariel","Landeta Cereales","Lazzo Colab. Negro",
+  "Leguizamon Ferreteria","Morero","MPV Depetris","Panaderia Rubiolo","Peña La grasa",
+  "Ponce Daniel","Proveedor Camurri Colaboracion","Proveeduria Lujan","Provimi",
+  "Riboldi","Tedeschi","Transporte EL PIURA","Transporte Isabella","Zucco Nestor","Zucco S.A"
+];
+
+const SEED_GRUPOS = [
+  "Refuerzos Trebol","Refuerzos Pell","Refuerzos Morteros","Refuerzos SJ","Pablo y Chicos Mortero"
+];
+
+// ══════════════════════════════════════════════════════════════
+// ESTADO GLOBAL
+// ══════════════════════════════════════════════════════════════
+
+let movimientos = [];
+let jugadores   = [];
+let grupos      = [];
+let adherentes  = [];
+let pagos       = [];
+let cuentas     = [...DEFAULT_CUENTAS];
+let metodos     = [...DEFAULT_METODOS];
+
+let currentTab    = "nuevo";
+let editId        = null;
+let sharedMes     = nowMes();
+let entidadesTab  = "jugadores";
+let listFiltros   = { cat: "", cuenta: "", tipo: "", search: "" };
+let F             = buildDefaultF();
+
+// ══════════════════════════════════════════════════════════════
+// UTILITIES
+// ══════════════════════════════════════════════════════════════
+
+function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+function today() { return new Date().toISOString().split("T")[0]; }
+function nowMes() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+}
+function mesLabel(k) {
+  if (!k) return "";
+  const [y,m] = k.split("-");
+  return MESES_LABELS[+m-1] + " " + y;
+}
+function prevMes(k) {
+  let [y, m] = k.split("-").map(Number);
+  m--; if (m === 0) { m = 12; y--; }
+  return y + "-" + String(m).padStart(2,"0");
+}
+function nextMes(k) {
+  let [y, m] = k.split("-").map(Number);
+  m++; if (m === 13) { m = 1; y++; }
+  return y + "-" + String(m).padStart(2,"0");
+}
+function getMes(f) {
+  return normFecha(f).slice(0, 7);
+}
+function mesToNum(k) {
+  if (!k) return 0;
+  const [y,m] = k.split("-");
+  return (+y) * 100 + (+m);
+}
+function fmt(n) {
+  const v = Math.round(Math.abs(+n || 0));
+  return "$" + v.toLocaleString("es-AR");
+}
+function esc(s) {
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function normFecha(f) {
+  if (!f) return today();
+  const s = String(f).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return today();
+  return d.getUTCFullYear() + "-" + String(d.getUTCMonth()+1).padStart(2,"0") + "-" + String(d.getUTCDate()).padStart(2,"0");
+}
+function getScriptUrl() { return localStorage.getItem("clubfm_url") || ""; }
+function buildDefaultF() {
+  return { id: uid(), tipo: "INGRESO", fecha: today(),
+    codRubro:"", rubro:"", categoria:"", concepto:"", monto:"",
+    cuenta: (cuentas[0] || "EFECTIVO"), cuentaDestino: "",
+    modoPago: (metodos[0] || "EFECTIVO"),
+    jugadorCT:"", adherente:"", observacion:"", comprobante:"" };
+}
+function resetF() {
+  const savedFecha  = F.fecha;
+  const savedCuenta = F.cuenta;
+  F = buildDefaultF();
+  F.fecha  = savedFecha;
+  F.cuenta = savedCuenta;
+  editId = null;
+}
+
+function toast(msg, type = "ok") {
+  const t = document.createElement("div");
+  t.className = "toast " + type;
+  t.textContent = msg;
+  document.getElementById("toasts").appendChild(t);
+  setTimeout(() => t.remove(), 2800);
+}
+
+function showOverlay(msg) {
+  document.getElementById("overlay-msg").textContent = msg || "Cargando…";
+  document.getElementById("overlay").classList.remove("hidden");
+}
+function hideOverlay() {
+  document.getElementById("overlay").classList.add("hidden");
+}
+
+// ══════════════════════════════════════════════════════════════
+// HTTP / STORAGE
+// ══════════════════════════════════════════════════════════════
+
+async function post(url, data) {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(data),
+    redirect: "follow"
+  });
+  return resp.json();
+}
+
+const Storage = {
+  async _post(data) {
+    const url = getScriptUrl();
+    if (!url) throw new Error("Sin URL configurada. Configurá el script en la pestaña ⚙️ Config.");
+    return post(url, data);
+  },
+  async listMov(mes)        { return this._post({ action:"listMov",      mes }); },
+  async saveMov(mov)        { return this._post({ action:"saveMov",      mov }); },
+  async updateMov(mov)      { return this._post({ action:"updateMov",    mov }); },
+  async deleteMov(id)       { return this._post({ action:"deleteMov",    id  }); },
+  async listJugadores()     { return this._post({ action:"listJugadores"      }); },
+  async saveJugador(j)      { return this._post({ action:"saveJugador",   jugador:j }); },
+  async deleteJugador(id)   { return this._post({ action:"deleteJugador", id  }); },
+  async listGrupos()        { return this._post({ action:"listGrupos"         }); },
+  async saveGrupo(g)        { return this._post({ action:"saveGrupo",    grupo:g  }); },
+  async deleteGrupo(id)     { return this._post({ action:"deleteGrupo",  id  }); },
+  async listAdherentes()    { return this._post({ action:"listAdherentes"     }); },
+  async saveAdherente(a)    { return this._post({ action:"saveAdherente", adherente:a }); },
+  async deleteAdherente(id) { return this._post({ action:"deleteAdherente", id }); },
+  async listPagos(mes)      { return this._post({ action:"listPagos",    mes  }); },
+  async togglePago(adhId, adhNombre, mes) { return this._post({ action:"togglePago", adhId, adhNombre, mes }); },
+  async getConfig()         { return this._post({ action:"getConfig"          }); },
+  async saveConfig(clave, valor) { return this._post({ action:"saveConfig", clave, valor }); },
+  async initSeed(data)      { return this._post({ action:"initSeed", ...data  }); },
+};
+
+// ══════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════
+
+async function initApp() {
+  const url = getScriptUrl();
+  if (!url) {
+    hideOverlay();
+    goTab("config");
+    return;
+  }
+  showOverlay("Cargando datos…");
+  await loadAllData();
+  hideOverlay();
+  goTab("nuevo");
+}
+
+async function loadAllData() {
+  try {
+    const [rMov, rJug, rGrp, rAdh, rPag, rCfg] = await Promise.all([
+      Storage.listMov(),
+      Storage.listJugadores(),
+      Storage.listGrupos(),
+      Storage.listAdherentes(),
+      Storage.listPagos(),
+      Storage.getConfig(),
+    ]);
+    if (rMov.ok) movimientos = rMov.movimientos || [];
+    if (rJug.ok) jugadores   = rJug.jugadores   || [];
+    if (rGrp.ok) grupos      = rGrp.grupos       || [];
+    if (rAdh.ok) adherentes  = rAdh.adherentes   || [];
+    if (rPag.ok) pagos       = rPag.pagos        || [];
+    if (rCfg.ok) {
+      applyCuentasMetodos(rCfg.config || {});
+      // If not yet seeded, run initSeed
+      if (!rCfg.config || !rCfg.config.seeded) {
+        await runInitSeed();
+        // Reload after seed
+        const [r2Jug, r2Grp, r2Adh, r2Cfg] = await Promise.all([
+          Storage.listJugadores(), Storage.listGrupos(),
+          Storage.listAdherentes(), Storage.getConfig()
+        ]);
+        if (r2Jug.ok) jugadores  = r2Jug.jugadores  || [];
+        if (r2Grp.ok) grupos     = r2Grp.grupos      || [];
+        if (r2Adh.ok) adherentes = r2Adh.adherentes  || [];
+        if (r2Cfg.ok) applyCuentasMetodos(r2Cfg.config || {});
+      }
+    }
+    updateBadge();
+  } catch(e) {
+    toast("Error cargando datos: " + e.message, "err");
+  }
+}
+
+async function refreshData() {
+  showOverlay("Actualizando…");
+  await loadAllData();
+  hideOverlay();
+  goTab(currentTab);
+  toast("Datos actualizados", "ok");
+}
+
+async function runInitSeed() {
+  await Storage.initSeed({
+    jugadores: SEED_JUGADORES,
+    adherentes: SEED_ADHERENTES,
+    grupos: SEED_GRUPOS,
+    cuentas: DEFAULT_CUENTAS.join(","),
+    metodos: DEFAULT_METODOS.join(","),
+  });
+}
+
+function applyCuentasMetodos(config) {
+  if (config.cuentas) cuentas = config.cuentas.split(",").map(s=>s.trim()).filter(Boolean);
+  else cuentas = [...DEFAULT_CUENTAS];
+  if (config.metodos) metodos = config.metodos.split(",").map(s=>s.trim()).filter(Boolean);
+  else metodos = [...DEFAULT_METODOS];
+}
+
+function updateBadge() {
+  const el = document.getElementById("badge-count");
+  if (el) el.textContent = movimientos.length + " mov.";
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB ROUTING
+// ══════════════════════════════════════════════════════════════
+
+function goTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll(".bnav-btn").forEach(b => b.classList.remove("active"));
+  const btn = document.getElementById("nav-" + tab);
+  if (btn) btn.classList.add("active");
+  const renderers = {
+    nuevo: renderNuevo, movimientos: renderMovimientos,
+    resumen: renderResumen, entidades: renderEntidades, config: renderConfig
+  };
+  if (renderers[tab]) renderers[tab]();
+}
+
+function setContent(html) {
+  document.getElementById("content").innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB 1 — NUEVO MOVIMIENTO
+// ══════════════════════════════════════════════════════════════
+
+function renderNuevo() {
+  const jugOptions = jugadores.sort((a,b)=>a.nombre.localeCompare(b.nombre))
+    .map(j => `<option value="${esc(j.nombre)}" ${F.jugadorCT===j.nombre?"selected":""}>${esc(j.nombre)}</option>`).join("");
+  const grpOptions = grupos.sort((a,b)=>a.nombre.localeCompare(b.nombre))
+    .map(g => `<option value="GRP:${esc(g.nombre)}" ${F.jugadorCT==="GRP:"+g.nombre?"selected":""}>${esc(g.nombre)}</option>`).join("");
+  const adhOptions = adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre))
+    .map(a => `<option value="${esc(a.nombre)}" ${F.adherente===a.nombre?"selected":""}>${esc(a.nombre)}</option>`).join("");
+  const cuentaOptions = cuentas.map(c =>
+    `<option value="${esc(c)}" ${F.cuenta===c?"selected":""}>${esc(c)}</option>`).join("");
+  const cuentaDestOptions = cuentas.map(c =>
+    `<option value="${esc(c)}" ${F.cuentaDestino===c?"selected":""}>${esc(c)}</option>`).join("");
+  const metodoOptions = metodos.map(m =>
+    `<option value="${esc(m)}" ${F.modoPago===m?"selected":""}>${esc(m)}</option>`).join("");
+  const isInt = F.tipo === "INTERNO";
+  const isAdh = F.rubro && F.rubro.toUpperCase().includes("ADHERENTE");
+  const mesNum = F.fecha ? F.fecha.slice(0,7).replace("-","") : "";
+  const mesDisplay = F.fecha ? mesLabel(F.fecha.slice(0,7)) : "";
+
+  setContent(`
+    <div class="fgrid">
+      ${editId ? `<div class="edit-banner">✏️ Editando movimiento <button onclick="cancelEdit()">✕</button></div>` : ""}
+
+      <div class="field">
+        <label>Tipo</label>
+        <div class="tipo-row">
+          <button class="tipo-pill ${F.tipo==="INGRESO"?"active-ing":""}" onclick="setTipo('INGRESO')">▲ Ingreso</button>
+          <button class="tipo-pill ${F.tipo==="EGRESO" ?"active-egr":""}" onclick="setTipo('EGRESO')">▼ Egreso</button>
+          <button class="tipo-pill ${F.tipo==="INTERNO"?"active-int":""}" onclick="setTipo('INTERNO')">⇄ Interno</button>
+        </div>
+      </div>
+
+      <div class="row2">
+        <div class="field">
+          <label>Fecha</label>
+          <input class="inp" type="date" id="f-fecha" value="${F.fecha}" onchange="F.fecha=this.value; updateMesDisplay()">
+        </div>
+        <div class="field">
+          <label>Mes</label>
+          <input class="inp" readonly id="f-mes-display" value="${mesDisplay}">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Rubro</label>
+        <div class="ss-wrap" id="ss-rubro-wrap">
+          <input class="inp" id="ss-rubro-input" placeholder="Buscar rubro…" autocomplete="off"
+                 value="${F.rubro ? "["+F.codRubro+"] "+F.rubro : ""}">
+          <div class="ss-drop" id="ss-rubro-drop" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Concepto</label>
+        <input class="inp" type="text" id="f-concepto" placeholder="Descripción del movimiento" value="${esc(F.concepto)}"
+               oninput="F.concepto=this.value">
+      </div>
+
+      <div class="field">
+        <label>Monto</label>
+        <input class="inp" type="number" id="f-monto" placeholder="0" min="0" step="any" value="${F.monto}"
+               oninput="F.monto=this.value" inputmode="decimal">
+      </div>
+
+      <div class="row2">
+        <div class="field">
+          <label>Cuenta${isInt ? " origen" : ""}</label>
+          <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value">${cuentaOptions}</select>
+        </div>
+        ${isInt ? `
+        <div class="field">
+          <label>Cuenta destino</label>
+          <select class="inp" id="f-cuentaDest" onchange="F.cuentaDestino=this.value">${cuentaDestOptions}</select>
+        </div>` : `
+        <div class="field">
+          <label>Método de pago</label>
+          <select class="inp" id="f-metodo" onchange="F.modoPago=this.value">${metodoOptions}</select>
+        </div>`}
+      </div>
+
+      ${isInt ? `
+      <div class="field">
+        <label>Método de pago</label>
+        <select class="inp" id="f-metodo" onchange="F.modoPago=this.value">${metodoOptions}</select>
+      </div>` : ""}
+
+      <div class="field">
+        <label>Jugador / CT (opcional)</label>
+        <select class="inp" id="f-jugador" onchange="F.jugadorCT=this.value">
+          <option value="">— Ninguno —</option>
+          ${jugOptions ? `<optgroup label="Jugadores / CT">${jugOptions}</optgroup>` : ""}
+          ${grpOptions ? `<optgroup label="Grupos">${grpOptions}</optgroup>` : ""}
+        </select>
+      </div>
+
+      <div class="field ${isAdh ? "highlighted" : ""}" id="adherente-row">
+        <label>Adherente${isAdh ? " ★" : " (opcional)"}</label>
+        <select class="inp" id="f-adherente" onchange="F.adherente=this.value">
+          <option value="">— Ninguno —</option>
+          ${adhOptions}
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Observación (opcional)</label>
+        <textarea class="inp" id="f-obs" rows="2" placeholder="Notas adicionales…" oninput="F.observacion=this.value">${esc(F.observacion)}</textarea>
+      </div>
+
+      <div class="field">
+        <label>Comprobante (opcional)</label>
+        <input class="inp" type="text" id="f-comp" placeholder="Nro. de comprobante" value="${esc(F.comprobante)}"
+               oninput="F.comprobante=this.value">
+      </div>
+
+      <button class="btn-main ${editId?"editing":""}" onclick="saveMovimiento()">
+        ${editId ? "💾 ACTUALIZAR" : "✓ GUARDAR"}
+      </button>
+      <button class="btn-secondary" onclick="clearForm()">↺ Limpiar</button>
+    </div>
+  `);
+
+  initRubroSelect();
+}
+
+function setTipo(tipo) {
+  F.tipo = tipo;
+  // Clear selected rubro when switching tipo, then auto-set for INTERNO
+  F.codRubro = ""; F.rubro = ""; F.categoria = "";
+  if (tipo === "INTERNO") { F.codRubro="49"; F.rubro="TRANSFERENCIA ENTRE CUENTAS"; F.categoria="Internos"; }
+  renderNuevo();
+}
+
+function updateMesDisplay() {
+  const el = document.getElementById("f-mes-display");
+  if (el && F.fecha) el.value = mesLabel(F.fecha.slice(0,7));
+}
+
+function cancelEdit() { resetF(); renderNuevo(); }
+function clearForm()  { resetF(); renderNuevo(); }
+
+// ── Rubro Searchable Select ───────────────────────────────────
+function initRubroSelect() {
+  const input = document.getElementById("ss-rubro-input");
+  const drop  = document.getElementById("ss-rubro-drop");
+  if (!input || !drop) return;
+
+  input.oninput = function() { filterRubros(this.value); drop.style.display = "block"; };
+  input.onfocus = function() {
+    if (F.rubro) input.select(); else input.value = "";
+    filterRubros(input.value);
+    drop.style.display = "block";
+  };
+  input.onblur = function() {
+    setTimeout(() => {
+      drop.style.display = "none";
+      if (!F.rubro) input.value = "";
+      else input.value = "[" + F.codRubro + "] " + F.rubro;
+    }, 200);
+  };
+  drop.onclick = function(e) {
+    const item = e.target.closest("[data-cod]");
+    if (!item) return;
+    F.codRubro  = item.dataset.cod;
+    F.rubro     = item.dataset.nombre;
+    F.categoria = item.dataset.cat;
+    input.value = "[" + F.codRubro + "] " + F.rubro;
+    drop.style.display = "none";
+    // Auto-set tipo to INTERNO if rubro 49
+    if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
+    // Highlight adherente row
+    const adhRow = document.getElementById("adherente-row");
+    if (adhRow) {
+      if (F.rubro.toUpperCase().includes("ADHERENTE")) adhRow.classList.add("highlighted");
+      else adhRow.classList.remove("highlighted");
+    }
+  };
+  filterRubros("");
+}
+
+function filterRubros(query) {
+  const drop = document.getElementById("ss-rubro-drop");
+  if (!drop) return;
+  const q = (query || "").toLowerCase();
+  const cats = [...new Set(RUBROS.map(r => r.cat))];
+  let html = "";
+  for (const cat of cats) {
+    const items = RUBROS.filter(r => r.cat === cat && (!q ||
+      r.nombre.toLowerCase().includes(q) ||
+      r.cod.toLowerCase().includes(q)
+    ));
+    if (!items.length) continue;
+    html += `<div class="ss-group">${esc(cat)}</div>`;
+    for (const r of items) {
+      html += `<div class="ss-item" data-cod="${r.cod}" data-nombre="${esc(r.nombre)}" data-cat="${esc(r.cat)}">[${r.cod}] ${esc(r.nombre)}</div>`;
+    }
+  }
+  drop.innerHTML = html || `<div class="ss-empty">Sin resultados</div>`;
+}
+
+// ── Save ─────────────────────────────────────────────────────
+async function saveMovimiento() {
+  const url = getScriptUrl();
+  if (!url) { toast("Configurá la URL del script primero", "err"); goTab("config"); return; }
+  if (!F.rubro)   { toast("Seleccioná un rubro", "err"); return; }
+  if (!F.monto || isNaN(+F.monto) || +F.monto <= 0) { toast("Ingresá un monto válido", "err"); return; }
+  if (!F.cuenta)  { toast("Seleccioná una cuenta", "err"); return; }
+  if (F.tipo === "INTERNO" && !F.cuentaDestino) { toast("Seleccioná cuenta destino", "err"); return; }
+
+  const monto = Math.abs(parseFloat(F.monto));
+  const mes   = F.fecha.slice(0,7).replace("-","");
+  const mov = {
+    id: F.id, mes, fecha: F.fecha,
+    codRubro: F.codRubro, rubro: F.rubro, categoria: F.categoria,
+    concepto: F.concepto,
+    egreso:     F.tipo === "EGRESO"  ? monto : (F.tipo === "INTERNO" ? monto : 0),
+    ingreso:    F.tipo === "INGRESO" ? monto : 0,
+    montoFinal: monto,
+    cuenta: F.cuenta, cuentaDestino: F.cuentaDestino || "",
+    modoPago: F.modoPago,
+    jugadorCT: F.jugadorCT || "", adherente: F.adherente || "",
+    observacion: F.observacion || "", comprobante: F.comprobante || "",
+    tipo: F.tipo
+  };
+
+  showOverlay("Guardando…");
+  try {
+    const r = editId
+      ? await Storage.updateMov(mov)
+      : await Storage.saveMov(mov);
+    if (!r.ok) throw new Error(r.error || "Error al guardar");
+
+    // Update local state
+    if (editId) {
+      const idx = movimientos.findIndex(m => m.id === mov.id);
+      if (idx >= 0) movimientos[idx] = mov;
+    } else {
+      movimientos.push(mov);
+    }
+    // Update pagos if adherentes rubro
+    if (mov.adherente && mov.rubro.toUpperCase().includes("ADHERENTE")) {
+      const adh = adherentes.find(a => a.nombre.toLowerCase() === mov.adherente.toLowerCase());
+      if (adh) {
+        const existing = pagos.find(p => p.adherenteId === adh.id && p.mes === mes);
+        if (existing) existing.estado = "PAGADO";
+        else pagos.push({ id: uid(), adherenteId: adh.id, adherenteNombre: adh.nombre, mes, estado: "PAGADO", movimientoId: mov.id });
+      }
+    }
+    updateBadge();
+    toast(editId ? "Movimiento actualizado ✓" : "Movimiento guardado ✓", "ok");
+    resetF();
+    renderNuevo();
+  } catch(e) {
+    toast("Error: " + e.message, "err");
+  } finally {
+    hideOverlay();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB 2 — MOVIMIENTOS DEL MES
+// ══════════════════════════════════════════════════════════════
+
+function renderMovimientos() {
+  const movMes = movimientos.filter(m => getMes(m.fecha) === sharedMes);
+  const ingTotal = movMes.filter(m => m.tipo === "INGRESO").reduce((s,m) => s + m.ingreso, 0);
+  const egrTotal = movMes.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s + m.egreso,  0);
+  const saldo    = ingTotal - egrTotal;
+
+  // Build unique category list for filters
+  const cats = [...new Set(movimientos.map(m => m.categoria).filter(Boolean))].sort();
+  const catPills = cats.map(c =>
+    `<button class="pill sm ${listFiltros.cat===c?"active":""}" onclick="setListFilter('cat','${esc(c)}')">${esc(c)}</button>`
+  ).join("");
+  const cuentaPills = cuentas.map(c =>
+    `<button class="pill sm ${listFiltros.cuenta===c?"active":""}" onclick="setListFilter('cuenta','${esc(c)}')">${esc(c)}</button>`
+  ).join("");
+  const tipoPills = ["INGRESO","EGRESO","INTERNO"].map(t =>
+    `<button class="pill sm ${listFiltros.tipo===t?"active":""}" onclick="setListFilter('tipo','${t}')">${t}</button>`
+  ).join("");
+
+  setContent(`
+    <div class="mes-sel">
+      <button class="mes-sel-btn" onclick="changeMes(-1)">◀</button>
+      <span class="mes-sel-label">${mesLabel(sharedMes)}</span>
+      <button class="mes-sel-btn" onclick="changeMes(1)">▶</button>
+    </div>
+
+    <div class="sum-grid three">
+      <div class="stat-card">
+        <div class="stat-label">Ingresos</div>
+        <div class="stat-val ing">${fmt(ingTotal)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Egresos</div>
+        <div class="stat-val egr">${fmt(egrTotal)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Saldo</div>
+        <div class="stat-val ${saldo>=0?"ing":"egr"}">${saldo<0?"-":""}${fmt(saldo)}</div>
+      </div>
+    </div>
+
+    <div class="filter-row">
+      <button class="pill sm ${listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""?"active":""}" onclick="clearListFilters()">Todos</button>
+      ${tipoPills}
+    </div>
+    <div class="filter-row">${catPills}</div>
+    <div class="filter-row">${cuentaPills}</div>
+
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input class="inp" type="search" placeholder="Buscar en concepto / observación…" value="${esc(listFiltros.search)}"
+             oninput="listFiltros.search=this.value; renderMovList()">
+    </div>
+
+    <div class="sec-hdr">
+      <span class="sec-title" id="mov-count"></span>
+      <button class="btn-sm accent" onclick="refreshData()">↻ Actualizar</button>
+    </div>
+
+    <div id="mov-list"></div>
+  `);
+  renderMovList();
+}
+
+function renderMovList() {
+  const movMes = movimientos
+    .filter(m => getMes(m.fecha) === sharedMes)
+    .filter(m => !listFiltros.cat    || m.categoria === listFiltros.cat)
+    .filter(m => !listFiltros.cuenta || m.cuenta     === listFiltros.cuenta)
+    .filter(m => !listFiltros.tipo   || m.tipo        === listFiltros.tipo)
+    .filter(m => {
+      const q = listFiltros.search.toLowerCase();
+      return !q || (m.concepto||"").toLowerCase().includes(q) || (m.observacion||"").toLowerCase().includes(q);
+    })
+    .sort((a,b) => b.fecha.localeCompare(a.fecha));
+
+  const cnt = document.getElementById("mov-count");
+  if (cnt) cnt.textContent = movMes.length + " movimiento" + (movMes.length!==1?"s":"");
+
+  const el = document.getElementById("mov-list");
+  if (!el) return;
+  if (!movMes.length) {
+    el.innerHTML = `<div class="empty"><div class="ico">📋</div><p>Sin movimientos${listFiltros.search ? " para esa búsqueda" : " en este mes"}</p></div>`;
+    return;
+  }
+
+  el.innerHTML = movMes.map(m => {
+    const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : "int";
+    const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.egreso || m.montoFinal;
+    const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : "⇄";
+    const fechaD     = m.fecha ? m.fecha.slice(8) + "/" + m.fecha.slice(5,7) : "";
+    return `
+    <div class="mov-card" onclick="openMovModal('${m.id}')">
+      <div class="mov-card-info">
+        <div class="mov-card-top">
+          <span class="mov-card-rubro">[${esc(m.codRubro)}] ${esc(m.rubro)}</span>
+          <span class="mov-card-fecha">${fechaD}</span>
+        </div>
+        <div class="mov-card-concepto">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</div>
+        <div class="mov-card-tags">
+          <span class="tag tag-cuenta">${esc(m.cuenta)}</span>
+          ${m.jugadorCT ? `<span class="tag tag-jug">${esc(m.jugadorCT)}</span>` : ""}
+          ${m.adherente ? `<span class="tag tag-adh">${esc(m.adherente)}</span>` : ""}
+          ${m.tipo==="INTERNO" ? `<span class="tag tag-int">→ ${esc(m.cuentaDestino||"?")}</span>` : ""}
+        </div>
+      </div>
+      <div class="mov-card-amt">
+        <div class="monto ${montoClass}">${montoSign}${fmt(montoVal)}</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px;">${esc(m.modoPago)}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function setListFilter(key, val) {
+  if (listFiltros[key] === val) listFiltros[key] = "";
+  else listFiltros[key] = val;
+  renderMovimientos();
+}
+function clearListFilters() {
+  listFiltros = { cat:"", cuenta:"", tipo:"", search:"" };
+  renderMovimientos();
+}
+function changeMes(delta) {
+  sharedMes = delta < 0 ? prevMes(sharedMes) : nextMes(sharedMes);
+  if (currentTab === "movimientos") renderMovimientos();
+  else if (currentTab === "resumen") renderResumen();
+}
+
+function openMovModal(id) {
+  const m = movimientos.find(x => x.id === id);
+  if (!m) return;
+  const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : "int";
+  const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.egreso || m.montoFinal;
+  const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : "⇄";
+  const rows = [
+    ["Tipo",        m.tipo],
+    ["Fecha",       m.fecha],
+    ["Mes",         mesLabel(m.mes ? m.mes.slice(0,4)+"-"+m.mes.slice(4) : "")],
+    ["Rubro",       "["+m.codRubro+"] "+m.rubro],
+    ["Categoría",   m.categoria],
+    ["Concepto",    m.concepto || "—"],
+    ["Cuenta",      m.cuenta + (m.cuentaDestino ? " → "+m.cuentaDestino : "")],
+    ["Método pago", m.modoPago],
+    ["Jugador/CT",  m.jugadorCT || "—"],
+    ["Adherente",   m.adherente || "—"],
+    ["Observación", m.observacion || "—"],
+    ["Comprobante", m.comprobante || "—"],
+  ].filter(r => r[1] && r[1] !== "—").map(([l,v]) =>
+    `<div class="modal-detail-row"><span class="modal-detail-lbl">${l}</span><span class="modal-detail-val">${esc(v)}</span></div>`
+  ).join("");
+
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-monto-big ${montoClass}">${montoSign}${fmt(montoVal)}</div>
+        ${rows}
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="editMovimiento('${id}')">✏️ Editar</button>
+          <button class="btn-sm danger" style="padding:12px 16px" id="del-btn-${id}" onclick="confirmDelete('${id}')">🗑</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function confirmDelete(id) {
+  const btn = document.getElementById("del-btn-"+id);
+  if (!btn) return;
+  if (btn.dataset.confirm) {
+    deleteMovimiento(id);
+  } else {
+    btn.dataset.confirm = "1";
+    btn.textContent = "¿Eliminar?";
+    btn.style.color = "var(--red)";
+    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="🗑"; btn.style.color=""; }}, 3000);
+  }
+}
+
+async function deleteMovimiento(id) {
+  closeModal();
+  showOverlay("Eliminando…");
+  try {
+    const r = await Storage.deleteMov(id);
+    if (!r.ok) throw new Error(r.error || "Error al eliminar");
+    movimientos = movimientos.filter(m => m.id !== id);
+    updateBadge();
+    toast("Movimiento eliminado", "ok");
+    renderMovimientos();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+  finally { hideOverlay(); }
+}
+
+function editMovimiento(id) {
+  const m = movimientos.find(x => x.id === id);
+  if (!m) return;
+  F.id          = m.id;
+  F.tipo        = m.tipo;
+  F.fecha       = m.fecha;
+  F.codRubro    = m.codRubro;
+  F.rubro       = m.rubro;
+  F.categoria   = m.categoria;
+  F.concepto    = m.concepto;
+  F.monto       = String(m.tipo === "INGRESO" ? m.ingreso : m.egreso || m.montoFinal);
+  F.cuenta      = m.cuenta;
+  F.cuentaDestino = m.cuentaDestino || "";
+  F.modoPago    = m.modoPago;
+  F.jugadorCT   = m.jugadorCT || "";
+  F.adherente   = m.adherente || "";
+  F.observacion = m.observacion || "";
+  F.comprobante = m.comprobante || "";
+  editId = id;
+  closeModal();
+  goTab("nuevo");
+}
+
+function closeModal(e) {
+  if (e && e.target !== document.querySelector(".modal-overlay")) return;
+  document.getElementById("modal-root").innerHTML = "";
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB 3 — RESUMEN / DASHBOARD
+// ══════════════════════════════════════════════════════════════
+
+function renderResumen() {
+  const mesNum = mesToNum(sharedMes);
+  const movMes = movimientos.filter(m => getMes(m.fecha) === sharedMes);
+  const movHasta = movimientos.filter(m => mesToNum(getMes(m.fecha)) <= mesNum);
+
+  const ingMes  = movMes.filter(m => m.tipo==="INGRESO").reduce((s,m) => s+m.ingreso, 0);
+  const egrMes  = movMes.filter(m => m.tipo==="EGRESO" ).reduce((s,m) => s+m.egreso,  0);
+  const saldoMes = ingMes - egrMes;
+
+  const ingAcc  = movHasta.filter(m => m.tipo==="INGRESO").reduce((s,m) => s+m.ingreso, 0);
+  const egrAcc  = movHasta.filter(m => m.tipo==="EGRESO" ).reduce((s,m) => s+m.egreso,  0);
+  const saldoAcc = ingAcc - egrAcc;
+
+  // Saldo por cuenta (todos los movimientos)
+  const saldosCuentas = calcSaldosCuentas(movHasta);
+
+  // Categorías del mes (egresos)
+  const catMap = {};
+  for (const m of movMes) {
+    if (m.tipo !== "EGRESO" && m.tipo !== "INGRESO") continue;
+    if (!catMap[m.categoria]) catMap[m.categoria] = { ing:0, egr:0 };
+    if (m.tipo === "INGRESO") catMap[m.categoria].ing += m.ingreso;
+    else catMap[m.categoria].egr += m.egreso;
+  }
+  const catItems = Object.entries(catMap)
+    .map(([cat, v]) => ({ cat, ...v }))
+    .filter(d => d.egr > 0 || d.ing > 0)
+    .sort((a,b) => b.egr - a.egr);
+  const maxEgr = Math.max(...catItems.map(d => d.egr), 1);
+
+  const catBars = catItems.map(d => `
+    <div class="cat-row">
+      <div class="cat-name"><span>${esc(d.cat)}</span><span class="cat-total">${fmt(d.egr)}</span></div>
+      <div class="bar-bg"><div class="bar-fill bar-egr" style="width:${Math.round(d.egr/maxEgr*100)}%"></div></div>
+    </div>`).join("");
+
+  // Table
+  const tableRows = catItems.map(d => {
+    const neto = d.ing - d.egr;
+    return `<tr>
+      <td>${esc(d.cat)}</td>
+      <td class="ing">${d.ing?fmt(d.ing):""}</td>
+      <td class="egr">${d.egr?fmt(d.egr):""}</td>
+      <td class="net ${neto>=0?"":"egr"}">${neto>=0?"+":"−"}${fmt(neto)}</td>
+    </tr>`;
+  }).join("");
+
+  // Adherentes del mes
+  const mesCod = sharedMes.replace("-","");
+  const adhResumen = adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(adh => {
+    const pago = pagos.find(p => p.adherenteId === adh.id && p.mes === mesCod);
+    const estado = pago ? pago.estado : "PENDIENTE";
+    return `<div class="adh-item-res">
+      <span class="nombre">${esc(adh.nombre)}</span>
+      <span class="adh-estado ${estado==="PAGADO"?"pagado":"pendiente"}">${estado}</span>
+    </div>`;
+  }).join("");
+  const pagadosCount = adherentes.filter(adh => {
+    const p = pagos.find(p => p.adherenteId === adh.id && p.mes === mesCod);
+    return p && p.estado === "PAGADO";
+  }).length;
+
+  // Saldo cuentas html
+  const cuentasHtml = cuentas.map(c => {
+    const s = saldosCuentas[c] || 0;
+    return `<div class="cuenta-item">
+      <span class="cuenta-nombre">${esc(c)}</span>
+      <span class="cuenta-saldo ${s>0?"pos":s<0?"neg":"zer"}">${s<0?"-":""}${fmt(s)}</span>
+    </div>`;
+  }).join("");
+
+  setContent(`
+    <div class="mes-sel">
+      <button class="mes-sel-btn" onclick="changeMes(-1)">◀</button>
+      <span class="mes-sel-label">${mesLabel(sharedMes)}</span>
+      <button class="mes-sel-btn" onclick="changeMes(1)">▶</button>
+    </div>
+
+    <div class="sum-grid three">
+      <div class="stat-card">
+        <div class="stat-label">Ingresos mes</div>
+        <div class="stat-val ing">${fmt(ingMes)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Egresos mes</div>
+        <div class="stat-val egr">${fmt(egrMes)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Saldo mes</div>
+        <div class="stat-val ${saldoMes>=0?"ing":"egr"}">${saldoMes<0?"-":""}${fmt(saldoMes)}</div>
+      </div>
+    </div>
+
+    <div class="stat-card" style="margin-bottom:14px">
+      <div class="stat-label">Saldo acumulado hasta ${mesLabel(sharedMes)}</div>
+      <div class="stat-val acc" style="font-size:22px">${saldoAcc<0?"-":""}${fmt(saldoAcc)}</div>
+    </div>
+
+    <div class="sec-hdr"><span class="sec-title">Saldo por cuenta</span></div>
+    <div class="cuenta-list">${cuentasHtml || '<p class="note">Sin cuentas configuradas</p>'}</div>
+
+    ${catItems.length ? `
+    <div class="sec-hdr"><span class="sec-title">Egresos por categoría</span></div>
+    <div class="cat-list">${catBars}</div>
+
+    <div class="sec-hdr"><span class="sec-title">Tabla por categoría</span></div>
+    <table class="sum-table">
+      <thead><tr><th>Categoría</th><th style="text-align:right">Ing.</th><th style="text-align:right">Egr.</th><th style="text-align:right">Neto</th></tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table>` : ""}
+
+    <div class="sec-hdr">
+      <span class="sec-title">Adherentes — ${mesLabel(sharedMes)}</span>
+      <span class="note">${pagadosCount}/${adherentes.length} pagados</span>
+    </div>
+    <div class="adh-resumen">
+      ${adhResumen || '<p class="note">Sin adherentes registrados</p>'}
+    </div>
+  `);
+}
+
+function calcSaldosCuentas(movs) {
+  const saldos = {};
+  for (const c of cuentas) saldos[c] = 0;
+  for (const m of movs) {
+    if (m.tipo === "INGRESO") {
+      saldos[m.cuenta] = (saldos[m.cuenta] || 0) + m.ingreso;
+    } else if (m.tipo === "EGRESO") {
+      saldos[m.cuenta] = (saldos[m.cuenta] || 0) - m.egreso;
+    } else if (m.tipo === "INTERNO") {
+      saldos[m.cuenta]          = (saldos[m.cuenta]          || 0) - m.montoFinal;
+      saldos[m.cuentaDestino]   = (saldos[m.cuentaDestino]   || 0) + m.montoFinal;
+    }
+  }
+  return saldos;
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB 4 — ENTIDADES
+// ══════════════════════════════════════════════════════════════
+
+function renderEntidades() {
+  const tabs = [
+    {key:"jugadores", label:"Jugadores"},
+    {key:"grupos",    label:"Grupos"},
+    {key:"adherentes",label:"Adherentes"},
+  ];
+  const tabBtns = tabs.map(t =>
+    `<button class="entity-tab ${entidadesTab===t.key?"active":""}" onclick="setEntidadesTab('${t.key}')">${t.label}</button>`
+  ).join("");
+
+  let inner = "";
+  if (entidadesTab === "jugadores")  inner = renderJugadores();
+  if (entidadesTab === "grupos")     inner = renderGrupos();
+  if (entidadesTab === "adherentes") inner = renderAdherentes();
+
+  setContent(`
+    <div class="entity-tabs">${tabBtns}</div>
+    <div id="entity-content">${inner}</div>
+  `);
+}
+
+function setEntidadesTab(tab) { entidadesTab = tab; renderEntidades(); }
+
+// ── Jugadores ─────────────────────────────────────────────────
+function renderJugadores() {
+  const sorted = [...jugadores].sort((a,b) => a.nombre.localeCompare(b.nombre));
+  const list = sorted.map(j => `
+    <div class="entity-item" id="jug-${j.id}">
+      <span class="entity-name">${esc(j.nombre)}</span>
+      <button class="btn-sm danger" id="jdel-${j.id}" onclick="confirmDeleteJugador('${j.id}')">✕</button>
+    </div>`).join("");
+  return `
+    <div class="add-row">
+      <input class="inp" id="new-jug-input" type="text" placeholder="Nombre del jugador / CT…">
+      <button class="btn-sm accent" onclick="addJugador()">+ Agregar</button>
+    </div>
+    ${list || '<p class="note">Sin jugadores registrados</p>'}`;
+}
+
+async function addJugador() {
+  const inp = document.getElementById("new-jug-input");
+  const nombre = (inp?.value || "").trim();
+  if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  try {
+    const r = await Storage.saveJugador({ nombre });
+    if (!r.ok) throw new Error(r.error || "Error");
+    jugadores.push({ id: r.id, nombre });
+    toast("Jugador agregado ✓", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+function confirmDeleteJugador(id) {
+  const btn = document.getElementById("jdel-"+id);
+  if (!btn) return;
+  if (btn.dataset.confirm) { deleteJugador(id); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
+    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+  }
+}
+
+async function deleteJugador(id) {
+  try {
+    const r = await Storage.deleteJugador(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    jugadores = jugadores.filter(j => j.id !== id);
+    toast("Jugador eliminado", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+// ── Grupos ────────────────────────────────────────────────────
+function renderGrupos() {
+  const list = [...grupos].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(g => {
+    const count = (g.miembros || []).length;
+    return `
+      <div class="entity-item">
+        <div style="flex:1">
+          <div class="entity-name">${esc(g.nombre)}</div>
+          <div class="entity-sub">${count} miembro${count!==1?"s":""}</div>
+        </div>
+        <button class="btn-sm accent" onclick="openGrupoModal('${g.id}')">✏️</button>
+        <button class="btn-sm danger" id="gdel-${g.id}" onclick="confirmDeleteGrupo('${g.id}')">✕</button>
+      </div>`;
+  }).join("");
+  return `
+    <button class="btn-secondary" onclick="openGrupoModal(null)" style="margin-bottom:12px">+ Crear Grupo</button>
+    ${list || '<p class="note">Sin grupos registrados</p>'}`;
+}
+
+function openGrupoModal(grupoId) {
+  const g = grupoId ? grupos.find(x => x.id === grupoId) : null;
+  const selectedIds = g ? (g.miembros || []) : [];
+  const jugList = [...jugadores].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(j => `
+    <label class="grupo-jug-item">
+      <input type="checkbox" value="${j.id}" ${selectedIds.includes(j.id)?"checked":""}>
+      <span class="grupo-jug-name">${esc(j.nombre)}</span>
+    </label>`).join("");
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${g ? "Editar grupo" : "Nuevo grupo"}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Nombre del grupo</label>
+            <input class="inp" id="grupo-nombre" type="text" placeholder="Nombre…" value="${esc(g?g.nombre:"")}">
+          </div>
+          <div class="field">
+            <label>Miembros</label>
+            <div class="grupo-jug-list">${jugList || '<p class="note">Sin jugadores</p>'}</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" onclick="saveGrupo('${grupoId||""}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function saveGrupo(grupoId) {
+  const nombre = (document.getElementById("grupo-nombre")?.value || "").trim();
+  if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  const checks = document.querySelectorAll(".grupo-jug-list input[type=checkbox]:checked");
+  const miembros = Array.from(checks).map(c => c.value);
+  const grupo = grupoId ? { id:grupoId, nombre, miembros } : { nombre, miembros };
+  try {
+    const r = await Storage.saveGrupo(grupo);
+    if (!r.ok) throw new Error(r.error || "Error");
+    if (grupoId) {
+      const idx = grupos.findIndex(g => g.id === grupoId);
+      if (idx >= 0) grupos[idx] = { ...grupos[idx], nombre, miembros };
+    } else {
+      grupos.push({ id: r.id, nombre, miembros });
+    }
+    toast(grupoId ? "Grupo actualizado ✓" : "Grupo creado ✓", "ok");
+    closeModal();
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+function confirmDeleteGrupo(id) {
+  const btn = document.getElementById("gdel-"+id);
+  if (!btn) return;
+  if (btn.dataset.confirm) { deleteGrupo(id); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
+    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+  }
+}
+async function deleteGrupo(id) {
+  try {
+    const r = await Storage.deleteGrupo(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    grupos = grupos.filter(g => g.id !== id);
+    toast("Grupo eliminado", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+// ── Adherentes ────────────────────────────────────────────────
+let adhSearch = "";
+let adhShowHistorial = false;
+
+function renderAdherentes() {
+  const filtered = [...adherentes]
+    .filter(a => !adhSearch || a.nombre.toLowerCase().includes(adhSearch.toLowerCase()))
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const list = filtered.map(a => `
+    <div class="entity-item" id="adh-${a.id}">
+      <span class="entity-name">${esc(a.nombre)}</span>
+      <button class="btn-sm danger" id="adel-${a.id}" onclick="confirmDeleteAdherente('${a.id}')">✕</button>
+    </div>`).join("");
+
+  return `
+    <div class="add-row">
+      <input class="inp" id="new-adh-input" type="text" placeholder="Nombre del adherente…">
+      <button class="btn-sm accent" onclick="addAdherente()">+ Agregar</button>
+    </div>
+    <div class="search-wrap" style="margin-bottom:10px">
+      <span class="search-icon">🔍</span>
+      <input class="inp" type="search" placeholder="Buscar adherente…" value="${esc(adhSearch)}"
+             oninput="adhSearch=this.value; document.getElementById('adh-list').innerHTML=renderAdherentes_listOnly()">
+    </div>
+    <div id="adh-list">${list || '<p class="note">Sin adherentes registrados</p>'}</div>
+    <div class="divider"></div>
+    <div class="sec-hdr">
+      <span class="sec-title">Historial de pagos</span>
+      <button class="btn-sm" onclick="adhShowHistorial=!adhShowHistorial; renderEntidades()">${adhShowHistorial?"Ocultar":"Ver grilla"}</button>
+    </div>
+    ${adhShowHistorial ? renderAdhHistorial() : ""}`;
+}
+
+function renderAdherentes_listOnly() {
+  const filtered = [...adherentes]
+    .filter(a => !adhSearch || a.nombre.toLowerCase().includes(adhSearch.toLowerCase()))
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  return filtered.map(a => `
+    <div class="entity-item" id="adh-${a.id}">
+      <span class="entity-name">${esc(a.nombre)}</span>
+      <button class="btn-sm danger" id="adel-${a.id}" onclick="confirmDeleteAdherente('${a.id}')">✕</button>
+    </div>`).join("") || '<p class="note">Sin adherentes</p>';
+}
+
+async function addAdherente() {
+  const inp = document.getElementById("new-adh-input");
+  const nombre = (inp?.value || "").trim();
+  if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  try {
+    const r = await Storage.saveAdherente({ nombre });
+    if (!r.ok) throw new Error(r.error || "Error");
+    adherentes.push({ id: r.id, nombre });
+    toast("Adherente agregado ✓", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+function confirmDeleteAdherente(id) {
+  const btn = document.getElementById("adel-"+id);
+  if (!btn) return;
+  if (btn.dataset.confirm) { deleteAdherente(id); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
+    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+  }
+}
+async function deleteAdherente(id) {
+  try {
+    const r = await Storage.deleteAdherente(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    adherentes = adherentes.filter(a => a.id !== id);
+    toast("Adherente eliminado", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+function renderAdhHistorial() {
+  const months = getLast6Months();
+  const adhs   = [...adherentes].sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const header = `<tr><th>Adherente</th>${months.map(m=>`<th>${mesLabel(m).slice(0,3)}<br>${m.slice(2,4)}</th>`).join("")}</tr>`;
+  const rows   = adhs.map(adh => {
+    const cells = months.map(m => {
+      const mesCod = m.replace("-","");
+      const p = pagos.find(p2 => p2.adherenteId === adh.id && p2.mes === mesCod);
+      const estado = p ? p.estado : "";
+      const icon   = estado==="PAGADO" ? "✓" : estado==="PENDIENTE" ? "✗" : "·";
+      const style  = estado==="PAGADO" ? "color:var(--green)" : estado==="PENDIENTE" ? "color:var(--red)" : "color:var(--text3)";
+      return `<td><button class="pago-btn" style="${style}" onclick="toggleAdhPago('${adh.id}','${esc(adh.nombre)}','${mesCod}')" title="${adh.nombre} — ${mesLabel(m)}">${icon}</button></td>`;
+    }).join("");
+    return `<tr><td>${esc(adh.nombre)}</td>${cells}</tr>`;
+  }).join("");
+  return `<div class="adh-grid-wrap"><table class="adh-grid"><thead>${header}</thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function getLast6Months() {
+  const months = [];
+  let k = nowMes();
+  for (let i = 0; i < 6; i++) { months.unshift(k); k = prevMes(k); }
+  return months;
+}
+
+async function toggleAdhPago(adhId, adhNombre, mesCod) {
+  try {
+    const r = await Storage.togglePago(adhId, adhNombre, mesCod);
+    if (!r.ok) throw new Error(r.error || "Error");
+    const existing = pagos.find(p => p.adherenteId === adhId && p.mes === mesCod);
+    if (existing) existing.estado = r.estado;
+    else pagos.push({ id:uid(), adherenteId:adhId, adherenteNombre:adhNombre, mes:mesCod, estado:r.estado, movimientoId:"" });
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB 5 — CONFIGURACIÓN
+// ══════════════════════════════════════════════════════════════
+
+function renderConfig() {
+  const url = getScriptUrl();
+  const cuentasHtml = cuentas.map((c,i) => `
+    <div class="cfg-item">
+      <input class="inp" type="text" data-cfg-cuenta value="${esc(c)}" onchange="cuentas[${i}]=this.value">
+      <button class="btn-sm danger" onclick="removeCuenta(${i})">✕</button>
+    </div>`).join("");
+  const metodosHtml = metodos.map((m,i) => `
+    <div class="cfg-item">
+      <input class="inp" type="text" data-cfg-metodo value="${esc(m)}" onchange="metodos[${i}]=this.value">
+      <button class="btn-sm danger" onclick="removeMetodo(${i})">✕</button>
+    </div>`).join("");
+
+  setContent(`
+    <!-- URL Script -->
+    <div class="cfg-card">
+      <div class="cfg-title">🔗 URL del Apps Script</div>
+      <div class="cfg-note">Pegá aquí la URL que obtenés al deployar Code.gs como Web App en script.google.com</div>
+      <div class="conn-row">
+        <input class="inp" id="url-input" type="url" placeholder="https://script.google.com/macros/s/…/exec"
+               value="${esc(url)}">
+      </div>
+      <div class="modal-footer" style="margin-top:10px">
+        <button class="btn-secondary" style="flex:1" onclick="saveUrl()">💾 Guardar URL</button>
+        <button class="btn-secondary" style="flex:1" onclick="testConnection()">🔌 Probar</button>
+      </div>
+    </div>
+
+    <!-- Cuentas -->
+    <div class="cfg-card">
+      <div class="cfg-title">🏦 Cuentas</div>
+      ${cuentasHtml}
+      <div class="cfg-item" style="margin-top:4px">
+        <input class="inp" id="new-cuenta-inp" type="text" placeholder="Nueva cuenta…">
+        <button class="btn-sm accent" onclick="addCuenta()">+</button>
+      </div>
+      <button class="btn-secondary" style="margin-top:10px" onclick="saveCuentas()">💾 Guardar cuentas</button>
+    </div>
+
+    <!-- Métodos de pago -->
+    <div class="cfg-card">
+      <div class="cfg-title">💳 Métodos de pago</div>
+      ${metodosHtml}
+      <div class="cfg-item" style="margin-top:4px">
+        <input class="inp" id="new-metodo-inp" type="text" placeholder="Nuevo método…">
+        <button class="btn-sm accent" onclick="addMetodo()">+</button>
+      </div>
+      <button class="btn-secondary" style="margin-top:10px" onclick="saveMetodos()">💾 Guardar métodos</button>
+    </div>
+
+    <!-- Exportar -->
+    <div class="cfg-card">
+      <div class="cfg-title">📤 Exportar a Excel</div>
+      <button class="btn-export" onclick="exportExcel(true)">📥 Exportar mes actual (${mesLabel(sharedMes)})</button>
+      <button class="btn-export" onclick="exportExcel(false)">📥 Exportar todos los movimientos</button>
+    </div>
+
+    <!-- Importar -->
+    <div class="cfg-card">
+      <div class="cfg-title">📂 Importar desde Excel</div>
+      <p class="cfg-note" style="margin-bottom:10px">Importá movimientos desde un Excel con las columnas del formato de referencia.</p>
+      <label class="file-input-label">
+        📂 Seleccionar archivo Excel
+        <input type="file" accept=".xlsx,.xls,.csv" onchange="importExcel(event)">
+      </label>
+    </div>
+
+    <!-- Actualizar datos -->
+    <div class="cfg-card">
+      <div class="cfg-title">🔄 Datos</div>
+      <button class="btn-secondary" onclick="refreshData()">↻ Recargar todos los datos</button>
+      <p class="cfg-note" style="margin-top:8px">Si agregaste filas directamente en la hoja de cálculo, tocá este botón para sincronizar.</p>
+    </div>
+  `);
+}
+
+function saveUrl() {
+  const val = (document.getElementById("url-input")?.value || "").trim();
+  if (!val) { toast("Ingresá una URL válida", "err"); return; }
+  localStorage.setItem("clubfm_url", val);
+  toast("URL guardada ✓", "ok");
+}
+
+async function testConnection() {
+  const url = (document.getElementById("url-input")?.value || "").trim() || getScriptUrl();
+  if (!url) { toast("Ingresá la URL primero", "err"); return; }
+  showOverlay("Probando conexión…");
+  try {
+    const r = await post(url, { action:"getConfig" });
+    hideOverlay();
+    if (r.ok) toast("Conexión exitosa ✓", "ok");
+    else toast("Conexión ok, pero error: " + (r.error||""), "err");
+  } catch(e) {
+    hideOverlay();
+    toast("Error de conexión: " + e.message, "err");
+  }
+}
+
+function addCuenta()  { cuentas.push(""); renderConfig(); setTimeout(()=>{ const ins=document.querySelectorAll(".cfg-item .inp"); ins[ins.length-1]?.focus(); },50); }
+function removeCuenta(i) { cuentas.splice(i,1); renderConfig(); }
+function addMetodo()  { metodos.push(""); renderConfig(); }
+function removeMetodo(i) { metodos.splice(i,1); renderConfig(); }
+
+async function saveCuentas() {
+  document.querySelectorAll("[data-cfg-cuenta]").forEach((inp,i) => { if(i<cuentas.length) cuentas[i] = inp.value.trim(); });
+  cuentas = cuentas.filter(Boolean);
+  try {
+    await Storage.saveConfig("cuentas", cuentas.join(","));
+    toast("Cuentas guardadas ✓", "ok");
+    renderConfig();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+async function saveMetodos() {
+  document.querySelectorAll("[data-cfg-metodo]").forEach((inp,i) => { if(i<metodos.length) metodos[i] = inp.value.trim(); });
+  metodos = metodos.filter(Boolean);
+  try {
+    await Storage.saveConfig("metodos", metodos.join(","));
+    toast("Métodos guardados ✓", "ok");
+    renderConfig();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+// ── Excel Export ──────────────────────────────────────────────
+function exportExcel(mesOnly) {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+  let data = mesOnly
+    ? movimientos.filter(m => getMes(m.fecha) === sharedMes)
+    : [...movimientos];
+  data = data.sort((a,b) => a.fecha.localeCompare(b.fecha));
+
+  const headers = ["MES","Fecha","Cód. Rubro","Rubro","CONCEPTO",
+                   "# EGRESOS","# INGRESOS","# MONTO FINAL","SALDO",
+                   "CUENTA","MODO PAGO","Jug/Ct","Adherente","Observacion","Comprobante"];
+  let saldo = 0;
+  const rows = data.map(m => {
+    const ing = m.tipo==="INGRESO" ? m.ingreso : 0;
+    const egr = m.tipo==="EGRESO"  ? m.egreso  : 0;
+    if (m.tipo !== "INTERNO") saldo += ing - egr;
+    return [
+      m.mes, m.fecha, m.codRubro, m.rubro, m.concepto,
+      egr||"", ing||"", m.montoFinal||"", saldo,
+      m.cuenta, m.modoPago, m.jugadorCT||"", m.adherente||"",
+      m.observacion||"", m.comprobante||""
+    ];
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws["!cols"] = [8,12,8,30,30,12,12,12,12,12,14,20,20,20,14].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
+  const fname = mesOnly ? `tesoreria_${sharedMes.replace("-","")}.xlsx` : "tesoreria_todos.xlsx";
+  XLSX.writeFile(wb, fname);
+  toast("Excel exportado ✓", "ok");
+}
+
+// ── Excel Import ──────────────────────────────────────────────
+async function importExcel(event) {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+  const file = event.target.files[0];
+  if (!file) return;
+  showOverlay("Importando…");
+  try {
+    const buf  = await file.arrayBuffer();
+    const wb   = XLSX.read(buf);
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
+    if (rows.length < 2) { hideOverlay(); toast("El archivo está vacío", "err"); return; }
+
+    const header = rows[0].map(h => String(h).trim().toUpperCase());
+    const idxOf  = (names) => { for(const n of names){ const i=header.indexOf(n.toUpperCase()); if(i>=0) return i; } return -1; };
+    const iMes   = idxOf(["MES"]);
+    const iFecha = idxOf(["FECHA"]);
+    const iCod   = idxOf(["CÓD. RUBRO","COD. RUBRO","CODIGO","COD"]);
+    const iRubro = idxOf(["RUBRO"]);
+    const iConc  = idxOf(["CONCEPTO"]);
+    const iEgr   = idxOf(["# EGRESOS","EGRESOS","EGRESO"]);
+    const iIng   = idxOf(["# INGRESOS","INGRESOS","INGRESO"]);
+    const iMonto = idxOf(["# MONTO FINAL","MONTO FINAL","MONTO"]);
+    const iCuenta= idxOf(["CUENTA"]);
+    const iModo  = idxOf(["MODO PAGO","MODOPAGO"]);
+    const iJug   = idxOf(["JUG/CT","JUGADOR"]);
+    const iAdh   = idxOf(["ADHERENTE"]);
+    const iObs   = idxOf(["OBSERVACION","OBSERVACIÓN"]);
+    const iComp  = idxOf(["COMPROBANTE"]);
+
+    const importedMovs = [];
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const egr   = parseFloat(r[iEgr]  || 0) || 0;
+      const ing   = parseFloat(r[iIng]  || 0) || 0;
+      const monto = parseFloat(r[iMonto]|| 0) || Math.max(egr, ing);
+      const tipo  = ing > 0 ? "INGRESO" : egr > 0 ? "EGRESO" : "INTERNO";
+      const fecha = iFecha >= 0 ? normFecha(String(r[iFecha]||"")) : today();
+      const mes   = iMes >= 0 ? String(r[iMes]||"").replace("-","") : fecha.slice(0,7).replace("-","");
+      const rubro = iRubro >= 0 ? String(r[iRubro]||"") : "";
+      if (!rubro && !ing && !egr) continue; // skip empty rows
+      importedMovs.push({
+        id: uid(), mes, fecha,
+        codRubro: iCod   >= 0 ? String(r[iCod]  ||"") : "",
+        rubro:    rubro,
+        categoria:"",
+        concepto: iConc  >= 0 ? String(r[iConc] ||"") : "",
+        egreso: egr, ingreso: ing, montoFinal: monto,
+        cuenta:   iCuenta>= 0 ? String(r[iCuenta]||cuentas[0]||"") : (cuentas[0]||""),
+        cuentaDestino: "",
+        modoPago: iModo  >= 0 ? String(r[iModo] ||"") : "",
+        jugadorCT: iJug  >= 0 ? String(r[iJug]  ||"") : "",
+        adherente: iAdh  >= 0 ? String(r[iAdh]  ||"") : "",
+        observacion: iObs>= 0 ? String(r[iObs]  ||"") : "",
+        comprobante: iComp>=0 ? String(r[iComp] ||"") : "",
+        tipo,
+      });
+    }
+
+    if (!importedMovs.length) { hideOverlay(); toast("No se encontraron datos válidos", "err"); return; }
+
+    // Save in batches
+    let saved = 0;
+    for (const mov of importedMovs) {
+      await Storage.saveMov(mov);
+      saved++;
+    }
+    // Reload
+    const r = await Storage.listMov();
+    if (r.ok) movimientos = r.movimientos || [];
+    updateBadge();
+    hideOverlay();
+    toast(`${saved} movimientos importados ✓`, "ok");
+    renderConfig();
+  } catch(e) {
+    hideOverlay();
+    toast("Error importando: " + e.message, "err");
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ARRANQUE
+// ══════════════════════════════════════════════════════════════
+
+document.addEventListener("DOMContentLoaded", initApp);
+</script>
+</body>
+</html>

@@ -432,8 +432,25 @@ function autoUpsertPago(movId, adherenteNombre, mes, estado) {
   }
 }
 
+function getSpreadsheet() {
+  const props = PropertiesService.getScriptProperties();
+  let ssId = props.getProperty("SPREADSHEET_ID");
+  if (ssId) {
+    try { return SpreadsheetApp.openById(ssId); } catch(e) { /* fall through to recreate */ }
+  }
+  // Try active spreadsheet (bound script)
+  let ss;
+  try { ss = SpreadsheetApp.getActiveSpreadsheet(); } catch(e) {}
+  if (!ss) {
+    // Standalone Web App: create a new spreadsheet
+    ss = SpreadsheetApp.create("Tesorería Club");
+  }
+  props.setProperty("SPREADSHEET_ID", ss.getId());
+  return ss;
+}
+
 function getOrCreateSheet(name, cols) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSpreadsheet();
   let sh   = ss.getSheetByName(name);
   if (!sh) {
     sh = ss.insertSheet(name);

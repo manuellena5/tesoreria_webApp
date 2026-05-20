@@ -139,6 +139,21 @@ function handleAction(data) {
       return { ok: false, error: "Movimiento no encontrado: " + m.id };
     }
 
+    case "saveBatch": {
+      const sh   = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const list = data.movimientos || [];
+      for (const m of list) {
+        sh.appendRow([
+          m.id, m.mes, m.fecha, m.codRubro, m.rubro, m.categoria,
+          m.concepto, m.egreso || 0, m.ingreso || 0, m.montoFinal || 0,
+          m.cuenta, m.cuentaDestino || "", m.modoPago,
+          m.jugadorCT || "", m.adherente || "", m.observacion || "",
+          m.comprobante || "", m.tipo, m.timestamp
+        ]);
+      }
+      return { ok: true, saved: list.length };
+    }
+
     case "deleteMov": {
       const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
       const all = sh.getDataRange().getValues();

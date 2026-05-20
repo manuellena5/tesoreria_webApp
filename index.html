@@ -166,6 +166,10 @@ textarea.inp { resize:none; }
 /* ── Filters ── */
 .filter-row { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; margin-bottom:10px; padding-bottom:2px; }
 .filter-row::-webkit-scrollbar { display:none; }
+.ss-filter-wrap { position:relative; flex:1; min-width:0; }
+.ss-filter-input { width:100%; padding-right:28px !important; }
+.ss-filter-clear { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text3); cursor:pointer; font-size:13px; padding:2px 4px; line-height:1; }
+.ss-filter-clear:hover { color:var(--text); }
 .search-wrap { position:relative; margin-bottom:10px; }
 .search-wrap .inp { padding-left:34px; }
 .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text3); font-size:14px; pointer-events:none; }
@@ -493,7 +497,7 @@ let currentTab    = "nuevo";
 let editId        = null;
 let sharedMes     = nowMes();
 let entidadesTab  = "jugadores";
-let listFiltros   = { cat: "", cuenta: "", tipo: "", search: "" };
+let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", search: "" };
 let F             = buildDefaultF();
 
 // ══════════════════════════════════════════════════════════════
@@ -962,14 +966,10 @@ async function saveMovimiento() {
     } else {
       movimientos.push(mov);
     }
-    // Update pagos if adherentes rubro
+    // Refresh pagos if adherentes rubro (backend may have created/updated a pago)
     if (mov.adherente && mov.rubro.toUpperCase().includes("ADHERENTE")) {
-      const adh = adherentes.find(a => a.nombre.toLowerCase() === mov.adherente.toLowerCase());
-      if (adh) {
-        const existing = pagos.find(p => p.adherenteId === adh.id && p.mes === mes);
-        if (existing) existing.estado = "PAGADO";
-        else pagos.push({ id: uid(), adherenteId: adh.id, adherenteNombre: adh.nombre, mes, estado: "PAGADO", movimientoId: mov.id });
-      }
+      const rPag = await Storage.listPagos();
+      if (rPag.ok) pagos = rPag.pagos || [];
     }
     updateBadge();
     toast(editId ? "Movimiento actualizado ✓" : "Movimiento guardado ✓", "ok");
@@ -992,8 +992,9 @@ function renderMovimientos() {
   const egrTotal = movMes.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s + m.egreso,  0);
   const saldo    = ingTotal - egrTotal;
 
-  // Build unique category list for filters
-  const cats = [...new Set(movimientos.map(m => m.categoria).filter(Boolean))].sort();
+  // Build unique lists for filter dropdowns
+  const cats        = [...new Set(movimientos.map(m => m.categoria).filter(Boolean))].sort();
+  const rubrosUniq  = [...new Set(movimientos.map(m => m.rubro).filter(Boolean))].sort();
   const catPills = cats.map(c =>
     `<button class="pill sm ${listFiltros.cat===c?"active":""}" onclick="setListFilter('cat','${esc(c)}')">${esc(c)}</button>`
   ).join("");
@@ -1027,10 +1028,27 @@ function renderMovimientos() {
     </div>
 
     <div class="filter-row">
-      <button class="pill sm ${listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""?"active":""}" onclick="clearListFilters()">Todos</button>
+      <button class="pill sm ${listFiltros.rubro===""&&listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""?"active":""}" onclick="clearListFilters()">Todos</button>
       ${tipoPills}
     </div>
-    <div class="filter-row">${catPills}</div>
+    <div class="filter-row" style="gap:8px">
+      <div class="ss-filter-wrap">
+        <input class="inp ss-filter-input" id="fil-rubro" list="dl-rubros" placeholder="Rubro…"
+               value="${esc(listFiltros.rubro)}"
+               oninput="listFiltros.rubro=this.value; renderMovList()"
+               onsearch="listFiltros.rubro=''; renderMovList()">
+        <datalist id="dl-rubros">${rubrosUniq.map(r=>`<option value="${esc(r)}">`).join("")}</datalist>
+        ${listFiltros.rubro ? `<button class="ss-filter-clear" onclick="listFiltros.rubro=''; renderMovimientos()">✕</button>` : ""}
+      </div>
+      <div class="ss-filter-wrap">
+        <input class="inp ss-filter-input" id="fil-cat" list="dl-cats" placeholder="Categoría…"
+               value="${esc(listFiltros.cat)}"
+               oninput="listFiltros.cat=this.value; renderMovList()"
+               onsearch="listFiltros.cat=''; renderMovList()">
+        <datalist id="dl-cats">${cats.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
+        ${listFiltros.cat ? `<button class="ss-filter-clear" onclick="listFiltros.cat=''; renderMovimientos()">✕</button>` : ""}
+      </div>
+    </div>
     <div class="filter-row">${cuentaPills}</div>
 
     <div class="search-wrap">
@@ -1052,7 +1070,8 @@ function renderMovimientos() {
 function renderMovList() {
   const movMes = movimientos
     .filter(m => getMes(m.fecha) === sharedMes)
-    .filter(m => !listFiltros.cat    || m.categoria === listFiltros.cat)
+    .filter(m => !listFiltros.rubro  || m.rubro.toLowerCase().includes(listFiltros.rubro.toLowerCase()))
+    .filter(m => !listFiltros.cat    || m.categoria.toLowerCase().includes(listFiltros.cat.toLowerCase()))
     .filter(m => !listFiltros.cuenta || m.cuenta     === listFiltros.cuenta)
     .filter(m => !listFiltros.tipo   || m.tipo        === listFiltros.tipo)
     .filter(m => {
@@ -1105,7 +1124,7 @@ function setListFilter(key, val) {
   renderMovimientos();
 }
 function clearListFilters() {
-  listFiltros = { cat:"", cuenta:"", tipo:"", search:"" };
+  listFiltros = { rubro: "", cat:"", cuenta:"", tipo:"", search:"" };
   renderMovimientos();
 }
 function changeMes(delta) {
@@ -1618,9 +1637,9 @@ async function toggleAdhPago(adhId, adhNombre, mesCod) {
   try {
     const r = await Storage.togglePago(adhId, adhNombre, mesCod);
     if (!r.ok) throw new Error(r.error || "Error");
-    const existing = pagos.find(p => p.adherenteId === adhId && p.mes === mesCod);
-    if (existing) existing.estado = r.estado;
-    else pagos.push({ id:uid(), adherenteId:adhId, adherenteNombre:adhNombre, mes:mesCod, estado:r.estado, movimientoId:"" });
+    // Refresh pagos from backend to guarantee accurate state
+    const rPag = await Storage.listPagos();
+    if (rPag.ok) pagos = rPag.pagos || [];
     renderEntidades();
   } catch(e) { toast("Error: " + e.message, "err"); }
 }

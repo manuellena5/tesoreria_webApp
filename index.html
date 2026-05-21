@@ -497,7 +497,7 @@ let currentTab    = "nuevo";
 let editId        = null;
 let sharedMes     = nowMes();
 let entidadesTab  = "jugadores";
-let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", search: "" };
+let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", search: "" };
 let F             = buildDefaultF();
 
 // ══════════════════════════════════════════════════════════════
@@ -1028,7 +1028,7 @@ function renderMovimientos() {
     </div>
 
     <div class="filter-row">
-      <button class="pill sm ${listFiltros.rubro===""&&listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""?"active":""}" onclick="clearListFilters()">Todos</button>
+      <button class="pill sm ${listFiltros.rubro===""&&listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""&&listFiltros.adherente===""&&listFiltros.jugadorCT===""?"active":""}" onclick="clearListFilters()">Todos</button>
       ${tipoPills}
     </div>
     <div class="filter-row" style="gap:8px">
@@ -1050,6 +1050,24 @@ function renderMovimientos() {
       </div>
     </div>
     <div class="filter-row">${cuentaPills}</div>
+    <div class="filter-row" style="gap:8px">
+      <div class="ss-filter-wrap">
+        <input class="inp ss-filter-input" id="fil-adh" list="dl-adhs" placeholder="Adherente…"
+               value="${esc(listFiltros.adherente)}"
+               oninput="listFiltros.adherente=this.value; renderMovList()"
+               onsearch="listFiltros.adherente=''; renderMovList()">
+        <datalist id="dl-adhs">${adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(a=>`<option value="${esc(a.nombre)}">`)  .join("")}</datalist>
+        ${listFiltros.adherente ? `<button class="ss-filter-clear" onclick="listFiltros.adherente=''; renderMovimientos()">✕</button>` : ""}
+      </div>
+      <div class="ss-filter-wrap">
+        <input class="inp ss-filter-input" id="fil-jug" list="dl-jugs" placeholder="Jugador/CT…"
+               value="${esc(listFiltros.jugadorCT)}"
+               oninput="listFiltros.jugadorCT=this.value; renderMovList()"
+               onsearch="listFiltros.jugadorCT=''; renderMovList()">
+        <datalist id="dl-jugs">${jugadores.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(j=>`<option value="${esc(j.nombre)}">`)  .join("")}</datalist>
+        ${listFiltros.jugadorCT ? `<button class="ss-filter-clear" onclick="listFiltros.jugadorCT=''; renderMovimientos()">✕</button>` : ""}
+      </div>
+    </div>
 
     <div class="search-wrap">
       <span class="search-icon">🔍</span>
@@ -1073,7 +1091,9 @@ function renderMovList() {
     .filter(m => !listFiltros.rubro  || m.rubro.toLowerCase().includes(listFiltros.rubro.toLowerCase()))
     .filter(m => !listFiltros.cat    || m.categoria.toLowerCase().includes(listFiltros.cat.toLowerCase()))
     .filter(m => !listFiltros.cuenta || m.cuenta     === listFiltros.cuenta)
-    .filter(m => !listFiltros.tipo   || m.tipo        === listFiltros.tipo)
+    .filter(m => !listFiltros.tipo      || m.tipo        === listFiltros.tipo)
+    .filter(m => !listFiltros.adherente || (m.adherente||'').toLowerCase().includes(listFiltros.adherente.toLowerCase()))
+    .filter(m => !listFiltros.jugadorCT || (m.jugadorCT||'').toLowerCase().includes(listFiltros.jugadorCT.toLowerCase()))
     .filter(m => {
       const q = listFiltros.search.toLowerCase();
       return !q || (m.concepto||"").toLowerCase().includes(q) || (m.observacion||"").toLowerCase().includes(q);
@@ -1124,7 +1144,7 @@ function setListFilter(key, val) {
   renderMovimientos();
 }
 function clearListFilters() {
-  listFiltros = { rubro: "", cat:"", cuenta:"", tipo:"", search:"" };
+  listFiltros = { rubro: "", cat:"", cuenta:"", tipo:"", adherente:"", jugadorCT:"", search:"" };
   renderMovimientos();
 }
 function changeMes(delta) {

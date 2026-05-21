@@ -972,20 +972,20 @@ async function saveMovimiento() {
     } else {
       movimientos.push(mov);
     }
-    // Refresh pagos if adherentes rubro (backend may have created/updated a pago)
+    // Refresh pagos in background — non-blocking, no second wait
     if (mov.adherente && mov.rubro.toUpperCase().includes("ADHERENTE")) {
-      const rPag = await Storage.listPagos();
-      if (rPag.ok) pagos = rPag.pagos || [];
+      Storage.listPagos().then(rPag => { if (rPag.ok) pagos = rPag.pagos || []; });
     }
     updateBadge();
     const wasEdit = !!editId;
     resetF();
+    hideOverlay();        // ocultar spinner antes del re-render
     renderNuevo();
     showMovSavedModal(mov, wasEdit);
   } catch(e) {
     toast("Error: " + e.message, "err");
   } finally {
-    hideOverlay();
+    hideOverlay();        // garantía por si hubo error antes del hide explícito
   }
 }
 

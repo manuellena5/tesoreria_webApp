@@ -355,6 +355,12 @@ textarea.inp { resize:none; }
 .grupo-jug-item input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); flex-shrink:0; cursor:pointer; }
 .grupo-jug-name { font-size:14px; cursor:pointer; }
 
+/* ── Monto coloreado según tipo ── */
+.inp.monto-ing { border-color:var(--green) !important; background:rgba(74,222,128,0.07) !important; color:var(--green) !important; }
+.inp.monto-ing::placeholder { color:rgba(74,222,128,0.45); }
+.inp.monto-egr { border-color:var(--red)   !important; background:rgba(248,113,113,0.07) !important; color:var(--red)   !important; }
+.inp.monto-egr::placeholder { color:rgba(248,113,113,0.45); }
+
 /* ── Misc ── */
 .divider { height:1px; background:var(--border); margin:14px 0; }
 .note { font-size:12px; color:var(--text3); line-height:1.6; }
@@ -788,7 +794,7 @@ function renderNuevo() {
 
       <div class="field">
         <label>Monto</label>
-        <input class="inp" type="number" id="f-monto" placeholder="0" min="0" step="any" value="${F.monto}"
+        <input class="inp ${F.tipo==='INGRESO'?'monto-ing':F.tipo==='EGRESO'?'monto-egr':''}" type="number" id="f-monto" placeholder="0" min="0" step="any" value="${F.monto}"
                oninput="F.monto=this.value" inputmode="decimal">
       </div>
 
@@ -972,9 +978,10 @@ async function saveMovimiento() {
       if (rPag.ok) pagos = rPag.pagos || [];
     }
     updateBadge();
-    toast(editId ? "Movimiento actualizado ✓" : "Movimiento guardado ✓", "ok");
+    const wasEdit = !!editId;
     resetF();
     renderNuevo();
+    showMovSavedModal(mov, wasEdit);
   } catch(e) {
     toast("Error: " + e.message, "err");
   } finally {
@@ -1243,6 +1250,39 @@ function editMovimiento(id) {
 function closeModal(e) {
   if (e && e.target !== document.querySelector(".modal-overlay")) return;
   document.getElementById("modal-root").innerHTML = "";
+}
+
+function showMovSavedModal(mov, wasEdit) {
+  const montoClass = mov.tipo==="INGRESO" ? "ing" : mov.tipo==="EGRESO" ? "egr" : "int";
+  const montoVal   = mov.tipo==="INGRESO" ? mov.ingreso : mov.egreso || mov.montoFinal;
+  const montoSign  = mov.tipo==="INGRESO" ? "+" : mov.tipo==="EGRESO" ? "\u2212" : "\u21c4";
+  const detalles = [
+    ["Tipo",      mov.tipo],
+    ["Fecha",     mov.fecha],
+    ["Rubro",     "["+mov.codRubro+"] "+mov.rubro],
+    ["Concepto",  mov.concepto || null],
+    ["Cuenta",    mov.cuenta + (mov.cuentaDestino ? " \u2192 "+mov.cuentaDestino : "")],
+    ["M\u00e9todo",    mov.modoPago],
+    mov.jugadorCT ? ["Jugador/CT", mov.jugadorCT] : null,
+    mov.adherente ? ["Adherente",  mov.adherente]  : null,
+    mov.observacion ? ["Observaci\u00f3n", mov.observacion] : null,
+  ].filter(r => r && r[1]).map(([l,v]) =>
+    `<div class="modal-detail-row"><span class="modal-detail-lbl">${l}</span><span class="modal-detail-val">${esc(v)}</span></div>`
+  ).join("");
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div style="text-align:center;font-size:12px;font-weight:600;color:var(--green);letter-spacing:.05em;margin-bottom:2px">
+          ${wasEdit ? "\u270f\ufe0f MOVIMIENTO ACTUALIZADO" : "\u2713 MOVIMIENTO GUARDADO"}
+        </div>
+        <div class="modal-monto-big ${montoClass}">${montoSign}${fmt(montoVal)}</div>
+        ${detalles}
+        <div class="modal-footer">
+          <button class="btn-main" onclick="document.getElementById('modal-root').innerHTML=''">Aceptar</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════

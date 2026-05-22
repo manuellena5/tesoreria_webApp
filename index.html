@@ -365,6 +365,18 @@ textarea.inp { resize:none; }
 .divider { height:1px; background:var(--border); margin:14px 0; }
 .note { font-size:12px; color:var(--text3); line-height:1.6; }
 .accent-text { color:var(--accent); font-weight:600; }
+
+/* ── Desktop layout ── */
+.resumen-2col { display:flex; flex-direction:column; }
+@media (min-width: 768px) {
+  #app { max-width: 940px; }
+  .bnav { max-width: 940px; }
+  .resumen-2col { display:grid; grid-template-columns:1fr 1fr; gap:22px; align-items:start; }
+  .adh-resumen { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .modal-card { max-width:640px; border-radius:var(--r); }
+  .modal-overlay { align-items:center; }
+  .sum-table td:first-child { max-width:220px; }
+}
 </style>
 </head>
 <body>
@@ -1376,6 +1388,48 @@ function renderResumen() {
   }).join("");
   const pagadosCount = adherentes.filter(adh => resolveEstado(adh) === "PAGADO").length;
 
+  // Top 10 jugadores/CT por monto neto (egresos - ingresos) en el mes
+  const jugMontoMes = {};
+  for (const m of movMes) {
+    if (m.jugadorCT) {
+      if (!jugMontoMes[m.jugadorCT]) jugMontoMes[m.jugadorCT] = { egr: 0, ing: 0 };
+      if (m.tipo === "EGRESO")  jugMontoMes[m.jugadorCT].egr += m.egreso;
+      if (m.tipo === "INGRESO") jugMontoMes[m.jugadorCT].ing += m.ingreso;
+    }
+  }
+  const top10Jug = Object.entries(jugMontoMes)
+    .map(([nombre, v]) => [nombre, v.egr - v.ing])
+    .filter(([, neto]) => neto !== 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+  const totalJugMes = top10Jug.reduce((s,[,v]) => s + v, 0);
+  const avgJugMes   = top10Jug.length ? totalJugMes / top10Jug.length : 0;
+
+  // Promedio mensual histórico por jugador/CT (monto neto)
+  function avgMensualJug(nombre) {
+    const mesMap = {};
+    for (const m of movimientos) {
+      if (m.jugadorCT === nombre) {
+        const k = mesFromRecord(m);
+        if (!mesMap[k]) mesMap[k] = { egr: 0, ing: 0 };
+        if (m.tipo === "EGRESO")  mesMap[k].egr += m.egreso;
+        if (m.tipo === "INGRESO") mesMap[k].ing += m.ingreso;
+      }
+    }
+    const vals = Object.values(mesMap).map(v => v.egr - v.ing).filter(n => n !== 0);
+    return vals.length ? vals.reduce((s,v) => s + v, 0) / vals.length : 0;
+  }
+  const jugTableRows = top10Jug.map(([nombre, neto], i) => {
+    const avg = avgMensualJug(nombre);
+    const clsNeto = neto < 0 ? "ing" : "egr";
+    const clsAvg  = avg  < 0 ? "ing" : "egr";
+    return `<tr>
+      <td>${i+1}. ${esc(nombre)}</td>
+      <td class="${clsNeto}">${neto < 0 ? "-" : ""}${fmt(neto)}</td>
+      <td class="${clsAvg}" style="opacity:.7">${avg < 0 ? "-" : ""}${fmt(avg)}</td>
+    </tr>`;
+  }).join("");
+
   // Saldo cuentas html
   const cuentasHtml = cuentas.map(c => {
     const s = saldosCuentas[c] || 0;
@@ -1412,25 +1466,51 @@ function renderResumen() {
       <div class="stat-val acc" style="font-size:22px">${saldoAcc<0?"-":""}${fmt(saldoAcc)}</div>
     </div>
 
-    <div class="sec-hdr"><span class="sec-title">Saldo por cuenta</span></div>
-    <div class="cuenta-list">${cuentasHtml || '<p class="note">Sin cuentas configuradas</p>'}</div>
+    <div class="resumen-2col">
+      <div>
+        <div class="sec-hdr"><span class="sec-title">Saldo por cuenta</span></div>
+        <div class="cuenta-list">${cuentasHtml || '<p class="note">Sin cuentas configuradas</p>'}</div>
 
-    ${catItems.length ? `
-    <div class="sec-hdr"><span class="sec-title">Egresos por categoría</span></div>
-    <div class="cat-list">${catBars}</div>
+        <div class="sec-hdr">
+          <span class="sec-title">Adherentes — ${mesLabel(sharedMes)}</span>
+          <span class="note">${pagadosCount}/${adherentes.length} pagados</span>
+        </div>
+        <div class="adh-resumen">
+          ${adhResumen || '<p class="note">Sin adherentes registrados</p>'}
+        </div>
+      </div>
 
-    <div class="sec-hdr"><span class="sec-title">Tabla por categoría</span></div>
-    <table class="sum-table">
-      <thead><tr><th>Categoría</th><th style="text-align:right">Ing.</th><th style="text-align:right">Egr.</th><th style="text-align:right">Neto</th></tr></thead>
-      <tbody>${tableRows}</tbody>
-    </table>` : ""}
+      <div>
+        ${catItems.length ? `
+        <div class="sec-hdr"><span class="sec-title">Egresos por categoría</span></div>
+        <div class="cat-list">${catBars}</div>
 
-    <div class="sec-hdr">
-      <span class="sec-title">Adherentes — ${mesLabel(sharedMes)}</span>
-      <span class="note">${pagadosCount}/${adherentes.length} pagados</span>
-    </div>
-    <div class="adh-resumen">
-      ${adhResumen || '<p class="note">Sin adherentes registrados</p>'}
+        <div class="sec-hdr"><span class="sec-title">Tabla por categoría</span></div>
+        <table class="sum-table">
+          <thead><tr><th>Categoría</th><th style="text-align:right">Ing.</th><th style="text-align:right">Egr.</th><th style="text-align:right">Neto</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>` : ""}
+
+        ${top10Jug.length ? `
+        <div class="sec-hdr">
+          <span class="sec-title">Top jugadores / CT</span>
+          <span class="note">${mesLabel(sharedMes)}</span>
+        </div>
+        <div class="sum-grid" style="margin-bottom:12px">
+          <div class="stat-card">
+            <div class="stat-label">Monto neto jugadores</div>
+            <div class="stat-val ${totalJugMes<0?'ing':'egr'}">${totalJugMes<0?"-":""}${fmt(totalJugMes)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Prom. mensual / jugador</div>
+            <div class="stat-val ${avgJugMes<0?'ing':'egr'}">${avgJugMes<0?"-":""}${fmt(avgJugMes)}</div>
+          </div>
+        </div>
+        <table class="sum-table">
+          <thead><tr><th>Jugador / CT</th><th style="text-align:right">Monto mes</th><th style="text-align:right">Prom. mensual</th></tr></thead>
+          <tbody>${jugTableRows}</tbody>
+        </table>` : ""}
+      </div>
     </div>
   `);
 }

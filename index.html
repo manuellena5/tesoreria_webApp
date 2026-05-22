@@ -546,6 +546,18 @@ function fmt(n) {
 function esc(s) {
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
+// Normaliza tildes y espacios para comparaciones tolerantes
+function normStr(s) {
+  return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim().toLowerCase();
+}
+// Obtiene el mes YYYY-MM del registro usando m.mes (más confiable) con fallback a la fecha
+function mesFromRecord(m) {
+  if (m.mes) {
+    const s = String(m.mes).replace("-","");
+    if (s.length === 6) return s.slice(0,4) + "-" + s.slice(4);
+  }
+  return getMes(m.fecha);
+}
 function normFecha(f) {
   if (!f) return today();
   const s = String(f).trim();
@@ -737,9 +749,14 @@ function setContent(html) {
 
 function renderNuevo() {
   const jugOptions = jugadores.sort((a,b)=>a.nombre.localeCompare(b.nombre))
-    .map(j => `<option value="${esc(j.nombre)}" ${F.jugadorCT===j.nombre?"selected":""}>${esc(j.nombre)}</option>`).join("");
+    .map(j => `<option value="${esc(j.nombre)}" ${normStr(F.jugadorCT)===normStr(j.nombre)?"selected":""}>${esc(j.nombre)}</option>`).join("");
   const grpOptions = grupos.sort((a,b)=>a.nombre.localeCompare(b.nombre))
-    .map(g => `<option value="GRP:${esc(g.nombre)}" ${F.jugadorCT==="GRP:"+g.nombre?"selected":""}>${esc(g.nombre)}</option>`).join("");
+    .map(g => `<option value="GRP:${esc(g.nombre)}" ${normStr(F.jugadorCT)===normStr("GRP:"+g.nombre)?"selected":""}>${esc(g.nombre)}</option>`).join("");
+  // Si el valor almacenado no coincide con ningún jugador/grupo actual, lo agregamos como opción visible
+  const jugCTMatchFound = !F.jugadorCT || jugadores.some(j => normStr(j.nombre)===normStr(F.jugadorCT))
+    || grupos.some(g => normStr("GRP:"+g.nombre)===normStr(F.jugadorCT));
+  const jugCTOrphan = F.jugadorCT && !jugCTMatchFound
+    ? `<option value="${esc(F.jugadorCT)}" selected>${esc(F.jugadorCT)}</option>` : "";
   const adhOptions = adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre))
     .map(a => `<option value="${esc(a.nombre)}" ${F.adherente===a.nombre?"selected":""}>${esc(a.nombre)}</option>`).join("");
   const cuentaOptions = cuentas.map(c =>
@@ -824,6 +841,7 @@ function renderNuevo() {
         <label>Jugador / CT (opcional)</label>
         <select class="inp" id="f-jugador" onchange="F.jugadorCT=this.value">
           <option value="">— Ninguno —</option>
+          ${jugCTOrphan}
           ${jugOptions ? `<optgroup label="Jugadores / CT">${jugOptions}</optgroup>` : ""}
           ${grpOptions ? `<optgroup label="Grupos">${grpOptions}</optgroup>` : ""}
         </select>
@@ -994,7 +1012,7 @@ async function saveMovimiento() {
 // ══════════════════════════════════════════════════════════════
 
 function renderMovimientos() {
-  const movMes = movimientos.filter(m => getMes(m.fecha) === sharedMes);
+  const movMes = movimientos.filter(m => mesFromRecord(m) === sharedMes);
   const ingTotal = movMes.filter(m => m.tipo === "INGRESO").reduce((s,m) => s + m.ingreso, 0);
   const egrTotal = movMes.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s + m.egreso,  0);
   const saldo    = ingTotal - egrTotal;
@@ -1071,7 +1089,10 @@ function renderMovimientos() {
                value="${esc(listFiltros.jugadorCT)}"
                oninput="listFiltros.jugadorCT=this.value; renderMovList()"
                onsearch="listFiltros.jugadorCT=''; renderMovList()">
-        <datalist id="dl-jugs">${jugadores.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(j=>`<option value="${esc(j.nombre)}">`)  .join("")}</datalist>
+        <datalist id="dl-jugs">${[
+            ...jugadores.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(j=>`<option value="${esc(j.nombre)}">`),
+            ...grupos.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(g=>`<option value="${esc(g.nombre)}">`),
+          ].join("")}</datalist>
         ${listFiltros.jugadorCT ? `<button class="ss-filter-clear" onclick="listFiltros.jugadorCT=''; renderMovimientos()">✕</button>` : ""}
       </div>
     </div>
@@ -1094,13 +1115,13 @@ function renderMovimientos() {
 
 function renderMovList() {
   const movMes = movimientos
-    .filter(m => getMes(m.fecha) === sharedMes)
+    .filter(m => mesFromRecord(m) === sharedMes)
     .filter(m => !listFiltros.rubro  || m.rubro.toLowerCase().includes(listFiltros.rubro.toLowerCase()))
     .filter(m => !listFiltros.cat    || m.categoria.toLowerCase().includes(listFiltros.cat.toLowerCase()))
     .filter(m => !listFiltros.cuenta || m.cuenta     === listFiltros.cuenta)
     .filter(m => !listFiltros.tipo      || m.tipo        === listFiltros.tipo)
-    .filter(m => !listFiltros.adherente || (m.adherente||'').toLowerCase().includes(listFiltros.adherente.toLowerCase()))
-    .filter(m => !listFiltros.jugadorCT || (m.jugadorCT||'').toLowerCase().includes(listFiltros.jugadorCT.toLowerCase()))
+    .filter(m => !listFiltros.adherente || normStr(m.adherente).includes(normStr(listFiltros.adherente)))
+    .filter(m => !listFiltros.jugadorCT || normStr(m.jugadorCT).includes(normStr(listFiltros.jugadorCT)))
     .filter(m => {
       const q = listFiltros.search.toLowerCase();
       return !q || (m.concepto||"").toLowerCase().includes(q) || (m.observacion||"").toLowerCase().includes(q);

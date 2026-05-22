@@ -89,8 +89,8 @@ function handleAction(data) {
         cuenta:        String(r[10] || ""),
         cuentaDestino: String(r[11] || ""),
         modoPago:      String(r[12] || ""),
-        jugadorCT:     String(r[13] || ""),
-        adherente:     String(r[14] || ""),
+        jugadorCT:     String(r[13] || "").trim(),
+        adherente:     String(r[14] || "").trim(),
         observacion:   String(r[15] || ""),
         comprobante:   String(r[16] || ""),
         tipo:          String(r[17] || ""),
@@ -175,7 +175,7 @@ function handleAction(data) {
       if (all.length <= 1) return { ok: true, jugadores: [] };
       const jugadores = all.slice(1)
         .filter(r => r[0] && String(r[2]) !== "false")
-        .map(r => ({ id: String(r[0]), nombre: String(r[1]) }));
+        .map(r => ({ id: String(r[0]), nombre: String(r[1]).trim() }));
       return { ok: true, jugadores };
     }
 
@@ -264,7 +264,7 @@ function handleAction(data) {
       if (all.length <= 1) return { ok: true, adherentes: [] };
       const adherentes = all.slice(1)
         .filter(r => r[0] && String(r[2]) !== "false")
-        .map(r => ({ id: String(r[0]), nombre: String(r[1]) }));
+        .map(r => ({ id: String(r[0]), nombre: String(r[1]).trim() }));
       return { ok: true, adherentes };
     }
 

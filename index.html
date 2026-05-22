@@ -1359,18 +1359,22 @@ function renderResumen() {
 
   // Adherentes del mes
   const mesCod = sharedMes.replace("-","");
-  const adhResumen = adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(adh => {
+  // Movimientos del mes con rubro adherentes (fallback para registros sin pago en Pagos_Adh)
+  const adhMovMes = movMes.filter(m => m.rubro.toUpperCase().includes("ADHERENTE") && m.adherente);
+  function resolveEstado(adh) {
     const pago = pagos.find(p => p.adherenteId === adh.id && p.mes === mesCod);
-    const estado = pago ? pago.estado : "PENDIENTE";
+    if (pago) return pago.estado;
+    const movPago = adhMovMes.find(m => m.adherente.toLowerCase().trim() === adh.nombre.toLowerCase().trim());
+    return movPago ? "PAGADO" : "PENDIENTE";
+  }
+  const adhResumen = adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(adh => {
+    const estado = resolveEstado(adh);
     return `<div class="adh-item-res">
       <span class="nombre">${esc(adh.nombre)}</span>
       <span class="adh-estado ${estado==="PAGADO"?"pagado":"pendiente"}">${estado}</span>
     </div>`;
   }).join("");
-  const pagadosCount = adherentes.filter(adh => {
-    const p = pagos.find(p => p.adherenteId === adh.id && p.mes === mesCod);
-    return p && p.estado === "PAGADO";
-  }).length;
+  const pagadosCount = adherentes.filter(adh => resolveEstado(adh) === "PAGADO").length;
 
   // Saldo cuentas html
   const cuentasHtml = cuentas.map(c => {
@@ -1710,7 +1714,7 @@ function renderAdhHistorial() {
 function getLast6Months() {
   const months = [];
   let k = nowMes();
-  for (let i = 0; i < 6; i++) { months.unshift(k); k = prevMes(k); }
+  for (let i = 0; i < 6; i++) { months.push(k); k = prevMes(k); }
   return months;
 }
 

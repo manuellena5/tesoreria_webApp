@@ -556,7 +556,7 @@ function fmt(n) {
   return "$" + v.toLocaleString("es-AR");
 }
 function esc(s) {
-  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/\|/g,"&#124;");
 }
 // Normaliza tildes y espacios para comparaciones tolerantes
 function normStr(s) {
@@ -810,7 +810,7 @@ function renderNuevo() {
         <label>Rubro</label>
         <div class="ss-wrap" id="ss-rubro-wrap">
           <input class="inp" id="ss-rubro-input" placeholder="Buscar rubro…" autocomplete="off"
-                 value="${F.rubro ? "["+F.codRubro+"] "+F.rubro : ""}">
+                 value="${F.rubro ? "["+F.codRubro+"] "+esc(F.rubro) : ""}">
           <div class="ss-drop" id="ss-rubro-drop" style="display:none"></div>
         </div>
       </div>

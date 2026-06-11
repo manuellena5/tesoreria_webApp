@@ -1223,9 +1223,10 @@ function openMovModal(id) {
     ["Método pago", m.modoPago],
     ["Jugador/CT",  m.jugadorCT || "—"],
     ["Adherente",   m.adherente || "—"],
+    (m.codRubro === "21" && m.tipo === "EGRESO") ? ["Reintegro", m.seguroReintegro ? "SÍ" : "NO"] : null,
     ["Observación", m.observacion || "—"],
     ["Comprobante", m.comprobante || "—"],
-  ].filter(r => r[1] && r[1] !== "—").map(([l,v]) =>
+  ].filter(r => r && r[1] && r[1] !== "—").map(([l,v]) =>
     `<div class="modal-detail-row"><span class="modal-detail-lbl">${l}</span><span class="modal-detail-val">${esc(v)}</span></div>`
   ).join("");
 
@@ -1312,6 +1313,7 @@ function showMovSavedModal(mov, wasEdit) {
     ["M\u00e9todo",    mov.modoPago],
     mov.jugadorCT ? ["Jugador/CT", mov.jugadorCT] : null,
     mov.adherente ? ["Adherente",  mov.adherente]  : null,
+    (mov.codRubro === "21" && mov.tipo === "EGRESO") ? ["Reintegro", mov.seguroReintegro ? "S\u00cd" : "NO"] : null,
     mov.observacion ? ["Observaci\u00f3n", mov.observacion] : null,
   ].filter(r => r && r[1]).map(([l,v]) =>
     `<div class="modal-detail-row"><span class="modal-detail-lbl">${l}</span><span class="modal-detail-val">${esc(v)}</span></div>`

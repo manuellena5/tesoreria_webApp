@@ -584,7 +584,7 @@ function buildDefaultF() {
     codRubro:"", rubro:"", categoria:"", concepto:"", monto:"",
     cuenta: (cuentas[0] || "EFECTIVO"), cuentaDestino: "",
     modoPago: (metodos[0] || "EFECTIVO"),
-    jugadorCT:"", adherente:"", observacion:"", comprobante:"" };
+    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0 };
 }
 function resetF() {
   const savedFecha  = F.fecha;
@@ -827,6 +827,16 @@ function renderNuevo() {
                oninput="F.monto=this.value" inputmode="decimal">
       </div>
 
+      ${F.codRubro === "21" && F.tipo === "EGRESO" ? `
+      <div class="field">
+        <label>
+          <input type="checkbox" id="f-reintegro" style="width:16px;height:16px;accent-color:var(--accent);vertical-align:middle;margin-right:6px;cursor:pointer;"
+                 ${F.seguroReintegro ? 'checked' : ''}
+                 onchange="F.seguroReintegro = this.checked ? 1 : 0">
+          Tiene reintegro del seguro
+        </label>
+      </div>` : ""}
+
       <div class="row2">
         <div class="field">
           <label>Cuenta${isInt ? " origen" : ""}</label>
@@ -985,6 +995,7 @@ async function saveMovimiento() {
     modoPago: F.modoPago,
     jugadorCT: F.jugadorCT || "", adherente: F.adherente || "",
     observacion: F.observacion || "", comprobante: F.comprobante || "",
+    seguroReintegro: F.seguroReintegro || 0,
     tipo: F.tipo
   };
 
@@ -1275,6 +1286,7 @@ function editMovimiento(id) {
   F.adherente   = m.adherente || "";
   F.observacion = m.observacion || "";
   F.comprobante = m.comprobante || "";
+  F.seguroReintegro = m.seguroReintegro || 0;
   editId = id;
   closeModal();
   goTab("nuevo");

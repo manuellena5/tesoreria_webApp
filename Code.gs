@@ -31,7 +31,7 @@ const CFG_SHEET = "Config";
 const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
-  "JugadorCT","Adherente","Observacion","Comprobante","Tipo","timestamp"
+  "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp"
 ];
 const ADH_COLS = ["ID","Nombre","Activo"];
 const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","MovimientoID","timestamp"];
@@ -93,8 +93,9 @@ function handleAction(data) {
         adherente:     String(r[14] || "").trim(),
         observacion:   String(r[15] || ""),
         comprobante:   String(r[16] || ""),
-        tipo:          String(r[17] || ""),
-        timestamp:     String(r[18] || "")
+        seguroReintegro: Number(r[17] || 0),
+        tipo:          String(r[18] || ""),
+        timestamp:     String(r[19] || "")
       }));
       return { ok: true, movimientos };
     }
@@ -109,7 +110,7 @@ function handleAction(data) {
         m.concepto||"", Number(m.egreso||0), Number(m.ingreso||0), Number(m.montoFinal||0),
         m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
         m.jugadorCT||"", m.adherente||"",
-        m.observacion||"", m.comprobante||"", m.tipo||"", ts
+        m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts
       ]);
       if (m.adherente && isAdherentesRubro(m.rubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -128,7 +129,7 @@ function handleAction(data) {
             m.concepto||"", Number(m.egreso||0), Number(m.ingreso||0), Number(m.montoFinal||0),
             m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
             m.jugadorCT||"", m.adherente||"",
-            m.observacion||"", m.comprobante||"", m.tipo||"", new Date().toISOString()
+            m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", new Date().toISOString()
           ]]);
           if (m.adherente && isAdherentesRubro(m.rubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -148,7 +149,7 @@ function handleAction(data) {
           m.concepto, m.egreso || 0, m.ingreso || 0, m.montoFinal || 0,
           m.cuenta, m.cuentaDestino || "", m.modoPago,
           m.jugadorCT || "", m.adherente || "", m.observacion || "",
-          m.comprobante || "", m.tipo, m.timestamp
+          m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo, m.timestamp
         ]);
       }
       return { ok: true, saved: list.length };

@@ -943,6 +943,8 @@ function initRubroSelect() {
     drop.style.display = "none";
     // Auto-set tipo to INTERNO if rubro 49
     if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
+    // Re-render for rubro 21 to show/hide conditional checkbox
+    if (F.codRubro === "21" || F.codRubro === "49") { renderNuevo(); return; }
     // Highlight adherente row
     const adhRow = document.getElementById("adherente-row");
     if (adhRow) {

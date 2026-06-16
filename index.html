@@ -933,14 +933,16 @@ function initRubroSelect() {
       else input.value = "[" + F.codRubro + "] " + F.rubro;
     }, 200);
   };
-  drop.onclick = function(e) {
+  drop.onmousedown = function(e) {
     const item = e.target.closest("[data-cod]");
     if (!item) return;
+    e.preventDefault(); // Previene que el input pierda el foco
     F.codRubro  = item.dataset.cod;
     F.rubro     = item.dataset.nombre;
     F.categoria = item.dataset.cat;
     input.value = "[" + F.codRubro + "] " + F.rubro;
     drop.style.display = "none";
+    input.blur(); // Forzamos el blur después de seleccionar
     // Auto-set tipo to INTERNO if rubro 49
     if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
     // Re-render for rubro 21 to show/hide conditional checkbox

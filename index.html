@@ -38,6 +38,8 @@
   --blue-bg:  rgba(96,165,250,0.10);
   --warn:     #fbbf24;
   --warn-bg:  rgba(251,191,36,0.10);
+  --adj:      #a78bfa;
+  --adj-bg:   rgba(167,139,250,0.12);
   --r:  12px;
   --rs:  8px;
   --font: 'DM Sans', sans-serif;
@@ -104,6 +106,7 @@ textarea.inp { resize:none; }
 .tipo-pill.active-ing { background:var(--green-bg); color:var(--green); }
 .tipo-pill.active-egr { background:var(--red-bg);   color:var(--red);   }
 .tipo-pill.active-int { background:var(--int-bg);   color:var(--int);   }
+.tipo-pill.active-adj { background:var(--adj-bg);   color:var(--adj);   }
 
 /* ── General pills ── */
 .pill-row { display:flex; gap:6px; flex-wrap:wrap; }
@@ -193,10 +196,12 @@ textarea.inp { resize:none; }
 .tag-jug    { color:var(--blue);   background:var(--blue-bg); }
 .tag-adh    { color:var(--warn);   background:var(--warn-bg); }
 .tag-int    { color:var(--int);    background:var(--int-bg); }
+.tag-adj    { color:var(--adj);    background:var(--adj-bg); }
 .mov-card-amt { text-align:right; flex-shrink:0; }
 .monto { font-weight:600; font-size:15px; font-family:var(--mono); }
 .monto.ing { color:var(--green); }
 .monto.egr { color:var(--red);   }
+.monto.adj { color:var(--adj);   }
 .monto.int { color:var(--int);   }
 
 /* ── Searchable Select (rubro) ── */
@@ -584,7 +589,7 @@ function buildDefaultF() {
     codRubro:"", rubro:"", categoria:"", concepto:"", monto:"",
     cuenta: (cuentas[0] || "EFECTIVO"), cuentaDestino: "",
     modoPago: (metodos[0] || "EFECTIVO"),
-    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0 };
+    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0, saldoReal:"" };
 }
 function resetF() {
   const savedFecha  = F.fecha;
@@ -786,7 +791,8 @@ function renderNuevo() {
   const metodoOptions = metodos.map(m =>
     `<option value="${esc(m)}" ${F.modoPago===m?"selected":""}>${esc(m)}</option>`).join("");
   const isInt = F.tipo === "INTERNO";
-  const isAdh = F.rubro && F.rubro.toUpperCase().includes("ADHERENTE");
+  const isAdj = F.tipo === "AJUSTE";
+  const isAdh = !isAdj && F.rubro && F.rubro.toUpperCase().includes("ADHERENTE");
   const mesNum = F.fecha ? F.fecha.slice(0,7).replace("-","") : "";
   const mesDisplay = F.fecha ? mesLabel(F.fecha.slice(0,7)) : "";
 
@@ -800,6 +806,7 @@ function renderNuevo() {
           <button class="tipo-pill ${F.tipo==="INGRESO"?"active-ing":""}" onclick="setTipo('INGRESO')">▲ Ingreso</button>
           <button class="tipo-pill ${F.tipo==="EGRESO" ?"active-egr":""}" onclick="setTipo('EGRESO')">▼ Egreso</button>
           <button class="tipo-pill ${F.tipo==="INTERNO"?"active-int":""}" onclick="setTipo('INTERNO')">⇄ Interno</button>
+          <button class="tipo-pill ${F.tipo==="AJUSTE" ?"active-adj":""}" onclick="setTipo('AJUSTE')">⊙ Ajuste</button>
         </div>
       </div>
 
@@ -814,6 +821,7 @@ function renderNuevo() {
         </div>
       </div>
 
+      ${!isAdj ? `
       <div class="field">
         <label>Rubro</label>
         <div class="ss-wrap" id="ss-rubro-wrap">
@@ -833,7 +841,14 @@ function renderNuevo() {
         <label>Monto</label>
         <input class="inp ${F.tipo==='INGRESO'?'monto-ing':F.tipo==='EGRESO'?'monto-egr':''}" type="number" id="f-monto" placeholder="0" min="0" step="any" value="${F.monto}"
                oninput="F.monto=this.value" inputmode="decimal">
-      </div>
+      </div>` : `
+      <div class="field">
+        <label>Saldo real de la cuenta</label>
+        <input class="inp" type="number" id="f-saldo-real" placeholder="0.00" step="any"
+               value="${F.saldoReal}" oninput="F.saldoReal=this.value" inputmode="decimal"
+               style="border-color:var(--adj)">
+        <span style="font-size:11px;color:var(--text3);margin-top:2px">Ingresá el saldo actual según tu banco / billetera</span>
+      </div>`}
 
       ${F.codRubro === "21" && F.tipo === "EGRESO" ? `
       <div class="field">
@@ -845,6 +860,11 @@ function renderNuevo() {
         </label>
       </div>` : ""}
 
+      ${isAdj ? `
+      <div class="field">
+        <label>Cuenta</label>
+        <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value">${cuentaOptions}</select>
+      </div>` : `
       <div class="row2">
         <div class="field">
           <label>Cuenta${isInt ? " origen" : ""}</label>
@@ -865,8 +885,9 @@ function renderNuevo() {
       <div class="field">
         <label>Método de pago</label>
         <select class="inp" id="f-metodo" onchange="F.modoPago=this.value">${metodoOptions}</select>
-      </div>` : ""}
+      </div>` : ""}`}
 
+      ${!isAdj ? `
       <div class="field">
         <label>Jugador / CT (opcional)</label>
         <select class="inp" id="f-jugador" onchange="F.jugadorCT=this.value">
@@ -883,18 +904,19 @@ function renderNuevo() {
           <option value="">— Ninguno —</option>
           ${adhOptions}
         </select>
-      </div>
+      </div>` : ""}
 
       <div class="field">
         <label>Observación (opcional)</label>
         <textarea class="inp" id="f-obs" rows="2" placeholder="Notas adicionales…" oninput="F.observacion=this.value">${esc(F.observacion)}</textarea>
       </div>
 
+      ${!isAdj ? `
       <div class="field">
         <label>Comprobante (opcional)</label>
         <input class="inp" type="text" id="f-comp" placeholder="Nro. de comprobante" value="${esc(F.comprobante)}"
                oninput="F.comprobante=this.value">
-      </div>
+      </div>` : ""}
 
       <button class="btn-main ${editId?"editing":""}" onclick="saveMovimiento()">
         ${editId ? "💾 ACTUALIZAR" : "✓ GUARDAR"}
@@ -908,9 +930,9 @@ function renderNuevo() {
 
 function setTipo(tipo) {
   F.tipo = tipo;
-  // Clear selected rubro when switching tipo, then auto-set for INTERNO
-  F.codRubro = ""; F.rubro = ""; F.categoria = "";
+  F.codRubro = ""; F.rubro = ""; F.categoria = ""; F.saldoReal = "";
   if (tipo === "INTERNO") { F.codRubro="49"; F.rubro="TRANSFERENCIA ENTRE CUENTAS"; F.categoria="Internos"; }
+  if (tipo === "AJUSTE")  { F.codRubro="99"; F.rubro="AJUSTE DE CONCILIACIÓN"; F.categoria="Otros / Internos"; }
   renderNuevo();
 }
 
@@ -989,27 +1011,55 @@ function filterRubros(query) {
 async function saveMovimiento() {
   const url = getScriptUrl();
   if (!url) { toast("Configurá la URL del script primero", "err"); goTab("config"); return; }
-  if (!F.rubro)   { toast("Seleccioná un rubro", "err"); return; }
-  if (!F.monto || isNaN(+F.monto) || +F.monto <= 0) { toast("Ingresá un monto válido", "err"); return; }
-  if (!F.cuenta)  { toast("Seleccioná una cuenta", "err"); return; }
-  if (F.tipo === "INTERNO" && !F.cuentaDestino) { toast("Seleccioná cuenta destino", "err"); return; }
+  if (!F.cuenta) { toast("Seleccioná una cuenta", "err"); return; }
 
-  const monto = Math.abs(parseFloat(F.monto));
-  const mes   = F.fecha.slice(0,7).replace("-","");
-  const mov = {
-    id: F.id, mes, fecha: F.fecha,
-    codRubro: F.codRubro, rubro: F.rubro, categoria: F.categoria,
-    concepto: F.concepto,
-    egreso:     F.tipo === "EGRESO"  ? monto : (F.tipo === "INTERNO" ? monto : 0),
-    ingreso:    F.tipo === "INGRESO" ? monto : 0,
-    montoFinal: monto,
-    cuenta: F.cuenta, cuentaDestino: F.cuentaDestino || "",
-    modoPago: F.modoPago,
-    jugadorCT: F.jugadorCT || "", adherente: F.adherente || "",
-    observacion: F.observacion || "", comprobante: F.comprobante || "",
-    seguroReintegro: F.seguroReintegro || 0,
-    tipo: F.tipo
-  };
+  let mov;
+
+  if (F.tipo === "AJUSTE") {
+    if (F.saldoReal === "" || isNaN(+F.saldoReal)) { toast("Ingresá el saldo real de la cuenta", "err"); return; }
+    const saldoReal      = parseFloat(F.saldoReal);
+    // Excluir el ajuste que se está editando para no contar doble
+    const movsBase       = editId ? movimientos.filter(m => m.id !== editId) : movimientos;
+    const saldoCalculado = calcSaldosCuentas(movsBase)[F.cuenta] || 0;
+    const diferencia     = saldoReal - saldoCalculado;
+    if (diferencia === 0) { toast("El saldo ya coincide — no hay diferencia", "ok"); return; }
+    const mes        = F.fecha.slice(0,7).replace("-","");
+    const nombreMes  = mesLabel(F.fecha.slice(0,7));
+    mov = {
+      id: F.id, mes, fecha: F.fecha,
+      codRubro: "99", rubro: "AJUSTE DE CONCILIACIÓN", categoria: "Otros / Internos",
+      concepto: "Ajuste de saldo " + F.cuenta + " — " + nombreMes,
+      egreso:     diferencia < 0 ? Math.abs(diferencia) : 0,
+      ingreso:    diferencia > 0 ? diferencia : 0,
+      montoFinal: diferencia,
+      cuenta: F.cuenta, cuentaDestino: "",
+      modoPago: "",
+      jugadorCT: "", adherente: "",
+      observacion: F.observacion || "", comprobante: "",
+      seguroReintegro: 0,
+      tipo: "AJUSTE"
+    };
+  } else {
+    if (!F.rubro)   { toast("Seleccioná un rubro", "err"); return; }
+    if (!F.monto || isNaN(+F.monto) || +F.monto <= 0) { toast("Ingresá un monto válido", "err"); return; }
+    if (F.tipo === "INTERNO" && !F.cuentaDestino) { toast("Seleccioná cuenta destino", "err"); return; }
+    const monto = Math.abs(parseFloat(F.monto));
+    const mes   = F.fecha.slice(0,7).replace("-","");
+    mov = {
+      id: F.id, mes, fecha: F.fecha,
+      codRubro: F.codRubro, rubro: F.rubro, categoria: F.categoria,
+      concepto: F.concepto,
+      egreso:     F.tipo === "EGRESO"  ? monto : (F.tipo === "INTERNO" ? monto : 0),
+      ingreso:    F.tipo === "INGRESO" ? monto : 0,
+      montoFinal: monto,
+      cuenta: F.cuenta, cuentaDestino: F.cuentaDestino || "",
+      modoPago: F.modoPago,
+      jugadorCT: F.jugadorCT || "", adherente: F.adherente || "",
+      observacion: F.observacion || "", comprobante: F.comprobante || "",
+      seguroReintegro: F.seguroReintegro || 0,
+      tipo: F.tipo
+    };
+  }
 
   showOverlay("Guardando…");
   try {
@@ -1061,7 +1111,7 @@ function renderMovimientos() {
   const cuentaPills = cuentas.map(c =>
     `<button class="pill sm ${listFiltros.cuenta===c?"active":""}" onclick="setListFilter('cuenta','${esc(c)}')">${esc(c)}</button>`
   ).join("");
-  const tipoPills = ["INGRESO","EGRESO","INTERNO"].map(t =>
+  const tipoPills = ["INGRESO","EGRESO","INTERNO","AJUSTE"].map(t =>
     `<button class="pill sm ${listFiltros.tipo===t?"active":""}" onclick="setListFilter('tipo','${t}')">${t}</button>`
   ).join("");
 
@@ -1174,9 +1224,9 @@ function renderMovList() {
   }
 
   el.innerHTML = movMes.map(m => {
-    const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : "int";
-    const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.egreso || m.montoFinal;
-    const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : "⇄";
+    const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : m.tipo==="AJUSTE" ? "adj" : "int";
+    const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
+    const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : m.tipo==="AJUSTE" ? (m.montoFinal>=0?"⊙+":"⊙−") : "⇄";
     const fechaD     = m.fecha ? m.fecha.slice(8) + "/" + m.fecha.slice(5,7) : "";
     return `
     <div class="mov-card" onclick="openMovModal('${m.id}')">
@@ -1191,6 +1241,7 @@ function renderMovList() {
           ${m.jugadorCT ? `<span class="tag tag-jug">${esc(m.jugadorCT)}</span>` : ""}
           ${m.adherente ? `<span class="tag tag-adh">${esc(m.adherente)}</span>` : ""}
           ${m.tipo==="INTERNO" ? `<span class="tag tag-int">→ ${esc(m.cuentaDestino||"?")}</span>` : ""}
+          ${m.tipo==="AJUSTE" ? `<span class="tag tag-adj">⊙ ajuste</span>` : ""}
         </div>
       </div>
       <div class="mov-card-amt">
@@ -1219,9 +1270,9 @@ function changeMes(delta) {
 function openMovModal(id) {
   const m = movimientos.find(x => x.id === id);
   if (!m) return;
-  const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : "int";
-  const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.egreso || m.montoFinal;
-  const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : "⇄";
+  const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : m.tipo==="AJUSTE" ? "adj" : "int";
+  const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
+  const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : m.tipo==="AJUSTE" ? (m.montoFinal>=0?"⊙+":"⊙−") : "⇄";
   const rows = [
     ["Tipo",        m.tipo],
     ["Fecha",       m.fecha],
@@ -1300,6 +1351,7 @@ function editMovimiento(id) {
   F.observacion = m.observacion || "";
   F.comprobante = m.comprobante || "";
   F.seguroReintegro = m.seguroReintegro || 0;
+  F.saldoReal = "";
   editId = id;
   closeModal();
   goTab("nuevo");
@@ -1311,9 +1363,9 @@ function closeModal(e) {
 }
 
 function showMovSavedModal(mov, wasEdit) {
-  const montoClass = mov.tipo==="INGRESO" ? "ing" : mov.tipo==="EGRESO" ? "egr" : "int";
-  const montoVal   = mov.tipo==="INGRESO" ? mov.ingreso : mov.egreso || mov.montoFinal;
-  const montoSign  = mov.tipo==="INGRESO" ? "+" : mov.tipo==="EGRESO" ? "\u2212" : "\u21c4";
+  const montoClass = mov.tipo==="INGRESO" ? "ing" : mov.tipo==="EGRESO" ? "egr" : mov.tipo==="AJUSTE" ? "adj" : "int";
+  const montoVal   = mov.tipo==="INGRESO" ? mov.ingreso : mov.tipo==="AJUSTE" ? Math.abs(mov.montoFinal) : mov.egreso || mov.montoFinal;
+  const montoSign  = mov.tipo==="INGRESO" ? "+" : mov.tipo==="EGRESO" ? "\u2212" : mov.tipo==="AJUSTE" ? (mov.montoFinal>=0?"\u229a+":"\u229a\u2212") : "\u21c4";
   const detalles = [
     ["Tipo",      mov.tipo],
     ["Fecha",     mov.fecha],
@@ -1457,11 +1509,25 @@ function renderResumen() {
   }).join("");
 
   // Saldo cuentas html
+  const ajustesPorCuenta = {};
+  for (const m of movimientos) {
+    if (m.tipo === "AJUSTE") {
+      if (!ajustesPorCuenta[m.cuenta] || m.fecha > ajustesPorCuenta[m.cuenta].fecha) {
+        ajustesPorCuenta[m.cuenta] = m;
+      }
+    }
+  }
   const cuentasHtml = cuentas.map(c => {
-    const s = saldosCuentas[c] || 0;
-    return `<div class="cuenta-item">
-      <span class="cuenta-nombre">${esc(c)}</span>
-      <span class="cuenta-saldo ${s>0?"pos":s<0?"neg":"zer"}">${s<0?"-":""}${fmt(s)}</span>
+    const s  = saldosCuentas[c] || 0;
+    const aj = ajustesPorCuenta[c];
+    const ajHtml = aj ? `<span style="font-size:10px;color:var(--adj);margin-top:2px;display:block">
+      ⊙ últ. ajuste ${aj.fecha.slice(8)+"/"+aj.fecha.slice(5,7)} ${aj.montoFinal>=0?"+":""}${fmt(aj.montoFinal)}</span>` : "";
+    return `<div class="cuenta-item" style="flex-direction:column;align-items:flex-start;gap:2px">
+      <div style="width:100%;display:flex;justify-content:space-between;align-items:center">
+        <span class="cuenta-nombre">${esc(c)}</span>
+        <span class="cuenta-saldo ${s>0?"pos":s<0?"neg":"zer"}">${s<0?"-":""}${fmt(s)}</span>
+      </div>
+      ${ajHtml}
     </div>`;
   }).join("");
 
@@ -1550,8 +1616,10 @@ function calcSaldosCuentas(movs) {
     } else if (m.tipo === "EGRESO") {
       saldos[m.cuenta] = (saldos[m.cuenta] || 0) - m.egreso;
     } else if (m.tipo === "INTERNO") {
-      saldos[m.cuenta]          = (saldos[m.cuenta]          || 0) - m.montoFinal;
-      saldos[m.cuentaDestino]   = (saldos[m.cuentaDestino]   || 0) + m.montoFinal;
+      saldos[m.cuenta]        = (saldos[m.cuenta]        || 0) - m.montoFinal;
+      saldos[m.cuentaDestino] = (saldos[m.cuentaDestino] || 0) + m.montoFinal;
+    } else if (m.tipo === "AJUSTE") {
+      saldos[m.cuenta] = (saldos[m.cuenta] || 0) + m.montoFinal;
     }
   }
   return saldos;

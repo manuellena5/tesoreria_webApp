@@ -759,7 +759,15 @@ function setContent(html) {
 // TAB 1 — NUEVO MOVIMIENTO
 // ══════════════════════════════════════════════════════════════
 
+function autoSetModoPago() {
+  const mp = F.cuenta === "EFECTIVO" ? "EFECTIVO" : "TRANSFERENCIA";
+  F.modoPago = mp;
+  const el = document.getElementById("f-metodo");
+  if (el) el.value = mp;
+}
+
 function renderNuevo() {
+  if (!editId) autoSetModoPago();
   const jugOptions = jugadores.sort((a,b)=>a.nombre.localeCompare(b.nombre))
     .map(j => `<option value="${esc(j.nombre)}" ${normStr(F.jugadorCT)===normStr(j.nombre)?"selected":""}>${esc(j.nombre)}</option>`).join("");
   const grpOptions = grupos.sort((a,b)=>a.nombre.localeCompare(b.nombre))
@@ -840,7 +848,7 @@ function renderNuevo() {
       <div class="row2">
         <div class="field">
           <label>Cuenta${isInt ? " origen" : ""}</label>
-          <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value">${cuentaOptions}</select>
+          <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value; autoSetModoPago()">${cuentaOptions}</select>
         </div>
         ${isInt ? `
         <div class="field">

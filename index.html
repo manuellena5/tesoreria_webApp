@@ -371,6 +371,18 @@ textarea.inp { resize:none; }
 .note { font-size:12px; color:var(--text3); line-height:1.6; }
 .accent-text { color:var(--accent); font-weight:600; }
 
+/* ── Partido table ── */
+.partido-table { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px; }
+.partido-table th { background:var(--bg3); color:var(--text3); font-weight:600; padding:7px 6px; text-align:right; font-size:11px; border-bottom:1px solid var(--border); }
+.partido-table th:first-child { text-align:left; }
+.partido-table td { padding:7px 6px; border-bottom:1px solid var(--border); text-align:right; font-family:var(--mono); font-size:12px; }
+.partido-table td:first-child { text-align:left; font-family:var(--font); color:var(--text2); font-size:11px; }
+.partido-table tr:last-child td { border-bottom:none; font-weight:600; background:var(--bg3); }
+.partido-table .egr { color:var(--red); }
+.partido-table .ing { color:var(--green); }
+.partido-table .neto-pos { color:var(--green); font-weight:600; }
+.partido-table .neto-neg { color:var(--red); font-weight:600; }
+
 /* ── Desktop layout ── */
 .resumen-2col { display:flex; flex-direction:column; }
 @media (min-width: 768px) {
@@ -513,6 +525,7 @@ let jugadores   = [];
 let grupos      = [];
 let adherentes  = [];
 let pagos       = [];
+let partidos    = [];
 let cuentas     = [...DEFAULT_CUENTAS];
 let metodos     = [...DEFAULT_METODOS];
 
@@ -589,7 +602,7 @@ function buildDefaultF() {
     codRubro:"", rubro:"", categoria:"", concepto:"", monto:"",
     cuenta: (cuentas[0] || "EFECTIVO"), cuentaDestino: "",
     modoPago: (metodos[0] || "EFECTIVO"),
-    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0, saldoReal:"" };
+    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0, saldoReal:"", partidoId:"" };
 }
 function resetF() {
   const savedFecha  = F.fecha;
@@ -654,6 +667,9 @@ const Storage = {
   async getConfig()         { return this._post({ action:"getConfig"          }); },
   async saveConfig(clave, valor) { return this._post({ action:"saveConfig", clave, valor }); },
   async initSeed(data)      { return this._post({ action:"initSeed", ...data  }); },
+  async listPartidos()       { return this._post({ action:"listPartidos"              }); },
+  async savePartido(p)       { return this._post({ action:"savePartido",  partido:p   }); },
+  async deletePartido(id)    { return this._post({ action:"deletePartido", id          }); },
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -675,19 +691,21 @@ async function initApp() {
 
 async function loadAllData() {
   try {
-    const [rMov, rJug, rGrp, rAdh, rPag, rCfg] = await Promise.all([
+    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar] = await Promise.all([
       Storage.listMov(),
       Storage.listJugadores(),
       Storage.listGrupos(),
       Storage.listAdherentes(),
       Storage.listPagos(),
       Storage.getConfig(),
+      Storage.listPartidos(),
     ]);
     if (rMov.ok) movimientos = rMov.movimientos || [];
     if (rJug.ok) jugadores   = rJug.jugadores   || [];
     if (rGrp.ok) grupos      = rGrp.grupos       || [];
     if (rAdh.ok) adherentes  = rAdh.adherentes   || [];
     if (rPag.ok) pagos       = rPag.pagos        || [];
+    if (rPar.ok) partidos    = rPar.partidos     || [];
     if (rCfg.ok) {
       applyCuentasMetodos(rCfg.config || {});
       // If not yet seeded, run initSeed
@@ -898,6 +916,21 @@ function renderNuevo() {
         </select>
       </div>
 
+      <div class="field">
+        <label>Partido (opcional)</label>
+        <select class="inp" id="f-partido" onchange="F.partidoId=this.value">
+          <option value="">— Sin partido —</option>
+          ${[...partidos]
+            .filter(p => p.activo)
+            .sort((a,b) => b.fecha.localeCompare(a.fecha))
+            .map(p => {
+              const fd = p.fecha ? p.fecha.slice(8)+"/"+p.fecha.slice(5,7) : "";
+              const label = `${p.numeroFecha} — ${p.rival} (${p.condicion==="LOCAL"?"Local":"Visitante"}) · ${fd}`;
+              return `<option value="${esc(p.id)}" ${F.partidoId===p.id?"selected":""}>${esc(label)}</option>`;
+            }).join("")}
+        </select>
+      </div>
+
       <div class="field ${isAdh ? "highlighted" : ""}" id="adherente-row">
         <label>Adherente${isAdh ? " ★" : " (opcional)"}</label>
         <select class="inp" id="f-adherente" onchange="F.adherente=this.value">
@@ -1057,7 +1090,8 @@ async function saveMovimiento() {
       jugadorCT: F.jugadorCT || "", adherente: F.adherente || "",
       observacion: F.observacion || "", comprobante: F.comprobante || "",
       seguroReintegro: F.seguroReintegro || 0,
-      tipo: F.tipo
+      tipo: F.tipo,
+      partidoId: F.partidoId || "",
     };
   }
 
@@ -1352,6 +1386,7 @@ function editMovimiento(id) {
   F.comprobante = m.comprobante || "";
   F.seguroReintegro = m.seguroReintegro || 0;
   F.saldoReal = "";
+  F.partidoId = m.partidoId || "";
   editId = id;
   closeModal();
   goTab("nuevo");
@@ -1604,6 +1639,94 @@ function renderResumen() {
         </table>` : ""}
       </div>
     </div>
+
+    ${(() => {
+      // Tabla por partido
+      const movsPartido = movimientos.filter(m =>
+        m.partidoId &&
+        (m.tipo === "INGRESO" || m.tipo === "EGRESO")
+      );
+      // Agrupar por partido
+      const partidoMap = {};
+      for (const m of movsPartido) {
+        if (!partidoMap[m.partidoId]) partidoMap[m.partidoId] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0 };
+        const pg = partidoMap[m.partidoId];
+        if (m.tipo === "INGRESO") {
+          pg.ingresos += m.ingreso;
+          if (m.codRubro === "2")                             pg.buffetIng   += m.ingreso;
+          else if (["1","3","4"].includes(m.codRubro))        pg.entradas    += m.ingreso;
+          else                                                 pg.otrosIng    += m.ingreso;
+        } else {
+          pg.egresos += m.egreso;
+          if (m.codRubro === "2")                             pg.buffetEgr   += m.egreso;
+          else if (["12","13","14b","36"].includes(m.codRubro)) pg.gastosCancha += m.egreso;
+        }
+      }
+
+      // Obtener partidos con datos, ordenados por fecha desc
+      const partidosFiltrados = partidos
+        .filter(p => partidoMap[p.id])
+        .sort((a,b) => b.fecha.localeCompare(a.fecha));
+
+      if (!partidosFiltrados.length) return "";
+
+      // Totales
+      let totBuffetIng=0, totBuffetEgr=0, totGastosCancha=0, totEntradas=0, totOtrosIng=0, totNeto=0;
+
+      const partidoRows = partidosFiltrados.map(p => {
+        const pg = partidoMap[p.id];
+        const netoBuffet = pg.buffetIng - pg.buffetEgr;
+        const totalNeto  = pg.ingresos  - pg.egresos;
+        totBuffetIng    += pg.buffetIng;
+        totBuffetEgr    += pg.buffetEgr;
+        totGastosCancha += pg.gastosCancha;
+        totEntradas     += pg.entradas;
+        totOtrosIng     += pg.otrosIng;
+        totNeto         += totalNeto;
+        const netoClass  = totalNeto >= 0 ? "neto-pos" : "neto-neg";
+        const netoSign   = totalNeto >= 0 ? "+" : "−";
+        return `<tr>
+          <td>${esc(p.numeroFecha)} — ${esc(p.rival)}</td>
+          <td>${pg.buffetIng ? fmt(pg.buffetIng) : ""}</td>
+          <td class="egr">${pg.buffetEgr ? fmt(pg.buffetEgr) : ""}</td>
+          <td class="egr">${pg.gastosCancha ? fmt(pg.gastosCancha) : ""}</td>
+          <td>${pg.entradas ? fmt(pg.entradas) : ""}</td>
+          <td>${pg.otrosIng ? fmt(pg.otrosIng) : ""}</td>
+          <td class="${netoBuffet>=0?"ing":"egr"}">${netoBuffet!==0?(netoBuffet>=0?"+":"−")+fmt(netoBuffet):""}</td>
+          <td class="${netoClass}">${netoSign}${fmt(totalNeto)}</td>
+        </tr>`;
+      }).join("");
+
+      const totNetoClass = totNeto >= 0 ? "neto-pos" : "neto-neg";
+      const totRows = `<tr>
+        <td>TOTALES</td>
+        <td>${fmt(totBuffetIng)}</td>
+        <td class="egr">${fmt(totBuffetEgr)}</td>
+        <td class="egr">${fmt(totGastosCancha)}</td>
+        <td>${fmt(totEntradas)}</td>
+        <td>${fmt(totOtrosIng)}</td>
+        <td class="${(totBuffetIng-totBuffetEgr)>=0?"ing":"egr"}">${(totBuffetIng-totBuffetEgr)>=0?"+":"−"}${fmt(totBuffetIng-totBuffetEgr)}</td>
+        <td class="${totNetoClass}">${totNeto>=0?"+":"−"}${fmt(totNeto)}</td>
+      </tr>`;
+
+      return `
+        <div class="sec-hdr" style="margin-top:16px"><span class="sec-title">Por Partido (todos)</span></div>
+        <div style="overflow-x:auto;margin-bottom:8px">
+          <table class="partido-table">
+            <thead><tr>
+              <th>Partido</th>
+              <th>Buffet</th>
+              <th>G.Buffet</th>
+              <th>G.Cancha</th>
+              <th>Entradas</th>
+              <th>Otros Ing.</th>
+              <th>Neto Buffet</th>
+              <th>Total Neto</th>
+            </tr></thead>
+            <tbody>${partidoRows}${totRows}</tbody>
+          </table>
+        </div>`;
+    })()}
   `);
 }
 
@@ -1634,6 +1757,7 @@ function renderEntidades() {
     {key:"jugadores", label:"Jugadores"},
     {key:"grupos",    label:"Grupos"},
     {key:"adherentes",label:"Adherentes"},
+    {key:"partidos",  label:"Partidos"},
   ];
   const tabBtns = tabs.map(t =>
     `<button class="entity-tab ${entidadesTab===t.key?"active":""}" onclick="setEntidadesTab('${t.key}')">${t.label}</button>`
@@ -1643,6 +1767,7 @@ function renderEntidades() {
   if (entidadesTab === "jugadores")  inner = renderJugadores();
   if (entidadesTab === "grupos")     inner = renderGrupos();
   if (entidadesTab === "adherentes") inner = renderAdherentes();
+  if (entidadesTab === "partidos")   inner = renderPartidos();
 
   setContent(`
     <div class="entity-tabs">${tabBtns}</div>
@@ -1651,6 +1776,111 @@ function renderEntidades() {
 }
 
 function setEntidadesTab(tab) { entidadesTab = tab; renderEntidades(); }
+
+// ── Partidos ──────────────────────────────────────────────────
+function renderPartidos() {
+  const sorted = [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  const list = sorted.map(p => {
+    const fd = p.fecha ? p.fecha.slice(8)+"/"+p.fecha.slice(5,7)+"/"+p.fecha.slice(0,4) : "";
+    const condBadge = p.condicion === "LOCAL"
+      ? `<span style="font-size:10px;color:var(--green);border:1px solid var(--green);padding:1px 5px;border-radius:4px">L</span>`
+      : `<span style="font-size:10px;color:var(--blue);border:1px solid var(--blue);padding:1px 5px;border-radius:4px">V</span>`;
+    return `
+    <div class="entity-item">
+      <div style="flex:1;min-width:0">
+        <div class="entity-name">${esc(p.numeroFecha)} — ${esc(p.rival)} ${condBadge}</div>
+        <div class="entity-sub">${fd}</div>
+      </div>
+      <button class="btn-sm accent" onclick="openPartidoModal('${p.id}')">✏️</button>
+      <button class="btn-sm danger" id="pdel-${p.id}" onclick="confirmDeletePartido('${p.id}')">✕</button>
+    </div>`;
+  }).join("");
+  return `
+    <button class="btn-secondary" onclick="openPartidoModal(null)" style="margin-bottom:12px">+ Agregar Partido</button>
+    ${list || '<p class="note">Sin partidos registrados</p>'}`;
+}
+
+function openPartidoModal(partidoId) {
+  const p = partidoId ? partidos.find(x => x.id === partidoId) : null;
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${p ? "Editar partido" : "Nuevo partido"}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Fecha del partido</label>
+            <input class="inp" id="par-fecha" type="date" value="${esc(p?p.fecha:today())}">
+          </div>
+          <div class="field">
+            <label>Número de Fecha / Instancia</label>
+            <input class="inp" id="par-nfecha" type="text" placeholder="Fecha 1, Semi, Final…" value="${esc(p?p.numeroFecha:"")}">
+          </div>
+          <div class="field">
+            <label>Rival</label>
+            <input class="inp" id="par-rival" type="text" placeholder="Vs Susanense…" value="${esc(p?p.rival:"")}">
+          </div>
+          <div class="field">
+            <label>Condición</label>
+            <select class="inp" id="par-condicion">
+              <option value="LOCAL" ${(!p||p.condicion==="LOCAL")?"selected":""}>Local</option>
+              <option value="VISITANTE" ${(p&&p.condicion==="VISITANTE")?"selected":""}>Visitante</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" onclick="savePartido('${partidoId||""}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function savePartido(partidoId) {
+  const fecha     = (document.getElementById("par-fecha")?.value    || "").trim();
+  const rival     = (document.getElementById("par-rival")?.value    || "").trim();
+  const nfecha    = (document.getElementById("par-nfecha")?.value   || "").trim();
+  const condicion = document.getElementById("par-condicion")?.value || "LOCAL";
+  if (!fecha)  { toast("Ingresá una fecha", "err"); return; }
+  if (!rival)  { toast("Ingresá el rival", "err"); return; }
+  if (!nfecha) { toast("Ingresá el número de fecha", "err"); return; }
+  const partido = partidoId
+    ? { id:partidoId, fecha, rival, numeroFecha:nfecha, condicion }
+    : { fecha, rival, numeroFecha:nfecha, condicion };
+  try {
+    const r = await Storage.savePartido(partido);
+    if (!r.ok) throw new Error(r.error || "Error");
+    if (partidoId) {
+      const idx = partidos.findIndex(p => p.id === partidoId);
+      if (idx >= 0) partidos[idx] = { ...partidos[idx], fecha, rival, numeroFecha:nfecha, condicion };
+    } else {
+      partidos.push({ id:r.id, fecha, rival, numeroFecha:nfecha, condicion, activo:true });
+    }
+    toast(partidoId ? "Partido actualizado ✓" : "Partido agregado ✓", "ok");
+    closeModal();
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+function confirmDeletePartido(id) {
+  const btn = document.getElementById("pdel-"+id);
+  if (!btn) return;
+  if (btn.dataset.confirm) { deletePartido(id); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
+    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+  }
+}
+
+async function deletePartido(id) {
+  try {
+    const r = await Storage.deletePartido(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    partidos = partidos.filter(p => p.id !== id);
+    toast("Partido eliminado", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
 
 // ── Jugadores ─────────────────────────────────────────────────
 function renderJugadores() {

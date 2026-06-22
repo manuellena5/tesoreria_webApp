@@ -26,12 +26,14 @@ const PAG_SHEET = "Pagos_Adh";
 const JUG_SHEET = "Jugadores";
 const GRP_SHEET = "Grupos";
 const CFG_SHEET = "Config";
+const PAR_SHEET = "Partidos";
+const PAR_COLS  = ["ID","Fecha","Rival","NumeroFecha","Condicion","Activo"];
 
 // ── Columnas de cada pestaña ─────────────────────────────────
 const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
-  "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp"
+  "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID"
 ];
 const ADH_COLS = ["ID","Nombre","Activo"];
 const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","MovimientoID","timestamp"];
@@ -95,7 +97,8 @@ function handleAction(data) {
         comprobante:   String(r[16] || ""),
         seguroReintegro: Number(r[17] || 0),
         tipo:          String(r[18] || ""),
-        timestamp:     String(r[19] || "")
+        timestamp:     String(r[19] || ""),
+        partidoId:     String(r[20]||""),
       }));
       return { ok: true, movimientos };
     }
@@ -110,7 +113,8 @@ function handleAction(data) {
         m.concepto||"", Number(m.egreso||0), Number(m.ingreso||0), Number(m.montoFinal||0),
         m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
         m.jugadorCT||"", m.adherente||"",
-        m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts
+        m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts,
+        m.partidoId||""
       ]);
       if (m.adherente && isAdherentesRubro(m.rubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -129,7 +133,8 @@ function handleAction(data) {
             m.concepto||"", Number(m.egreso||0), Number(m.ingreso||0), Number(m.montoFinal||0),
             m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
             m.jugadorCT||"", m.adherente||"",
-            m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", new Date().toISOString()
+            m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", new Date().toISOString(),
+            m.partidoId||""
           ]]);
           if (m.adherente && isAdherentesRubro(m.rubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -149,7 +154,8 @@ function handleAction(data) {
           m.concepto, m.egreso || 0, m.ingreso || 0, m.montoFinal || 0,
           m.cuenta, m.cuentaDestino || "", m.modoPago,
           m.jugadorCT || "", m.adherente || "", m.observacion || "",
-          m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo, m.timestamp
+          m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo, m.timestamp,
+          m.partidoId||""
         ]);
       }
       return { ok: true, saved: list.length };
@@ -403,6 +409,56 @@ function handleAction(data) {
       cfgSh.appendRow(["seeded",  "true"]);
 
       return { ok: true, msg: "Inicializado correctamente" };
+    }
+
+    case "listPartidos": {
+      const sh  = getOrCreateSheet(PAR_SHEET, PAR_COLS);
+      autoFillIds(sh, r => r[1] || r[2]); // Fecha o Rival
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, partidos: [] };
+      const partidos = all.slice(1)
+        .filter(r => r[0] && String(r[5]) !== "false")
+        .map(r => ({
+          id:           String(r[0]),
+          fecha:        formatFecha(r[1]),
+          rival:        String(r[2]||""),
+          numeroFecha:  String(r[3]||""),
+          condicion:    String(r[4]||"LOCAL"),
+          activo:       String(r[5]) !== "false"
+        }))
+        .sort((a,b) => b.fecha.localeCompare(a.fecha));
+      return { ok: true, partidos };
+    }
+
+    case "savePartido": {
+      const sh = getOrCreateSheet(PAR_SHEET, PAR_COLS);
+      const p  = data.partido;
+      const all = sh.getDataRange().getValues();
+      if (p.id) {
+        for (let i = 1; i < all.length; i++) {
+          if (String(all[i][0]) === String(p.id)) {
+            sh.getRange(i + 1, 1, 1, PAR_COLS.length).setValues([[
+              p.id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true"
+            ]]);
+            return { ok: true, id: p.id };
+          }
+        }
+      }
+      const id = uid_gs();
+      sh.appendRow([id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true"]);
+      return { ok: true, id };
+    }
+
+    case "deletePartido": {
+      const sh  = getOrCreateSheet(PAR_SHEET, PAR_COLS);
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(data.id)) {
+          sh.getRange(i + 1, 6).setValue("false");
+          return { ok: true };
+        }
+      }
+      return { ok: true };
     }
 
     default:

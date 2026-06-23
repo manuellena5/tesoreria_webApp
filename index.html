@@ -1834,8 +1834,9 @@ function calcReintegrosPorJugador(anio) {
   return Object.values(map).map(r => {
     const pendienteRaw = r.abonado - r.reintegrado;
     const pendiente = Math.round(pendienteRaw) === 0 ? 0 : pendienteRaw;
-    const estado = pendiente <= 0 ? "OK" : (r.reintegrado > 0 ? "PARCIAL" : "SIN");
-    return { ...r, pendiente, estado };
+    const diferencia = pendiente < 0 ? Math.abs(pendiente) : 0;
+    const estado = pendiente < 0 ? "DIF" : pendiente === 0 ? "OK" : (r.reintegrado > 0 ? "PARCIAL" : "SIN");
+    return { ...r, pendiente, diferencia, estado };
   }).sort((a,b) => b.pendiente - a.pendiente);
 }
 
@@ -1856,7 +1857,9 @@ function renderReintegrosMedicos() {
     totAbonado    += r.abonado;
     totReintegrado += r.reintegrado;
     totPendiente  += Math.max(r.pendiente,0);
-    const estadoHtml = r.estado==="OK" ? "✅ OK" : r.estado==="PARCIAL" ? "⚠️ Parcial" : "🔴 Sin reintegro";
+    const estadoHtml = r.estado==="OK" ? "✅ OK"
+      : r.estado==="DIF" ? `~ DIFERENCIAS (${fmt(r.diferencia)})`
+      : r.estado==="PARCIAL" ? "⚠️ Parcial" : "🔴 Sin reintegro";
     const isExp = reintegroExpandido === r.jugador;
     const detalle = isExp ? renderReintegroDetalle(r) : "";
     return `

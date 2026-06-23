@@ -40,6 +40,8 @@
   --warn-bg:  rgba(251,191,36,0.10);
   --adj:      #a78bfa;
   --adj-bg:   rgba(167,139,250,0.12);
+  --partido:    #2dd4bf;
+  --partido-bg: rgba(45,212,191,0.12);
   --r:  12px;
   --rs:  8px;
   --font: 'DM Sans', sans-serif;
@@ -189,6 +191,7 @@ textarea.inp { resize:none; }
 .mov-card-top  { display:flex; align-items:baseline; gap:8px; margin-bottom:3px; }
 .mov-card-rubro { font-weight:500; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .mov-card-fecha { font-size:11px; color:var(--text3); flex-shrink:0; font-family:var(--mono); }
+.mov-card-fecha-big { font-size:13px; font-weight:600; color:var(--text); flex-shrink:0; font-family:var(--mono); }
 .mov-card-concepto { font-size:12px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:4px; }
 .mov-card-tags { display:flex; gap:4px; flex-wrap:wrap; }
 .tag { font-size:10px; padding:2px 6px; border-radius:4px; border:1px solid transparent; white-space:nowrap; }
@@ -197,6 +200,7 @@ textarea.inp { resize:none; }
 .tag-adh    { color:var(--warn);   background:var(--warn-bg); }
 .tag-int    { color:var(--int);    background:var(--int-bg); }
 .tag-adj    { color:var(--adj);    background:var(--adj-bg); }
+.tag-partido { color:var(--partido); background:var(--partido-bg); }
 .mov-card-amt { text-align:right; flex-shrink:0; }
 .monto { font-weight:600; font-size:15px; font-family:var(--mono); }
 .monto.ing { color:var(--green); }
@@ -558,11 +562,12 @@ let currentTab    = "nuevo";
 let editId        = null;
 let sharedMes     = nowMes();
 let entidadesTab  = "jugadores";
-let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", search: "" };
+let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", search: "" };
 let F             = buildDefaultF();
 let resumenSubTab     = "mensual";
 let reintegroAnio     = String(new Date().getFullYear());
 let reintegroExpandido = null;
+let movOrden = localStorage.getItem("clubfm_orden_mov") || "fecha_desc";
 
 // ══════════════════════════════════════════════════════════════
 // UTILITIES
@@ -607,6 +612,19 @@ function esc(s) {
 // Normaliza tildes y espacios para comparaciones tolerantes
 function normStr(s) {
   return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim().toLowerCase();
+}
+const DIAS_SEMANA = ["Dom","Lun","Mar","Mi\u00e9","Jue","Vie","S\u00e1b"];
+// "2026-06-23" \u2192 "Mar 23/06"
+function fechaCorta(fecha) {
+  if (!fecha) return "";
+  const d = new Date(fecha + "T00:00:00");
+  const dd = fecha.slice(8,10), mm = fecha.slice(5,7);
+  if (isNaN(d.getTime())) return dd + "/" + mm;
+  return DIAS_SEMANA[d.getDay()] + " " + dd + "/" + mm;
+}
+function partidoLabel(partidoId) {
+  const p = partidos.find(x => x.id === partidoId);
+  return p ? p.numeroFecha + " \u2014 " + p.rival : "";
 }
 // Obtiene el mes YYYY-MM del registro usando m.mes (más confiable) con fallback a la fecha
 function mesFromRecord(m) {
@@ -1187,20 +1205,21 @@ function renderMovimientos() {
     <div class="sum-grid three">
       <div class="stat-card">
         <div class="stat-label">Ingresos</div>
-        <div class="stat-val ing">${fmt(ingTotal)}</div>
+        <div class="stat-val ing" id="kpi-ing">${fmt(ingTotal)}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Egresos</div>
-        <div class="stat-val egr">${fmt(egrTotal)}</div>
+        <div class="stat-val egr" id="kpi-egr">${fmt(egrTotal)}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Saldo</div>
-        <div class="stat-val ${saldo>=0?"ing":"egr"}">${saldo<0?"-":""}${fmt(saldo)}</div>
+        <div class="stat-val ${saldo>=0?"ing":"egr"}" id="kpi-saldo">${saldo<0?"-":""}${fmt(saldo)}</div>
       </div>
     </div>
+    <div id="kpi-filter-note" class="note" style="margin:-8px 0 14px"></div>
 
     <div class="filter-row">
-      <button class="pill sm ${listFiltros.rubro===""&&listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""&&listFiltros.adherente===""&&listFiltros.jugadorCT===""?"active":""}" onclick="clearListFilters()">Todos</button>
+      <button class="pill sm ${listFiltros.rubro===""&&listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""&&listFiltros.adherente===""&&listFiltros.jugadorCT===""&&listFiltros.partido===""?"active":""}" onclick="clearListFilters()">Todos</button>
       ${tipoPills}
     </div>
     <div class="filter-row" style="gap:8px">
@@ -1244,6 +1263,18 @@ function renderMovimientos() {
       </div>
     </div>
 
+    ${partidos.length ? `
+    <div class="filter-row" style="gap:8px">
+      <select class="inp" id="fil-partido" style="flex:1" onchange="listFiltros.partido=this.value; renderMovList()">
+        <option value="">— Todos los partidos —</option>
+        <option value="__sin__" ${listFiltros.partido==="__sin__"?"selected":""}>Sin partido asignado</option>
+        ${[...partidos].sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(p => {
+          const label = p.numeroFecha + " — " + p.rival;
+          return `<option value="${esc(p.id)}" ${listFiltros.partido===p.id?"selected":""}>${esc(label)}</option>`;
+        }).join("")}
+      </select>
+    </div>` : ""}
+
     <div class="search-wrap">
       <span class="search-icon">🔍</span>
       <input class="inp" type="search" placeholder="Buscar en concepto / observación…" value="${esc(listFiltros.search)}"
@@ -1251,12 +1282,29 @@ function renderMovimientos() {
     </div>
 
     <div class="sec-hdr">
-      <span class="sec-title" id="mov-count"></span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="sec-title" id="mov-count"></span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Orden:</label>
+          <select class="inp" id="mov-orden-sel" style="padding:5px 8px;font-size:11px;width:auto" onchange="setMovOrden(this.value)">
+            <option value="fecha_desc" ${movOrden==='fecha_desc'?'selected':''}>Más reciente primero</option>
+            <option value="fecha_asc"  ${movOrden==='fecha_asc' ?'selected':''}>Más antiguo primero</option>
+            <option value="monto_desc" ${movOrden==='monto_desc'?'selected':''}>Mayor monto primero</option>
+            <option value="monto_asc"  ${movOrden==='monto_asc' ?'selected':''}>Menor monto primero</option>
+          </select>
+        </div>
+      </div>
       <button class="btn-sm accent" onclick="refreshData()">↻ Actualizar</button>
     </div>
 
     <div id="mov-list"></div>
   `);
+  renderMovList();
+}
+
+function setMovOrden(v) {
+  movOrden = v;
+  localStorage.setItem("clubfm_orden_mov", v);
   renderMovList();
 }
 
@@ -1270,10 +1318,42 @@ function renderMovList() {
     .filter(m => !listFiltros.adherente || normStr(m.adherente).includes(normStr(listFiltros.adherente)))
     .filter(m => !listFiltros.jugadorCT || normStr(m.jugadorCT).includes(normStr(listFiltros.jugadorCT)))
     .filter(m => {
+      if (!listFiltros.partido) return true;
+      if (listFiltros.partido === "__sin__") return !m.partidoId;
+      return m.partidoId === listFiltros.partido;
+    })
+    .filter(m => {
       const q = listFiltros.search.toLowerCase();
       return !q || (m.concepto||"").toLowerCase().includes(q) || (m.observacion||"").toLowerCase().includes(q);
-    })
-    .sort((a,b) => b.fecha.localeCompare(a.fecha));
+    });
+
+  // KPIs sobre el subtotal filtrado (igual al total del mes cuando no hay filtros extra)
+  const ingTotal = movMes.filter(m => m.tipo === "INGRESO").reduce((s,m) => s + m.ingreso, 0);
+  const egrTotal = movMes.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s + m.egreso,  0);
+  const saldo    = ingTotal - egrTotal;
+  const kpiIng = document.getElementById("kpi-ing");
+  const kpiEgr = document.getElementById("kpi-egr");
+  const kpiSaldo = document.getElementById("kpi-saldo");
+  if (kpiIng) kpiIng.textContent = fmt(ingTotal);
+  if (kpiEgr) kpiEgr.textContent = fmt(egrTotal);
+  if (kpiSaldo) {
+    kpiSaldo.textContent = (saldo<0?"-":"") + fmt(saldo);
+    kpiSaldo.className = "stat-val " + (saldo>=0?"ing":"egr");
+  }
+  const filtersActive = !!(listFiltros.rubro || listFiltros.cat || listFiltros.cuenta || listFiltros.tipo ||
+    listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.search);
+  const noteEl = document.getElementById("kpi-filter-note");
+  if (noteEl) noteEl.innerHTML = filtersActive
+    ? `Mostrando subtotal filtrado · <a href="#" onclick="clearListFilters();return false;" style="color:var(--accent)">Ver mes completo</a>`
+    : "";
+
+  // Orden, aplicado después de filtrar
+  movMes.sort((a,b) => {
+    if (movOrden === "fecha_asc")  return a.fecha.localeCompare(b.fecha);
+    if (movOrden === "monto_desc") return Math.abs(b.montoFinal) - Math.abs(a.montoFinal);
+    if (movOrden === "monto_asc")  return Math.abs(a.montoFinal) - Math.abs(b.montoFinal);
+    return b.fecha.localeCompare(a.fecha); // fecha_desc (default)
+  });
 
   const cnt = document.getElementById("mov-count");
   if (cnt) cnt.textContent = movMes.length + " movimiento" + (movMes.length!==1?"s":"");
@@ -1289,19 +1369,19 @@ function renderMovList() {
     const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : m.tipo==="AJUSTE" ? "adj" : "int";
     const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
     const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : m.tipo==="AJUSTE" ? (m.montoFinal>=0?"⊙+":"⊙−") : "⇄";
-    const fechaD     = m.fecha ? m.fecha.slice(8) + "/" + m.fecha.slice(5,7) : "";
     return `
     <div class="mov-card" onclick="openMovModal('${m.id}')">
       <div class="mov-card-info">
         <div class="mov-card-top">
+          <span class="mov-card-fecha-big">${fechaCorta(m.fecha)}</span>
           <span class="mov-card-rubro">[${esc(m.codRubro)}] ${esc(m.rubro)}</span>
-          <span class="mov-card-fecha">${fechaD}</span>
         </div>
         <div class="mov-card-concepto">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</div>
         <div class="mov-card-tags">
           <span class="tag tag-cuenta">${esc(m.cuenta)}</span>
           ${m.jugadorCT ? `<span class="tag tag-jug">${esc(m.jugadorCT)}</span>` : ""}
           ${m.adherente ? `<span class="tag tag-adh">${esc(m.adherente)}</span>` : ""}
+          ${m.partidoId ? `<span class="tag tag-partido">⚽ ${esc(partidoLabel(m.partidoId))}</span>` : ""}
           ${m.tipo==="INTERNO" ? `<span class="tag tag-int">→ ${esc(m.cuentaDestino||"?")}</span>` : ""}
           ${m.tipo==="AJUSTE" ? `<span class="tag tag-adj">⊙ ajuste</span>` : ""}
         </div>
@@ -1320,7 +1400,7 @@ function setListFilter(key, val) {
   renderMovimientos();
 }
 function clearListFilters() {
-  listFiltros = { rubro: "", cat:"", cuenta:"", tipo:"", adherente:"", jugadorCT:"", search:"" };
+  listFiltros = { rubro: "", cat:"", cuenta:"", tipo:"", adherente:"", jugadorCT:"", partido:"", search:"" };
   renderMovimientos();
 }
 function changeMes(delta) {
@@ -1346,6 +1426,7 @@ function openMovModal(id) {
     ["Método pago", m.modoPago],
     ["Jugador/CT",  m.jugadorCT || "—"],
     ["Adherente",   m.adherente || "—"],
+    ["Partido",     m.partidoId ? partidoLabel(m.partidoId) : "—"],
     (m.codRubro === "21" && m.tipo === "EGRESO") ? ["Reintegro", m.seguroReintegro ? "SÍ" : "NO"] : null,
     ["Observación", m.observacion || "—"],
     ["Comprobante", m.comprobante || "—"],

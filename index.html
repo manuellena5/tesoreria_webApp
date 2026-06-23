@@ -1937,19 +1937,21 @@ function renderAsociarModal(partidoId, mes) {
             <label style="font-size:11px;color:var(--text3);white-space:nowrap">Mes:</label>
             <select class="inp" style="flex:1;padding:8px 10px" onchange="renderAsociarModal('${partidoId}',this.value)">${mesOptions}</select>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <button class="btn-sm accent" onclick="asocSelectAll(true)">✓ Todos</button>
             <button class="btn-sm" onclick="asocSelectAll(false)">✗ Ninguno</button>
-            <span style="margin-left:auto;font-size:11px;color:var(--text3)">${movsMes.length} movimiento${movsMes.length!==1?"s":""}</span>
+            <span id="asoc-count" style="margin-left:auto;font-size:11px;color:var(--text3)">${movsMes.length} movimiento${movsMes.length!==1?"s":""}</span>
           </div>
+          <input class="inp" id="asoc-search" type="search" placeholder="Buscar rubro, concepto…"
+                 oninput="asocFiltrar(this.value)" style="padding:9px 12px;margin-bottom:0">
         </div>
         <div class="asoc-list">
           ${rows || '<p class="note" style="padding:16px 0">Sin movimientos en este mes</p>'}
         </div>
         <div class="asoc-footer">
-          <div style="display:flex;gap:10px">
-            <button class="btn-secondary" style="flex:0 0 auto" onclick="closeModal()">Cancelar</button>
-            <button class="btn-main" id="asoc-save-btn" onclick="guardarAsociaciones('${partidoId}')">💾 Guardar asociaciones</button>
+          <div style="display:flex;gap:8px">
+            <button onclick="closeModal()" style="flex:0 0 auto;padding:12px 16px;background:var(--bg4);color:var(--text2);border:1px solid var(--border);border-radius:var(--rs);font-family:var(--font);font-size:14px;cursor:pointer">Cancelar</button>
+            <button id="asoc-save-btn" onclick="guardarAsociaciones('${partidoId}')" style="flex:1;padding:12px;background:var(--accent);color:#fff;border:none;border-radius:var(--rs);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer">💾 Guardar asociaciones</button>
           </div>
         </div>
       </div>
@@ -1957,7 +1959,23 @@ function renderAsociarModal(partidoId, mes) {
 }
 
 function asocSelectAll(checked) {
-  document.querySelectorAll(".asoc-cb").forEach(cb => cb.checked = checked);
+  document.querySelectorAll(".asoc-cb").forEach(cb => {
+    const row = cb.closest(".asoc-row");
+    if (!row || row.style.display === "none") return;
+    cb.checked = checked;
+  });
+}
+
+function asocFiltrar(q) {
+  const term = q.toLowerCase().trim();
+  let visible = 0;
+  document.querySelectorAll(".asoc-row").forEach(row => {
+    const match = !term || row.textContent.toLowerCase().includes(term);
+    row.style.display = match ? "" : "none";
+    if (match) visible++;
+  });
+  const cnt = document.getElementById("asoc-count");
+  if (cnt) cnt.textContent = visible + " movimiento" + (visible !== 1 ? "s" : "");
 }
 
 async function guardarAsociaciones(partidoId) {

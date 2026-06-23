@@ -183,17 +183,17 @@ textarea.inp { resize:none; }
 /* ── Movement cards ── */
 .mov-card {
   background:var(--bg2); border:1px solid var(--border); border-radius:var(--r);
-  padding:12px 14px; margin-bottom:8px; display:flex; gap:10px; align-items:flex-start;
+  padding:14px; margin-bottom:8px; display:flex; flex-direction:column; gap:4px;
   cursor:pointer; transition:background .12s;
 }
 .mov-card:active { background:var(--bg3); }
-.mov-card-info { flex:1; min-width:0; }
-.mov-card-top  { display:flex; align-items:baseline; gap:8px; margin-bottom:3px; }
-.mov-card-rubro { font-weight:500; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.mov-card-fecha { font-size:11px; color:var(--text3); flex-shrink:0; font-family:var(--mono); }
-.mov-card-fecha-big { font-size:13px; font-weight:600; color:var(--text); flex-shrink:0; font-family:var(--mono); }
-.mov-card-concepto { font-size:12px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:4px; }
-.mov-card-tags { display:flex; gap:4px; flex-wrap:wrap; }
+.mov-card-row1 { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+.mov-card-fecha-big { font-size:14px; font-weight:600; color:var(--text); font-family:var(--mono); flex-shrink:0; }
+.mov-card-rubro-full { font-size:13px; color:var(--text2); }
+.mov-card-row3 { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+.mov-card-concepto { font-size:14px; color:var(--text); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mov-card-modo { font-size:11px; color:var(--text3); flex-shrink:0; white-space:nowrap; }
+.mov-card-tags { display:flex; gap:4px; flex-wrap:wrap; margin-top:2px; }
 .tag { font-size:10px; padding:2px 6px; border-radius:4px; border:1px solid transparent; white-space:nowrap; }
 .tag-cuenta { color:var(--accent); background:var(--accent-bg); }
 .tag-jug    { color:var(--blue);   background:var(--blue-bg); }
@@ -201,12 +201,12 @@ textarea.inp { resize:none; }
 .tag-int    { color:var(--int);    background:var(--int-bg); }
 .tag-adj    { color:var(--adj);    background:var(--adj-bg); }
 .tag-partido { color:var(--partido); background:var(--partido-bg); }
-.mov-card-amt { text-align:right; flex-shrink:0; }
 .monto { font-weight:600; font-size:15px; font-family:var(--mono); }
 .monto.ing { color:var(--green); }
 .monto.egr { color:var(--red);   }
 .monto.adj { color:var(--adj);   }
 .monto.int { color:var(--int);   }
+.mov-card-monto { font-size:17px; font-weight:700; flex-shrink:0; }
 
 /* ── Searchable Select (rubro) ── */
 .ss-wrap { position:relative; }
@@ -1422,27 +1422,25 @@ function renderMovList() {
     const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : m.tipo==="AJUSTE" ? "adj" : "int";
     const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
     const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : m.tipo==="AJUSTE" ? (m.montoFinal>=0?"⊙+":"⊙−") : "⇄";
-    return `
-    <div class="mov-card" onclick="openMovModal('${m.id}')">
-      <div class="mov-card-info">
-        <div class="mov-card-top">
-          <span class="mov-card-fecha-big">${fechaCorta(m.fecha)}</span>
-          <span class="mov-card-rubro">[${esc(m.codRubro)}] ${esc(m.rubro)}</span>
-        </div>
-        <div class="mov-card-concepto">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</div>
-        <div class="mov-card-tags">
+    const tagsHtml = `
           <span class="tag tag-cuenta">${esc(m.cuenta)}</span>
           ${m.jugadorCT ? `<span class="tag tag-jug">${esc(m.jugadorCT)}</span>` : ""}
           ${m.adherente ? `<span class="tag tag-adh">${esc(m.adherente)}</span>` : ""}
           ${m.partidoId ? `<span class="tag tag-partido">⚽ ${esc(partidoLabel(m.partidoId))}</span>` : ""}
           ${m.tipo==="INTERNO" ? `<span class="tag tag-int">→ ${esc(m.cuentaDestino||"?")}</span>` : ""}
-          ${m.tipo==="AJUSTE" ? `<span class="tag tag-adj">⊙ ajuste</span>` : ""}
-        </div>
+          ${m.tipo==="AJUSTE" ? `<span class="tag tag-adj">⊙ ajuste</span>` : ""}`;
+    return `
+    <div class="mov-card" onclick="openMovModal('${m.id}')">
+      <div class="mov-card-row1">
+        <span class="mov-card-fecha-big">${fechaCorta(m.fecha)}</span>
+        <span class="monto ${montoClass} mov-card-monto">${montoSign}${fmt(montoVal)}</span>
       </div>
-      <div class="mov-card-amt">
-        <div class="monto ${montoClass}">${montoSign}${fmt(montoVal)}</div>
-        <div style="font-size:10px;color:var(--text3);margin-top:3px;">${esc(m.modoPago)}</div>
+      <div class="mov-card-rubro-full">${esc(m.rubro)}</div>
+      <div class="mov-card-row3">
+        <span class="mov-card-concepto">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</span>
+        <span class="mov-card-modo">${esc(m.modoPago)}</span>
       </div>
+      ${tagsHtml.trim() ? `<div class="mov-card-tags">${tagsHtml}</div>` : ""}
     </div>`;
   }).join("");
 }

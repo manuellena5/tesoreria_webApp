@@ -247,6 +247,39 @@ textarea.inp { resize:none; }
 .sum-table tr:last-child td { border-bottom:none; }
 .reint-row { cursor:pointer; transition:background .12s; }
 .reint-row:active { background:var(--bg3); }
+.reint-row.row-ok { opacity:.55; }
+.reint-tot-row td { background:var(--bg3); font-weight:600; color:var(--text); }
+.jugador-col { min-width:140px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.reint-table { font-size:12px; }
+.reint-table td, .reint-table th { white-space:nowrap; }
+
+/* ── Reintegro: toggle de vista ── */
+.reint-view-toggle { display:flex; gap:0; border:1px solid var(--border); border-radius:var(--rs); overflow:hidden; flex-shrink:0; }
+.reint-view-btn { background:none; border:none; color:var(--text3); font-family:var(--font); font-size:12px; font-weight:500; padding:7px 11px; cursor:pointer; white-space:nowrap; }
+.reint-view-btn + .reint-view-btn { border-left:1px solid var(--border); }
+.reint-view-btn.active { background:var(--accent-bg); color:var(--accent); }
+
+/* ── Reintegro: badges de estado ── */
+.reint-badge { font-size:10px; font-weight:600; padding:3px 8px; border-radius:20px; white-space:nowrap; flex-shrink:0; }
+.reint-badge-ok      { background:var(--green-bg); color:var(--green); }
+.reint-badge-dif     { background:var(--blue-bg);  color:var(--blue);  }
+.reint-badge-parcial { background:var(--warn-bg);  color:var(--warn);  }
+.reint-badge-sin     { background:var(--red-bg);   color:var(--red);   }
+
+/* ── Reintegro: cards ── */
+.reint-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:12px 14px; margin-bottom:8px; cursor:pointer; }
+.reint-card:active { background:var(--bg3); }
+.reint-card-hdr { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; }
+.reint-card-nombre { font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.reint-card-body { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; text-align:center; }
+.reint-card-col label { display:block; font-size:10px; color:var(--text3); text-transform:uppercase; letter-spacing:.05em; margin-bottom:3px; }
+.reint-card-col .val { font-family:var(--mono); font-size:13px; font-weight:600; color:var(--text); }
+.reint-card-detalle { margin-top:10px; cursor:default; }
+.reint-aldia-toggle {
+  background:none; border:1px solid var(--border); color:var(--text2); font-family:var(--font);
+  font-size:13px; font-weight:500; padding:11px; width:100%; border-radius:var(--rs); cursor:pointer;
+  text-align:left; margin-bottom:8px;
+}
 
 /* ── Reintegro alert ── */
 .reintegro-alert {
@@ -566,7 +599,9 @@ let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", j
 let F             = buildDefaultF();
 let resumenSubTab     = "mensual";
 let reintegroAnio     = String(new Date().getFullYear());
-let reintegroExpandido = null;
+let reintegroExpandido = new Set();
+let reintegroVista     = localStorage.getItem("reintegros_vista")
+  || (window.matchMedia("(max-width:599px)").matches ? "cards" : "tabla");
 let movOrden = localStorage.getItem("clubfm_orden_mov") || "fecha_desc";
 
 // ══════════════════════════════════════════════════════════════
@@ -1882,18 +1917,25 @@ function calcSaldosCuentas(movs) {
 // ── Reintegros Médicos (rubro 21) ────────────────────────────────
 function setResumenSubTab(tab) {
   resumenSubTab = tab;
-  reintegroExpandido = null;
+  reintegroExpandido.clear();
   renderResumen();
 }
 
 function setReintegroAnio(v) {
   reintegroAnio = v;
-  reintegroExpandido = null;
+  reintegroExpandido.clear();
+  renderResumen();
+}
+
+function setReintegroVista(v) {
+  reintegroVista = v;
+  localStorage.setItem("reintegros_vista", v);
   renderResumen();
 }
 
 function toggleReintegroDetalle(jugador) {
-  reintegroExpandido = reintegroExpandido === jugador ? null : jugador;
+  if (reintegroExpandido.has(jugador)) reintegroExpandido.delete(jugador);
+  else reintegroExpandido.add(jugador);
   renderResumen();
 }
 
@@ -1933,50 +1975,122 @@ function renderReintegrosMedicos() {
   const anioOptions = `<option value="" ${reintegroAnio===""?"selected":""}>Todos los años</option>` +
     anios.map(a => `<option value="${a}" ${reintegroAnio===a?"selected":""}>${a}</option>`).join("");
 
+  const viewToggle = `
+    <div class="reint-view-toggle">
+      <button class="reint-view-btn ${reintegroVista==='tabla'?'active':''}" onclick="setReintegroVista('tabla')">⊞ Tabla</button>
+      <button class="reint-view-btn ${reintegroVista==='cards'?'active':''}" onclick="setReintegroVista('cards')">▤ Cards</button>
+    </div>`;
+
+  const body = !rows.length
+    ? `<p class="note" style="text-align:center;padding:16px 0">Sin movimientos de rubro médico</p>`
+    : reintegroVista === "cards" ? renderReintegrosCards(rows) : renderReintegrosTabla(rows);
+
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+        <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
+        <select class="inp" style="flex:1" onchange="setReintegroAnio(this.value)">${anioOptions}</select>
+      </div>
+      ${viewToggle}
+    </div>
+    ${body}`;
+}
+
+function estadoCorto(estado) {
+  return estado==="OK"      ? "✅ OK"
+    : estado==="DIF"     ? "🔵 Diferencia"
+    : estado==="PARCIAL" ? "⚠️ Parcial"
+    : "🔴 Pendiente";
+}
+
+function renderReintegrosTabla(rows) {
   let totAbonado=0, totReintegrado=0, totPendiente=0;
   const bodyRows = rows.map(r => {
-    totAbonado    += r.abonado;
+    totAbonado     += r.abonado;
     totReintegrado += r.reintegrado;
-    totPendiente  += Math.max(r.pendiente,0);
-    const estadoHtml = r.estado==="OK" ? "✅ OK"
-      : r.estado==="DIF" ? `~ DIFERENCIAS (${fmt(r.diferencia)})`
-      : r.estado==="PARCIAL" ? "⚠️ Parcial" : "🔴 Sin reintegro";
-    const isExp = reintegroExpandido === r.jugador;
+    totPendiente   += Math.max(r.pendiente,0);
+    const isExp = reintegroExpandido.has(r.jugador);
     const detalle = isExp ? renderReintegroDetalle(r) : "";
+    const rowClass = r.estado === "OK" ? "reint-row row-ok" : "reint-row";
     return `
-    <tr class="reint-row" onclick="toggleReintegroDetalle('${esc(r.jugador)}')">
-      <td>${esc(r.jugador)}</td>
+    <tr class="${rowClass}" onclick="toggleReintegroDetalle('${esc(r.jugador)}')">
+      <td class="jugador-col" title="${esc(r.jugador)}">${esc(r.jugador)}</td>
       <td style="text-align:right;font-family:var(--mono)">${fmt(r.abonado)}</td>
       <td style="text-align:right;font-family:var(--mono)">${fmt(r.reintegrado)}</td>
-      <td style="text-align:right;font-family:var(--mono)" class="${r.pendiente>0?'egr':''}">${fmt(Math.max(r.pendiente,0))}</td>
-      <td>${estadoHtml}</td>
+      <td style="text-align:right;font-family:var(--mono)" class="${r.pendiente>0?'egr':'ing'}">${fmt(Math.max(r.pendiente,0))}</td>
+      <td>${estadoCorto(r.estado)}</td>
     </tr>${isExp ? `
     <tr><td colspan="5" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
   }).join("");
 
-  const totRow = rows.length ? `<tr>
-    <td>TOTALES</td>
+  const totRow = `<tr class="reint-tot-row">
+    <td class="jugador-col">TOTALES</td>
     <td style="text-align:right;font-family:var(--mono)">${fmt(totAbonado)}</td>
     <td style="text-align:right;font-family:var(--mono)">${fmt(totReintegrado)}</td>
-    <td style="text-align:right;font-family:var(--mono)" class="${totPendiente>0?'egr':''}">${fmt(totPendiente)}</td>
+    <td style="text-align:right;font-family:var(--mono)" class="${totPendiente>0?'egr':'ing'}">${fmt(totPendiente)}</td>
     <td></td>
-  </tr>` : "";
+  </tr>`;
 
   return `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-      <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
-      <select class="inp" style="flex:1" onchange="setReintegroAnio(this.value)">${anioOptions}</select>
-    </div>
-    <table class="sum-table">
+    <table class="sum-table reint-table">
       <thead><tr>
-        <th>Jugador</th>
+        <th class="jugador-col">Jugador</th>
         <th style="text-align:right">Abonado</th>
         <th style="text-align:right">Reintegrado</th>
         <th style="text-align:right">Pendiente</th>
         <th>Estado</th>
       </tr></thead>
-      <tbody>${bodyRows || '<tr><td colspan="5" class="note" style="text-align:center">Sin movimientos de rubro médico</td></tr>'}${totRow}</tbody>
+      <tbody>${bodyRows}${totRow}</tbody>
     </table>`;
+}
+
+function renderReintegroCard(r) {
+  const isExp = reintegroExpandido.has(r.jugador);
+  const badgeClass = r.estado==="OK" ? "reint-badge-ok" : r.estado==="DIF" ? "reint-badge-dif"
+    : r.estado==="PARCIAL" ? "reint-badge-parcial" : "reint-badge-sin";
+  const badgeTxt = r.estado==="OK"      ? "✅ OK"
+    : r.estado==="DIF"     ? `~ DIFERENCIAS (${fmt(r.diferencia)})`
+    : r.estado==="PARCIAL" ? "⚠️ Parcial" : "🔴 Sin reintegro";
+  return `
+  <div class="reint-card" onclick="toggleReintegroDetalle('${esc(r.jugador)}')">
+    <div class="reint-card-hdr">
+      <span class="reint-card-nombre" title="${esc(r.jugador)}">${esc(r.jugador)}</span>
+      <span class="reint-badge ${badgeClass}">${badgeTxt}</span>
+    </div>
+    <div class="reint-card-body">
+      <div class="reint-card-col">
+        <label>Abonado</label>
+        <div class="val">${fmt(r.abonado)}</div>
+      </div>
+      <div class="reint-card-col">
+        <label>Reintegrado</label>
+        <div class="val">${fmt(r.reintegrado)}</div>
+      </div>
+      <div class="reint-card-col">
+        <label>Pendiente</label>
+        <div class="val ${r.pendiente>0?'egr':'ing'}">${fmt(Math.max(r.pendiente,0))}</div>
+      </div>
+    </div>
+    ${isExp ? `<div class="reint-card-detalle" onclick="event.stopPropagation()">${renderReintegroDetalle(r)}</div>` : ""}
+  </div>`;
+}
+
+function renderReintegrosCards(rows) {
+  const sinReintegro = rows.filter(r => r.estado === "SIN").sort((a,b) => b.pendiente - a.pendiente);
+  const parcialYDif  = rows.filter(r => r.estado === "PARCIAL" || r.estado === "DIF").sort((a,b) => b.pendiente - a.pendiente);
+  const alDia        = rows.filter(r => r.estado === "OK");
+
+  const cardsHtml = [...sinReintegro, ...parcialYDif].map(renderReintegroCard).join("");
+
+  const alDiaKey  = "__aldia__";
+  const alDiaOpen = reintegroExpandido.has(alDiaKey);
+  const alDiaHtml = alDia.length ? `
+    <button class="reint-aldia-toggle" onclick="toggleReintegroDetalle('${alDiaKey}')">
+      Ver jugadores al día (${alDia.length}) ${alDiaOpen ? "▲" : "▼"}
+    </button>
+    ${alDiaOpen ? alDia.map(renderReintegroCard).join("") : ""}` : "";
+
+  return `${cardsHtml}${alDiaHtml}`;
 }
 
 function renderReintegroDetalle(r) {

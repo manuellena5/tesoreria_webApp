@@ -254,6 +254,8 @@ textarea.inp { resize:none; }
 .reint-table td, .reint-table th { white-space:nowrap; }
 .reint-table-mobile { font-size:12px; }
 .reint-table-mobile .jugador-col { min-width:0; max-width:100px; }
+.reint-table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; margin-bottom:16px; }
+.reint-table-wrap .reint-table { margin-bottom:0; }
 .reint-section { overflow-x:hidden; max-width:100%; box-sizing:border-box; }
 
 /* ── Reintegro: toggle de vista ── */
@@ -2057,16 +2059,18 @@ function renderReintegrosTabla(rows) {
   const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Reintegrado = Abonado − Pendiente</p>` : "";
 
   return `
-    <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}">
-      <thead><tr>
-        <th class="jugador-col">Jugador</th>
-        <th style="text-align:right">Abonado</th>
-        ${reintegradoHeader}
-        <th style="text-align:right">Pendiente</th>
-        <th>Estado</th>
-      </tr></thead>
-      <tbody>${bodyRows}${totRow}</tbody>
-    </table>
+    <div class="reint-table-wrap">
+      <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}">
+        <thead><tr>
+          <th class="jugador-col">Jugador</th>
+          <th style="text-align:right">Abonado</th>
+          ${reintegradoHeader}
+          <th style="text-align:right">Pendiente</th>
+          <th>Estado</th>
+        </tr></thead>
+        <tbody>${bodyRows}${totRow}</tbody>
+      </table>
+    </div>
     ${footnote}`;
 }
 

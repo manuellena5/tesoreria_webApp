@@ -241,6 +241,15 @@ textarea.inp { resize:none; }
 .sum-table td.egr { color:var(--red);   font-family:var(--mono); text-align:right; }
 .sum-table td.net { color:var(--text);  font-family:var(--mono); text-align:right; font-weight:600; }
 .sum-table tr:last-child td { border-bottom:none; }
+.reint-row { cursor:pointer; transition:background .12s; }
+.reint-row:active { background:var(--bg3); }
+
+/* ── Reintegro alert ── */
+.reintegro-alert {
+  display:flex; align-items:center; gap:8px; background:var(--warn-bg); border:1px solid var(--warn);
+  color:var(--warn); font-size:13px; font-weight:500; padding:10px 14px; border-radius:var(--rs);
+  margin-bottom:14px; cursor:pointer;
+}
 
 /* ── Entity list ── */
 .entity-tabs { display:flex; gap:0; border:1px solid var(--border); border-radius:var(--r); overflow:hidden; margin-bottom:14px; }
@@ -551,6 +560,9 @@ let sharedMes     = nowMes();
 let entidadesTab  = "jugadores";
 let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", search: "" };
 let F             = buildDefaultF();
+let resumenSubTab     = "mensual";
+let reintegroAnio     = String(new Date().getFullYear());
+let reintegroExpandido = null;
 
 // ══════════════════════════════════════════════════════════════
 // UTILITIES
@@ -1582,7 +1594,26 @@ function renderResumen() {
     </div>`;
   }).join("");
 
+  // Reintegros médicos — total pendiente global (todos los años) para el badge de alerta
+  const reintegrosGlobal = calcReintegrosPorJugador("");
+  const pendienteGlobal  = reintegrosGlobal.reduce((s,r) => s + Math.max(r.pendiente,0), 0);
+
+  const subTabsHtml = `
+    <div class="entity-tabs">
+      <button class="entity-tab ${resumenSubTab==='mensual'?'active':''}"    onclick="setResumenSubTab('mensual')">Mensual</button>
+      <button class="entity-tab ${resumenSubTab==='partido'?'active':''}"    onclick="setResumenSubTab('partido')">Por Partido</button>
+      <button class="entity-tab ${resumenSubTab==='reintegros'?'active':''}" onclick="setResumenSubTab('reintegros')">Reintegros${pendienteGlobal>0?" 🏥":""}</button>
+    </div>`;
+
+  const alertHtml = (pendienteGlobal > 0 && resumenSubTab !== "reintegros") ? `
+    <div class="reintegro-alert" onclick="setResumenSubTab('reintegros')">
+      🏥 ${fmt(pendienteGlobal)} pendientes de reintegro
+    </div>` : "";
+
   setContent(`
+    ${subTabsHtml}
+    ${alertHtml}
+    ${resumenSubTab === "mensual" ? `
     <div class="mes-sel">
       <button class="mes-sel-btn" onclick="changeMes(-1)">◀</button>
       <span class="mes-sel-label">${mesLabel(sharedMes)}</span>
@@ -1655,8 +1686,9 @@ function renderResumen() {
         </table>` : ""}
       </div>
     </div>
+    ` : ""}
 
-    ${(() => {
+    ${resumenSubTab === "partido" ? (() => {
       // Tabla por partido
       const movsPartido = movimientos.filter(m =>
         m.partidoId &&
@@ -1742,7 +1774,9 @@ function renderResumen() {
             <tbody>${partidoRows}${totRows}</tbody>
           </table>
         </div>`;
-    })()}
+    })() : ""}
+
+    ${resumenSubTab === "reintegros" ? renderReintegrosMedicos() : ""}
   `);
 }
 
@@ -1762,6 +1796,133 @@ function calcSaldosCuentas(movs) {
     }
   }
   return saldos;
+}
+
+// ── Reintegros Médicos (rubro 21) ────────────────────────────────
+function setResumenSubTab(tab) {
+  resumenSubTab = tab;
+  reintegroExpandido = null;
+  renderResumen();
+}
+
+function setReintegroAnio(v) {
+  reintegroAnio = v;
+  reintegroExpandido = null;
+  renderResumen();
+}
+
+function toggleReintegroDetalle(jugador) {
+  reintegroExpandido = reintegroExpandido === jugador ? null : jugador;
+  renderResumen();
+}
+
+// anio: string "YYYY" para filtrar, o "" para todos los años
+function calcReintegrosPorJugador(anio) {
+  const movs21 = movimientos.filter(m =>
+    m.codRubro === "21" &&
+    (m.tipo === "EGRESO" || m.tipo === "INGRESO") &&
+    (!anio || m.fecha.slice(0,4) === anio)
+  );
+  const map = {};
+  for (const m of movs21) {
+    const key = m.jugadorCT || "Sin jugador";
+    if (!map[key]) map[key] = { jugador: key, abonado: 0, reintegrado: 0, movs: [] };
+    if (m.tipo === "EGRESO") map[key].abonado += m.egreso;
+    else map[key].reintegrado += m.ingreso;
+    map[key].movs.push(m);
+  }
+  return Object.values(map).map(r => {
+    const pendienteRaw = r.abonado - r.reintegrado;
+    const pendiente = Math.round(pendienteRaw) === 0 ? 0 : pendienteRaw;
+    const estado = pendiente <= 0 ? "OK" : (r.reintegrado > 0 ? "PARCIAL" : "SIN");
+    return { ...r, pendiente, estado };
+  }).sort((a,b) => b.pendiente - a.pendiente);
+}
+
+function renderReintegrosMedicos() {
+  const movs21All = movimientos.filter(m => m.codRubro === "21" && (m.tipo === "EGRESO" || m.tipo === "INGRESO"));
+  const anios = [...new Set(movs21All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
+  if (reintegroAnio !== "" && !anios.includes(reintegroAnio)) {
+    reintegroAnio = anios[0] || String(new Date().getFullYear());
+  }
+
+  const rows = calcReintegrosPorJugador(reintegroAnio);
+
+  const anioOptions = `<option value="" ${reintegroAnio===""?"selected":""}>Todos los años</option>` +
+    anios.map(a => `<option value="${a}" ${reintegroAnio===a?"selected":""}>${a}</option>`).join("");
+
+  let totAbonado=0, totReintegrado=0, totPendiente=0;
+  const bodyRows = rows.map(r => {
+    totAbonado    += r.abonado;
+    totReintegrado += r.reintegrado;
+    totPendiente  += Math.max(r.pendiente,0);
+    const estadoHtml = r.estado==="OK" ? "✅ OK" : r.estado==="PARCIAL" ? "⚠️ Parcial" : "🔴 Sin reintegro";
+    const isExp = reintegroExpandido === r.jugador;
+    const detalle = isExp ? renderReintegroDetalle(r) : "";
+    return `
+    <tr class="reint-row" onclick="toggleReintegroDetalle('${esc(r.jugador)}')">
+      <td>${esc(r.jugador)}</td>
+      <td style="text-align:right;font-family:var(--mono)">${fmt(r.abonado)}</td>
+      <td style="text-align:right;font-family:var(--mono)">${fmt(r.reintegrado)}</td>
+      <td style="text-align:right;font-family:var(--mono)" class="${r.pendiente>0?'egr':''}">${fmt(Math.max(r.pendiente,0))}</td>
+      <td>${estadoHtml}</td>
+    </tr>${isExp ? `
+    <tr><td colspan="5" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
+  }).join("");
+
+  const totRow = rows.length ? `<tr>
+    <td>TOTALES</td>
+    <td style="text-align:right;font-family:var(--mono)">${fmt(totAbonado)}</td>
+    <td style="text-align:right;font-family:var(--mono)">${fmt(totReintegrado)}</td>
+    <td style="text-align:right;font-family:var(--mono)" class="${totPendiente>0?'egr':''}">${fmt(totPendiente)}</td>
+    <td></td>
+  </tr>` : "";
+
+  return `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
+      <select class="inp" style="flex:1" onchange="setReintegroAnio(this.value)">${anioOptions}</select>
+    </div>
+    <table class="sum-table">
+      <thead><tr>
+        <th>Jugador</th>
+        <th style="text-align:right">Abonado</th>
+        <th style="text-align:right">Reintegrado</th>
+        <th style="text-align:right">Pendiente</th>
+        <th>Estado</th>
+      </tr></thead>
+      <tbody>${bodyRows || '<tr><td colspan="5" class="note" style="text-align:center">Sin movimientos de rubro médico</td></tr>'}${totRow}</tbody>
+    </table>`;
+}
+
+function renderReintegroDetalle(r) {
+  const sorted = [...r.movs].sort((a,b) => a.fecha.localeCompare(b.fecha));
+  let saldo = 0;
+  const rows = sorted.map(m => {
+    saldo += (m.tipo === "INGRESO" ? m.ingreso : -m.egreso);
+    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
+    const reintBadge = (m.tipo==="EGRESO" && m.seguroReintegro) ? ` <span class="tag tag-adh">tiene reintegro</span>` : "";
+    const saldoClass = saldo === 0 ? "" : saldo < 0 ? "egr" : "ing";
+    const saldoSign = saldo < 0 ? "-" : saldo > 0 ? "+" : "";
+    return `<tr>
+      <td style="font-family:var(--mono);font-size:11px">${fechaD}</td>
+      <td style="font-size:11px">${mesLabel(mesFromRecord(m))}</td>
+      <td style="font-size:11px">${esc(m.concepto)||"—"}${reintBadge}</td>
+      <td style="text-align:right;font-family:var(--mono);font-size:11px" class="egr">${m.tipo==="EGRESO"?fmt(m.egreso):""}</td>
+      <td style="text-align:right;font-family:var(--mono);font-size:11px" class="ing">${m.tipo==="INGRESO"?fmt(m.ingreso):""}</td>
+      <td style="text-align:right;font-family:var(--mono);font-size:11px;font-weight:600" class="${saldoClass}">${saldoSign}${fmt(saldo)}</td>
+    </tr>`;
+  }).join("");
+  return `
+    <div style="background:var(--bg3);padding:10px 8px 4px;border-radius:var(--rs);margin:4px 0 10px">
+      <table class="sum-table" style="margin-bottom:0">
+        <thead><tr>
+          <th>Fecha</th><th>Mes</th><th>Concepto</th>
+          <th style="text-align:right">Egr.</th><th style="text-align:right">Ing.</th><th style="text-align:right">Saldo acum.</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════

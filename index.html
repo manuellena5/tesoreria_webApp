@@ -2204,10 +2204,13 @@ function toggleAdherenteDetalle(key) {
   renderResumen();
 }
 
+// Rubros que se consideran aportes de adherentes: [6] ADHERENTES | COLABORADORES y [5] PUBLICIDAD - Lonas y otros
+const ADH_RUBROS = ["5", "6"];
+
 // anio: string "YYYY" para filtrar, o "" para todos los años
 function calcAdherentesPorAnio(anio) {
   const movs6 = movimientos.filter(m =>
-    m.codRubro === "6" && m.tipo === "INGRESO" && (!anio || m.fecha.slice(0,4) === anio)
+    ADH_RUBROS.includes(m.codRubro) && m.tipo === "INGRESO" && (!anio || m.fecha.slice(0,4) === anio)
   );
   const map = {};
   for (const a of adherentes) {
@@ -2234,7 +2237,7 @@ function calcAdherentesPorAnio(anio) {
 }
 
 function renderAdherentesResumen() {
-  const movs6All = movimientos.filter(m => m.codRubro === "6" && m.tipo === "INGRESO");
+  const movs6All = movimientos.filter(m => ADH_RUBROS.includes(m.codRubro) && m.tipo === "INGRESO");
   const anios = [...new Set(movs6All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
   if (adherenteAnio !== "" && !anios.includes(adherenteAnio) && anios.length) {
     adherenteAnio = anios[0];

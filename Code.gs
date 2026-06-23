@@ -35,7 +35,7 @@ const MOV_COLS = [
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID"
 ];
-const ADH_COLS = ["ID","Nombre","Activo"];
+const ADH_COLS = ["ID","Nombre","Activo","CuotaMensual","CuotasAnuales"];
 const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","MovimientoID","timestamp"];
 const JUG_COLS = ["ID","Nombre","Activo"];
 const GRP_COLS = ["ID","Nombre","Miembros","Activo"];
@@ -266,12 +266,15 @@ function handleAction(data) {
 
     case "listAdherentes": {
       const sh  = getOrCreateSheet(ADH_SHEET, ADH_COLS);
-      autoFillIds(sh, r => r[1], r => !r[2] ? [r[0], r[1], "true"] : null);
+      autoFillIds(sh, r => r[1], r => !r[2] ? [r[0], r[1], "true", r[3]||0, r[4]||0] : null);
       const all = sh.getDataRange().getValues();
       if (all.length <= 1) return { ok: true, adherentes: [] };
       const adherentes = all.slice(1)
         .filter(r => r[0] && String(r[2]) !== "false")
-        .map(r => ({ id: String(r[0]), nombre: String(r[1]).trim() }));
+        .map(r => ({
+          id: String(r[0]), nombre: String(r[1]).trim(),
+          cuotaMensual: Number(r[3]||0), cuotasAnuales: Number(r[4]||0)
+        }));
       return { ok: true, adherentes };
     }
 
@@ -282,13 +285,15 @@ function handleAction(data) {
       if (a.id) {
         for (let i = 1; i < all.length; i++) {
           if (String(all[i][0]) === String(a.id)) {
-            sh.getRange(i + 1, 2).setValue(a.nombre);
+            sh.getRange(i + 1, 2, 1, 4).setValues([[
+              a.nombre, "true", Number(a.cuotaMensual||0), Number(a.cuotasAnuales||0)
+            ]]);
             return { ok: true, id: a.id };
           }
         }
       }
       const id = uid_gs();
-      sh.appendRow([id, a.nombre, "true"]);
+      sh.appendRow([id, a.nombre, "true", Number(a.cuotaMensual||0), Number(a.cuotasAnuales||0)]);
       return { ok: true, id };
     }
 

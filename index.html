@@ -308,6 +308,13 @@ textarea.inp { resize:none; }
   margin-bottom:14px; cursor:pointer;
 }
 
+/* ── Adherente alert ── */
+.adherente-alert {
+  display:flex; align-items:center; gap:8px; background:var(--blue-bg); border:1px solid var(--blue);
+  color:var(--blue); font-size:13px; font-weight:500; padding:10px 14px; border-radius:var(--rs);
+  margin-bottom:14px; cursor:pointer;
+}
+
 /* ── Entity list ── */
 .entity-tabs { display:flex; gap:0; border:1px solid var(--border); border-radius:var(--r); overflow:hidden; margin-bottom:14px; }
 .entity-tab { flex:1; background:none; border:none; color:var(--text3); font-family:var(--font); font-size:13px; font-weight:500; padding:10px 8px; cursor:pointer; text-align:center; transition:all .15s; }
@@ -620,9 +627,17 @@ let F             = buildDefaultF();
 let resumenSubTab     = "mensual";
 let reintegroAnio     = String(new Date().getFullYear());
 let reintegroExpandido = new Set();
-let reintegroVista     = localStorage.getItem("reintegros_vista")
-  || (window.matchMedia("(max-width:599px)").matches ? "cards" : "tabla");
+let reintegroVista     = getDefaultVista("reintegros_vista");
+let adherenteAnio       = String(new Date().getFullYear());
+let adherenteExpandido  = new Set();
+let adherenteVista      = getDefaultVista("adherentes_vista");
 let movOrden = localStorage.getItem("clubfm_orden_mov") || "fecha_desc";
+
+// "cards" en mobile (<600px), "tabla" en desktop; el usuario puede override y se persiste
+function getDefaultVista(storageKey) {
+  return localStorage.getItem(storageKey)
+    || (window.matchMedia("(max-width:599px)").matches ? "cards" : "tabla");
+}
 
 // ══════════════════════════════════════════════════════════════
 // UTILITIES
@@ -1732,11 +1747,18 @@ function renderResumen() {
   const reintegrosGlobal = calcReintegrosPorJugador("");
   const pendienteGlobal  = reintegrosGlobal.reduce((s,r) => s + Math.max(r.pendiente,0), 0);
 
+  // Adherentes — total adeudado del año actual para el badge de alerta
+  const adherentesGlobal = calcAdherentesPorAnio(String(new Date().getFullYear()));
+  const adherentePendienteGlobal = adherentesGlobal
+    .filter(r => r.compromisoAnual > 0 && r.diferencia < 0)
+    .reduce((s,r) => s + Math.abs(r.diferencia), 0);
+
   const subTabsHtml = `
     <div class="entity-tabs">
       <button class="entity-tab ${resumenSubTab==='mensual'?'active':''}"    onclick="setResumenSubTab('mensual')">Mensual</button>
       <button class="entity-tab ${resumenSubTab==='partido'?'active':''}"    onclick="setResumenSubTab('partido')">Por Partido</button>
       <button class="entity-tab ${resumenSubTab==='reintegros'?'active':''}" onclick="setResumenSubTab('reintegros')">Reintegros${pendienteGlobal>0?" 🏥":""}</button>
+      <button class="entity-tab ${resumenSubTab==='adherentes'?'active':''}" onclick="setResumenSubTab('adherentes')">Adherentes${adherentePendienteGlobal>0?" 👥":""}</button>
     </div>`;
 
   const alertHtml = (pendienteGlobal > 0 && resumenSubTab !== "reintegros") ? `
@@ -1744,9 +1766,15 @@ function renderResumen() {
       🏥 ${fmt(pendienteGlobal)} pendientes de reintegro
     </div>` : "";
 
+  const adherenteAlertHtml = (adherentePendienteGlobal > 0 && resumenSubTab !== "adherentes") ? `
+    <div class="adherente-alert" onclick="setResumenSubTab('adherentes')">
+      👥 ${fmt(adherentePendienteGlobal)} pendientes de adherentes
+    </div>` : "";
+
   setContent(`
     ${subTabsHtml}
     ${alertHtml}
+    ${adherenteAlertHtml}
     ${resumenSubTab === "mensual" ? `
     <div class="mes-sel">
       <button class="mes-sel-btn" onclick="changeMes(-1)">◀</button>
@@ -1911,6 +1939,7 @@ function renderResumen() {
     })() : ""}
 
     ${resumenSubTab === "reintegros" ? renderReintegrosMedicos() : ""}
+    ${resumenSubTab === "adherentes" ? renderAdherentesResumen() : ""}
   `);
 }
 
@@ -1936,6 +1965,7 @@ function calcSaldosCuentas(movs) {
 function setResumenSubTab(tab) {
   resumenSubTab = tab;
   reintegroExpandido.clear();
+  adherenteExpandido.clear();
   renderResumen();
 }
 
@@ -2153,6 +2183,289 @@ function renderReintegroDetalle(r) {
     <div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
       ${rows}
     </div>`;
+}
+
+// ── Adherentes — aportes vs. compromiso (rubro 6) ────────────────
+function setAdherenteAnio(v) {
+  adherenteAnio = v;
+  adherenteExpandido.clear();
+  renderResumen();
+}
+
+function setAdherenteVista(v) {
+  adherenteVista = v;
+  localStorage.setItem("adherentes_vista", v);
+  renderResumen();
+}
+
+function toggleAdherenteDetalle(key) {
+  if (adherenteExpandido.has(key)) adherenteExpandido.delete(key);
+  else adherenteExpandido.add(key);
+  renderResumen();
+}
+
+// anio: string "YYYY" para filtrar, o "" para todos los años
+function calcAdherentesPorAnio(anio) {
+  const movs6 = movimientos.filter(m =>
+    m.codRubro === "6" && m.tipo === "INGRESO" && (!anio || m.fecha.slice(0,4) === anio)
+  );
+  const map = {};
+  for (const a of adherentes) {
+    map[a.nombre] = { adherente: a.nombre, cuotaMensual: a.cuotaMensual||0, cuotasAnuales: a.cuotasAnuales||0, totalAportado: 0, movs: [] };
+  }
+  for (const m of movs6) {
+    const key = m.adherente || "Sin adherente";
+    if (!map[key]) map[key] = { adherente: key, cuotaMensual: 0, cuotasAnuales: 0, totalAportado: 0, movs: [] };
+    map[key].totalAportado += m.ingreso;
+    map[key].movs.push(m);
+  }
+  return Object.values(map)
+    .filter(r => r.totalAportado > 0 || (r.cuotaMensual > 0 && r.cuotasAnuales > 0))
+    .map(r => {
+      const compromisoAnual = r.cuotaMensual * r.cuotasAnuales;
+      const mesesPagados = new Set(r.movs.map(m => mesFromRecord(m))).size;
+      let diferencia = null, estado = null;
+      if (compromisoAnual > 0) {
+        diferencia = r.totalAportado - compromisoAnual;
+        estado = diferencia >= 0 ? "OK" : (r.totalAportado > 0 ? "PARCIAL" : "SIN");
+      }
+      return { ...r, compromisoAnual, mesesPagados, diferencia, estado };
+    });
+}
+
+function renderAdherentesResumen() {
+  const movs6All = movimientos.filter(m => m.codRubro === "6" && m.tipo === "INGRESO");
+  const anios = [...new Set(movs6All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
+  if (adherenteAnio !== "" && !anios.includes(adherenteAnio) && anios.length) {
+    adherenteAnio = anios[0];
+  }
+
+  const rows = calcAdherentesPorAnio(adherenteAnio);
+
+  const anioOptions = `<option value="" ${adherenteAnio===""?"selected":""}>Todos los años</option>` +
+    anios.map(a => `<option value="${a}" ${adherenteAnio===a?"selected":""}>${a}</option>`).join("");
+
+  const viewToggle = `
+    <div class="reint-view-toggle">
+      <button class="reint-view-btn ${adherenteVista==='tabla'?'active':''}" onclick="setAdherenteVista('tabla')">⊞ Tabla</button>
+      <button class="reint-view-btn ${adherenteVista==='cards'?'active':''}" onclick="setAdherenteVista('cards')">▤ Cards</button>
+    </div>`;
+
+  let totAportado=0, totCompromiso=0, totDiferencia=0, hayCompromiso=false;
+  for (const r of rows) {
+    totAportado += r.totalAportado;
+    if (r.compromisoAnual > 0) { hayCompromiso = true; totCompromiso += r.compromisoAnual; totDiferencia += r.diferencia; }
+  }
+  const totalesLine = `${rows.length} adherente${rows.length!==1?"s":""} · Total aportado: ${fmt(totAportado)}` +
+    (hayCompromiso ? ` · Compromiso: ${fmt(totCompromiso)} · Diferencia: ${totDiferencia>=0?"+":"-"}${fmt(Math.abs(totDiferencia))}` : "");
+
+  const body = !rows.length
+    ? `<p class="note" style="text-align:center;padding:16px 0">Sin aportes de adherentes registrados</p>`
+    : adherenteVista === "cards" ? renderAdherentesCards(rows) : renderAdherentesTabla(rows);
+
+  return `
+    <div class="reint-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
+          <select class="inp" style="flex:1" onchange="setAdherenteAnio(this.value)">${anioOptions}</select>
+        </div>
+        ${viewToggle}
+      </div>
+      <p class="note" style="margin-bottom:12px">${totalesLine}</p>
+      ${body}
+    </div>`;
+}
+
+function estadoAdherenteCorto(estado) {
+  return estado==="OK"      ? "✅ Al día"
+    : estado==="PARCIAL" ? "⚠️ Parcial"
+    : estado==="SIN"     ? "🔴 Sin aportes"
+    : "—";
+}
+
+function renderAdherentesTabla(rows) {
+  const isMobile = window.matchMedia("(max-width:599px)").matches;
+  const rank = { SIN:0, PARCIAL:1, OK:3 };
+  const sorted = [...rows].sort((a,b) => {
+    const ra = a.estado===null ? 2 : rank[a.estado];
+    const rb = b.estado===null ? 2 : rank[b.estado];
+    if (ra !== rb) return ra - rb;
+    return a.adherente.localeCompare(b.adherente);
+  });
+
+  let totAportado=0, totCompromiso=0, totDiferencia=0;
+  const bodyRows = sorted.map(r => {
+    const tieneCompromiso = r.compromisoAnual > 0;
+    totAportado += r.totalAportado;
+    if (tieneCompromiso) { totCompromiso += r.compromisoAnual; totDiferencia += r.diferencia; }
+    const isExp = adherenteExpandido.has(r.adherente);
+    const detalle = isExp ? renderAdherenteDetalle(r) : "";
+    const rowClass = r.estado === "OK" ? "reint-row row-ok" : "reint-row";
+    const cuotasCell = isMobile ? "" : `<td style="text-align:right">${tieneCompromiso ? (r.mesesPagados+" meses") : "—"}</td>`;
+    const compromisoCell = isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${tieneCompromiso ? fmt(r.compromisoAnual) : "—"}</td>`;
+    const difCell = tieneCompromiso
+      ? `<td style="text-align:right;font-family:var(--mono)" class="${r.diferencia>=0?'ing':'egr'}">${r.diferencia>=0?"+":"-"}${fmt(Math.abs(r.diferencia))}</td>`
+      : `<td style="text-align:right;color:var(--text3)">—</td>`;
+    const colspan = isMobile ? 4 : 6;
+    return `
+    <tr class="${rowClass}" onclick="toggleAdherenteDetalle('${esc(r.adherente)}')">
+      <td class="jugador-col" title="${esc(r.adherente)}">${esc(r.adherente)}</td>
+      ${cuotasCell}
+      <td style="text-align:right;font-family:var(--mono)" class="ing">${fmt(r.totalAportado)}</td>
+      ${compromisoCell}
+      ${difCell}
+      <td>${estadoAdherenteCorto(r.estado)}</td>
+    </tr>${isExp ? `
+    <tr><td colspan="${colspan}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
+  }).join("");
+
+  const totDifClass = totDiferencia >= 0 ? "ing" : "egr";
+  const totRow = `<tr class="reint-tot-row">
+    <td class="jugador-col">TOTALES</td>
+    ${isMobile ? "" : `<td></td>`}
+    <td style="text-align:right;font-family:var(--mono)">${fmt(totAportado)}</td>
+    ${isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${fmt(totCompromiso)}</td>`}
+    <td style="text-align:right;font-family:var(--mono)" class="${totDifClass}">${totDiferencia>=0?"+":"-"}${fmt(Math.abs(totDiferencia))}</td>
+    <td></td>
+  </tr>`;
+
+  const cuotasHeader = isMobile ? "" : `<th style="text-align:right">Cuotas pagadas</th>`;
+  const compromisoHeader = isMobile ? "" : `<th style="text-align:right">Compromiso anual</th>`;
+  const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Vista reducida — cambiá a Cards para ver cuotas y compromiso</p>` : "";
+
+  return `
+    <div class="reint-table-wrap">
+      <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}">
+        <thead><tr>
+          <th class="jugador-col">Adherente</th>
+          ${cuotasHeader}
+          <th style="text-align:right">Total aportado</th>
+          ${compromisoHeader}
+          <th style="text-align:right">Diferencia</th>
+          <th>Estado</th>
+        </tr></thead>
+        <tbody>${bodyRows}${totRow}</tbody>
+      </table>
+    </div>
+    ${footnote}`;
+}
+
+function renderAdherenteCard(r) {
+  const isExp = adherenteExpandido.has(r.adherente);
+  const tieneCompromiso = r.compromisoAnual > 0;
+  const badge = !tieneCompromiso ? "" : (() => {
+    const badgeClass = r.estado==="OK" ? "reint-badge-ok" : r.estado==="PARCIAL" ? "reint-badge-parcial" : "reint-badge-sin";
+    const badgeTxt = r.estado==="OK" ? "✅ Al día" : r.estado==="PARCIAL" ? "⚠️ Parcial" : "🔴 Sin aportes";
+    return `<span class="reint-badge ${badgeClass}">${badgeTxt}</span>`;
+  })();
+
+  const body = tieneCompromiso ? `
+    <div class="reint-card-body">
+      <div class="reint-card-col">
+        <label>Aportado</label>
+        <div class="val ing">${fmt(r.totalAportado)}</div>
+      </div>
+      <div class="reint-card-col">
+        <label>Compromiso</label>
+        <div class="val" style="color:var(--text2)">${fmt(r.compromisoAnual)}</div>
+      </div>
+      <div class="reint-card-col">
+        <label>Diferencia</label>
+        <div class="val ${r.diferencia>=0?'ing':'egr'}">${r.diferencia>=0?"+":"-"}${fmt(Math.abs(r.diferencia))}</div>
+      </div>
+    </div>
+    <p class="note" style="text-align:center;margin-top:6px">${r.mesesPagados} de ${r.cuotasAnuales} cuotas con pagos registrados</p>` : `
+    <div style="text-align:center">
+      <label style="display:block;font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Total aportado</label>
+      <div class="val ing" style="font-size:16px;font-family:var(--mono);font-weight:600">${fmt(r.totalAportado)}</div>
+      <p class="note" style="margin-top:4px">${r.mesesPagados} mes${r.mesesPagados!==1?"es":""} con pagos</p>
+    </div>`;
+
+  return `
+  <div class="reint-card" onclick="toggleAdherenteDetalle('${esc(r.adherente)}')">
+    <div class="reint-card-hdr">
+      <span class="reint-card-nombre" title="${esc(r.adherente)}">${esc(r.adherente)}</span>
+      ${badge}
+    </div>
+    ${body}
+    ${isExp ? `<div class="reint-card-detalle" onclick="event.stopPropagation()">${renderAdherenteDetalle(r)}</div>` : ""}
+  </div>`;
+}
+
+function renderAdherentesCards(rows) {
+  const sinAportes    = rows.filter(r => r.estado === "SIN").sort((a,b) => Math.abs(b.diferencia||0) - Math.abs(a.diferencia||0));
+  const parcial       = rows.filter(r => r.estado === "PARCIAL").sort((a,b) => Math.abs(b.diferencia||0) - Math.abs(a.diferencia||0));
+  const sinCompromiso = rows.filter(r => r.estado === null).sort((a,b) => a.adherente.localeCompare(b.adherente));
+  const alDia         = rows.filter(r => r.estado === "OK");
+
+  const cardsHtml = [...sinAportes, ...parcial, ...sinCompromiso].map(renderAdherenteCard).join("");
+
+  const alDiaKey  = "__aldia_adh__";
+  const alDiaOpen = adherenteExpandido.has(alDiaKey);
+  const alDiaHtml = alDia.length ? `
+    <button class="reint-aldia-toggle" onclick="toggleAdherenteDetalle('${alDiaKey}')">
+      Ver adherentes al día (${alDia.length}) ${alDiaOpen ? "▲" : "▼"}
+    </button>
+    ${alDiaOpen ? alDia.map(renderAdherenteCard).join("") : ""}` : "";
+
+  return `${cardsHtml}${alDiaHtml}`;
+}
+
+// Detalle expandible: pagos agrupados por mes, marcando huecos sin pago
+// (solo entre el primer y el último mes con pago, sin proyectar meses futuros)
+function renderAdherenteDetalle(r) {
+  if (!r.movs.length) {
+    return `<div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
+      <p class="note" style="padding:6px 0">Sin pagos registrados</p>
+    </div>`;
+  }
+  const porMes = {};
+  for (const m of r.movs) {
+    const k = mesFromRecord(m);
+    if (!porMes[k]) porMes[k] = [];
+    porMes[k].push(m);
+  }
+  const mesesConPago = Object.keys(porMes).sort();
+  const primerMes = mesesConPago[0];
+  const ultimoMes = mesesConPago[mesesConPago.length-1];
+  const mostrarHuecos = r.compromisoAnual > 0;
+
+  const bloques = [];
+  let k = primerMes;
+  while (mesToNum(k) <= mesToNum(ultimoMes)) {
+    const movsMes = porMes[k];
+    if (movsMes && movsMes.length) {
+      const total = movsMes.reduce((s,m) => s + m.ingreso, 0);
+      const sorted = [...movsMes].sort((a,b) => a.fecha.localeCompare(b.fecha));
+      const pagosHtml = sorted.map(m => {
+        const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
+        return `
+        <div class="reint-detalle-montos" style="padding:3px 0 3px 10px">
+          <span style="color:var(--text3)">${fechaD} · ${esc(m.concepto)||"Adhesion"}</span>
+          <span class="ing">${fmt(m.ingreso)}</span>
+        </div>`;
+      }).join("");
+      bloques.push(`
+        <div class="reint-detalle-row">
+          <div class="reint-detalle-montos" style="font-size:13px;font-weight:600">
+            <span style="color:var(--text)">${mesLabel(k)}</span>
+            <span class="ing">${fmt(total)}</span>
+          </div>
+          ${pagosHtml}
+        </div>`);
+    } else if (mostrarHuecos) {
+      bloques.push(`
+        <div class="reint-detalle-row">
+          <div class="reint-detalle-montos" style="font-size:13px">
+            <span style="color:var(--text3)">${mesLabel(k)}</span>
+            <span style="color:var(--red);font-weight:600">Sin pago</span>
+          </div>
+        </div>`);
+    }
+    k = nextMes(k);
+  }
+  return `<div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">${bloques.join("")}</div>`;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2594,21 +2907,30 @@ async function deleteGrupo(id) {
 let adhSearch = "";
 let adhShowHistorial = false;
 
+function renderAdherenteItem(a) {
+  const compromisoAnual = (a.cuotaMensual||0) * (a.cuotasAnuales||0);
+  const sub = compromisoAnual > 0
+    ? `<div class="entity-sub">Compromiso anual: ${fmt(compromisoAnual)} (${a.cuotasAnuales} × ${fmt(a.cuotaMensual)})</div>`
+    : "";
+  return `
+    <div class="entity-item" id="adh-${a.id}">
+      <div style="flex:1;min-width:0">
+        <span class="entity-name">${esc(a.nombre)}</span>
+        ${sub}
+      </div>
+      <button class="btn-sm accent" onclick="openAdherenteModal('${a.id}')">✏️</button>
+      <button class="btn-sm danger" id="adel-${a.id}" onclick="confirmDeleteAdherente('${a.id}')">✕</button>
+    </div>`;
+}
+
 function renderAdherentes() {
   const filtered = [...adherentes]
     .filter(a => !adhSearch || a.nombre.toLowerCase().includes(adhSearch.toLowerCase()))
     .sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  const list = filtered.map(a => `
-    <div class="entity-item" id="adh-${a.id}">
-      <span class="entity-name">${esc(a.nombre)}</span>
-      <button class="btn-sm danger" id="adel-${a.id}" onclick="confirmDeleteAdherente('${a.id}')">✕</button>
-    </div>`).join("");
+  const list = filtered.map(renderAdherenteItem).join("");
 
   return `
-    <div class="add-row">
-      <input class="inp" id="new-adh-input" type="text" placeholder="Nombre del adherente…">
-      <button class="btn-sm accent" onclick="addAdherente()">+ Agregar</button>
-    </div>
+    <button class="btn-secondary" onclick="openAdherenteModal(null)" style="margin-bottom:12px">+ Agregar Adherente</button>
     <div class="search-wrap" style="margin-bottom:10px">
       <span class="search-icon">🔍</span>
       <input class="inp" type="search" placeholder="Buscar adherente…" value="${esc(adhSearch)}"
@@ -2627,22 +2949,69 @@ function renderAdherentes_listOnly() {
   const filtered = [...adherentes]
     .filter(a => !adhSearch || a.nombre.toLowerCase().includes(adhSearch.toLowerCase()))
     .sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  return filtered.map(a => `
-    <div class="entity-item" id="adh-${a.id}">
-      <span class="entity-name">${esc(a.nombre)}</span>
-      <button class="btn-sm danger" id="adel-${a.id}" onclick="confirmDeleteAdherente('${a.id}')">✕</button>
-    </div>`).join("") || '<p class="note">Sin adherentes</p>';
+  return filtered.map(renderAdherenteItem).join("") || '<p class="note">Sin adherentes</p>';
 }
 
-async function addAdherente() {
-  const inp = document.getElementById("new-adh-input");
-  const nombre = (inp?.value || "").trim();
+function openAdherenteModal(adherenteId) {
+  const a = adherenteId ? adherentes.find(x => x.id === adherenteId) : null;
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${a ? "Editar adherente" : "Nuevo adherente"}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Nombre</label>
+            <input class="inp" id="adh-nombre" type="text" placeholder="Nombre del adherente…" value="${esc(a?a.nombre:"")}">
+          </div>
+          <div class="field">
+            <label>Cuota mensual $</label>
+            <input class="inp" id="adh-cuota" type="number" placeholder="0 = sin definir" value="${a&&a.cuotaMensual?a.cuotaMensual:""}" oninput="updateAdhCompromisoPreview()">
+          </div>
+          <div class="field">
+            <label>Cuotas por año</label>
+            <input class="inp" id="adh-cuotas-anuales" type="number" placeholder="ej: 8" value="${a&&a.cuotasAnuales?a.cuotasAnuales:""}" oninput="updateAdhCompromisoPreview()">
+          </div>
+          <p class="note" id="adh-compromiso-preview"></p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" onclick="saveAdherenteModal('${adherenteId||""}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+  updateAdhCompromisoPreview();
+}
+
+function updateAdhCompromisoPreview() {
+  const el = document.getElementById("adh-compromiso-preview");
+  if (!el) return;
+  const cuota  = Number(document.getElementById("adh-cuota")?.value || 0);
+  const cuotas = Number(document.getElementById("adh-cuotas-anuales")?.value || 0);
+  el.textContent = cuota > 0 && cuotas > 0
+    ? `Compromiso anual: ${fmt(cuota*cuotas)} (${cuotas} × ${fmt(cuota)})`
+    : "";
+}
+
+async function saveAdherenteModal(adherenteId) {
+  const nombre = (document.getElementById("adh-nombre")?.value || "").trim();
+  const cuotaMensual  = Number(document.getElementById("adh-cuota")?.value || 0);
+  const cuotasAnuales = Number(document.getElementById("adh-cuotas-anuales")?.value || 0);
   if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  const adherente = adherenteId
+    ? { id:adherenteId, nombre, cuotaMensual, cuotasAnuales }
+    : { nombre, cuotaMensual, cuotasAnuales };
   try {
-    const r = await Storage.saveAdherente({ nombre });
+    const r = await Storage.saveAdherente(adherente);
     if (!r.ok) throw new Error(r.error || "Error");
-    adherentes.push({ id: r.id, nombre });
-    toast("Adherente agregado ✓", "ok");
+    if (adherenteId) {
+      const idx = adherentes.findIndex(a => a.id === adherenteId);
+      if (idx >= 0) adherentes[idx] = { ...adherentes[idx], nombre, cuotaMensual, cuotasAnuales };
+    } else {
+      adherentes.push({ id:r.id, nombre, cuotaMensual, cuotasAnuales });
+    }
+    toast(adherenteId ? "Adherente actualizado ✓" : "Adherente agregado ✓", "ok");
+    closeModal();
     renderEntidades();
   } catch(e) { toast("Error: " + e.message, "err"); }
 }

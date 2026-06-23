@@ -252,6 +252,9 @@ textarea.inp { resize:none; }
 .jugador-col { min-width:140px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .reint-table { font-size:12px; }
 .reint-table td, .reint-table th { white-space:nowrap; }
+.reint-table-mobile { font-size:12px; }
+.reint-table-mobile .jugador-col { min-width:0; max-width:100px; }
+.reint-section { overflow-x:hidden; max-width:100%; box-sizing:border-box; }
 
 /* ── Reintegro: toggle de vista ── */
 .reint-view-toggle { display:flex; gap:0; border:1px solid var(--border); border-radius:var(--rs); overflow:hidden; flex-shrink:0; }
@@ -273,12 +276,27 @@ textarea.inp { resize:none; }
 .reint-card-nombre { font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 .reint-card-body { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; text-align:center; }
 .reint-card-col label { display:block; font-size:10px; color:var(--text3); text-transform:uppercase; letter-spacing:.05em; margin-bottom:3px; }
-.reint-card-col .val { font-family:var(--mono); font-size:13px; font-weight:600; color:var(--text); }
+.reint-card-col .val { font-family:var(--mono); font-size:14px; font-weight:600; color:var(--text); }
 .reint-card-detalle { margin-top:10px; cursor:default; }
 .reint-aldia-toggle {
   background:none; border:1px solid var(--border); color:var(--text2); font-family:var(--font);
   font-size:13px; font-weight:500; padding:11px; width:100%; border-radius:var(--rs); cursor:pointer;
   text-align:left; margin-bottom:8px;
+}
+
+/* ── Reintegro: detalle expandible (lista vertical, sin tabla) ── */
+.reint-detalle-row { padding:9px 0; border-bottom:1px solid var(--border); }
+.reint-detalle-row:last-child { border-bottom:none; }
+.reint-detalle-top { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:3px; }
+.reint-detalle-fecha { font-size:11px; color:var(--text3); font-family:var(--mono); }
+.reint-detalle-badge { font-size:10px; font-weight:600; color:var(--warn); background:var(--warn-bg); padding:2px 6px; border-radius:4px; white-space:nowrap; flex-shrink:0; }
+.reint-detalle-concepto { font-size:13px; color:var(--text); margin-bottom:4px; word-break:break-word; }
+.reint-detalle-montos { display:flex; justify-content:space-between; gap:8px; font-size:12px; font-family:var(--mono); font-weight:600; flex-wrap:wrap; }
+.reint-detalle-montos .ing { color:var(--green); }
+.reint-detalle-montos .egr { color:var(--red); }
+
+@media (max-width:599px) {
+  .reint-card-nombre { white-space:normal; overflow:visible; text-overflow:unset; }
 }
 
 /* ── Reintegro alert ── */
@@ -1986,14 +2004,16 @@ function renderReintegrosMedicos() {
     : reintegroVista === "cards" ? renderReintegrosCards(rows) : renderReintegrosTabla(rows);
 
   return `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
-        <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
-        <select class="inp" style="flex:1" onchange="setReintegroAnio(this.value)">${anioOptions}</select>
+    <div class="reint-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
+          <select class="inp" style="flex:1" onchange="setReintegroAnio(this.value)">${anioOptions}</select>
+        </div>
+        ${viewToggle}
       </div>
-      ${viewToggle}
-    </div>
-    ${body}`;
+      ${body}
+    </div>`;
 }
 
 function estadoCorto(estado) {
@@ -2004,6 +2024,8 @@ function estadoCorto(estado) {
 }
 
 function renderReintegrosTabla(rows) {
+  const isMobile = window.matchMedia("(max-width:599px)").matches;
+
   let totAbonado=0, totReintegrado=0, totPendiente=0;
   const bodyRows = rows.map(r => {
     totAbonado     += r.abonado;
@@ -2012,36 +2034,42 @@ function renderReintegrosTabla(rows) {
     const isExp = reintegroExpandido.has(r.jugador);
     const detalle = isExp ? renderReintegroDetalle(r) : "";
     const rowClass = r.estado === "OK" ? "reint-row row-ok" : "reint-row";
+    const reintegradoCell = isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${fmt(r.reintegrado)}</td>`;
     return `
     <tr class="${rowClass}" onclick="toggleReintegroDetalle('${esc(r.jugador)}')">
       <td class="jugador-col" title="${esc(r.jugador)}">${esc(r.jugador)}</td>
       <td style="text-align:right;font-family:var(--mono)">${fmt(r.abonado)}</td>
-      <td style="text-align:right;font-family:var(--mono)">${fmt(r.reintegrado)}</td>
+      ${reintegradoCell}
       <td style="text-align:right;font-family:var(--mono)" class="${r.pendiente>0?'egr':'ing'}">${fmt(Math.max(r.pendiente,0))}</td>
       <td>${estadoCorto(r.estado)}</td>
     </tr>${isExp ? `
-    <tr><td colspan="5" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
+    <tr><td colspan="${isMobile?4:5}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
   }).join("");
 
+  const totReintegradoCell = isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${fmt(totReintegrado)}</td>`;
   const totRow = `<tr class="reint-tot-row">
     <td class="jugador-col">TOTALES</td>
     <td style="text-align:right;font-family:var(--mono)">${fmt(totAbonado)}</td>
-    <td style="text-align:right;font-family:var(--mono)">${fmt(totReintegrado)}</td>
+    ${totReintegradoCell}
     <td style="text-align:right;font-family:var(--mono)" class="${totPendiente>0?'egr':'ing'}">${fmt(totPendiente)}</td>
     <td></td>
   </tr>`;
 
+  const reintegradoHeader = isMobile ? "" : `<th style="text-align:right">Reintegrado</th>`;
+  const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Reintegrado = Abonado − Pendiente</p>` : "";
+
   return `
-    <table class="sum-table reint-table">
+    <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}">
       <thead><tr>
         <th class="jugador-col">Jugador</th>
         <th style="text-align:right">Abonado</th>
-        <th style="text-align:right">Reintegrado</th>
+        ${reintegradoHeader}
         <th style="text-align:right">Pendiente</th>
         <th>Estado</th>
       </tr></thead>
       <tbody>${bodyRows}${totRow}</tbody>
-    </table>`;
+    </table>
+    ${footnote}`;
 }
 
 function renderReintegroCard(r) {
@@ -2099,27 +2127,29 @@ function renderReintegroDetalle(r) {
   const rows = sorted.map(m => {
     saldo += (m.tipo === "INGRESO" ? m.ingreso : -m.egreso);
     const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
-    const reintBadge = (m.tipo==="EGRESO" && m.seguroReintegro) ? ` <span class="tag tag-adh">tiene reintegro</span>` : "";
-    const saldoClass = saldo === 0 ? "" : saldo < 0 ? "egr" : "ing";
-    const saldoSign = saldo < 0 ? "-" : saldo > 0 ? "+" : "";
-    return `<tr>
-      <td style="font-family:var(--mono);font-size:11px">${fechaD}</td>
-      <td style="font-size:11px">${mesLabel(mesFromRecord(m))}</td>
-      <td style="font-size:11px">${esc(m.concepto)||"—"}${reintBadge}</td>
-      <td style="text-align:right;font-family:var(--mono);font-size:11px" class="egr">${m.tipo==="EGRESO"?fmt(m.egreso):""}</td>
-      <td style="text-align:right;font-family:var(--mono);font-size:11px" class="ing">${m.tipo==="INGRESO"?fmt(m.ingreso):""}</td>
-      <td style="text-align:right;font-family:var(--mono);font-size:11px;font-weight:600" class="${saldoClass}">${saldoSign}${fmt(saldo)}</td>
-    </tr>`;
+    const mesTxt = mesLabel(mesFromRecord(m));
+    const reintBadge = (m.tipo==="EGRESO" && m.seguroReintegro) ? `<span class="reint-detalle-badge">tiene reintegro</span>` : "";
+    const montoLbl = m.tipo === "INGRESO" ? "Ingreso" : "Egreso";
+    const montoCls = m.tipo === "INGRESO" ? "ing" : "egr";
+    const montoVal = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
+    const saldoCls  = saldo < 0 ? "egr" : "ing";
+    const saldoSign = saldo < 0 ? "-" : "";
+    return `
+    <div class="reint-detalle-row">
+      <div class="reint-detalle-top">
+        <span class="reint-detalle-fecha">${fechaD} · ${mesTxt}</span>
+        ${reintBadge}
+      </div>
+      <div class="reint-detalle-concepto">${esc(m.concepto)||"—"}</div>
+      <div class="reint-detalle-montos">
+        <span class="${montoCls}">${montoLbl}: ${fmt(montoVal)}</span>
+        <span class="${saldoCls}">Saldo: ${saldoSign}${fmt(saldo)}</span>
+      </div>
+    </div>`;
   }).join("");
   return `
-    <div style="background:var(--bg3);padding:10px 8px 4px;border-radius:var(--rs);margin:4px 0 10px">
-      <table class="sum-table" style="margin-bottom:0">
-        <thead><tr>
-          <th>Fecha</th><th>Mes</th><th>Concepto</th>
-          <th style="text-align:right">Egr.</th><th style="text-align:right">Ing.</th><th style="text-align:right">Saldo acum.</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+    <div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
+      ${rows}
     </div>`;
 }
 

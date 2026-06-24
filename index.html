@@ -2046,9 +2046,9 @@ function renderReintegrosMedicos() {
     </div>`;
 }
 
-function estadoCorto(estado) {
+function estadoCorto(estado, diferencia) {
   return estado==="OK"      ? "✅ OK"
-    : estado==="DIF"     ? "🔵 Diferencia"
+    : estado==="DIF"     ? `🔵 Diferencia (${fmt(diferencia)})`
     : estado==="PARCIAL" ? "⚠️ Parcial"
     : "🔴 Pendiente";
 }
@@ -2071,7 +2071,7 @@ function renderReintegrosTabla(rows) {
       <td style="text-align:right;font-family:var(--mono)">${fmt(r.abonado)}</td>
       ${reintegradoCell}
       <td style="text-align:right;font-family:var(--mono)" class="${r.pendiente>0?'egr':'ing'}">${fmt(Math.max(r.pendiente,0))}</td>
-      <td>${estadoCorto(r.estado)}</td>
+      <td>${estadoCorto(r.estado, r.diferencia)}</td>
     </tr>${isExp ? `
     <tr><td colspan="${isMobile?4:5}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
   }).join("");

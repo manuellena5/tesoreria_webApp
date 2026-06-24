@@ -1271,6 +1271,7 @@ function renderMovimientos() {
       <span class="mes-sel-label">${mesLabel(sharedMes)}</span>
       <button class="mes-sel-btn" onclick="changeMes(1)">▶</button>
     </div>
+    <button class="btn-export" style="margin-bottom:14px" onclick="exportExcel(sharedMes)">📥 Exportar ${mesLabel(sharedMes)} a Excel</button>
 
     <div class="sum-grid three">
       <div class="stat-card">
@@ -3131,8 +3132,15 @@ function renderConfig() {
     <!-- Exportar -->
     <div class="cfg-card">
       <div class="cfg-title">📤 Exportar a Excel</div>
-      <button class="btn-export" onclick="exportExcel(true)">📥 Exportar mes actual (${mesLabel(sharedMes)})</button>
-      <button class="btn-export" onclick="exportExcel(false)">📥 Exportar todos los movimientos</button>
+      <button class="btn-export" onclick="exportExcel(sharedMes)">📥 Exportar mes actual (${mesLabel(sharedMes)})</button>
+      <button class="btn-export" onclick="exportExcel(null)">📥 Exportar todos los movimientos</button>
+      <div class="field" style="margin-top:8px">
+        <label>Exportar un mes específico</label>
+        <div style="display:flex;gap:8px">
+          <input class="inp" id="export-mes-picker" type="month" value="${esc(sharedMes)}" style="flex:1">
+          <button class="btn-export" style="width:auto;white-space:nowrap;margin-bottom:0" onclick="exportExcel(document.getElementById('export-mes-picker').value)">📥 Exportar</button>
+        </div>
+      </div>
     </div>
 
     <!-- Importar -->
@@ -3201,10 +3209,11 @@ async function saveMetodos() {
 }
 
 // ── Excel Export ──────────────────────────────────────────────
-function exportExcel(mesOnly) {
+// mes: "YYYY-MM" para exportar solo ese mes, o null/"" para exportar todo el histórico
+function exportExcel(mes) {
   if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
-  let data = mesOnly
-    ? movimientos.filter(m => getMes(m.fecha) === sharedMes)
+  let data = mes
+    ? movimientos.filter(m => getMes(m.fecha) === mes)
     : [...movimientos];
   data = data.sort((a,b) => a.fecha.localeCompare(b.fecha));
 
@@ -3228,7 +3237,7 @@ function exportExcel(mesOnly) {
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
   ws["!cols"] = [8,12,8,30,30,12,12,12,12,12,14,20,20,20,14].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
-  const fname = mesOnly ? `tesoreria_${sharedMes.replace("-","")}.xlsx` : "tesoreria_todos.xlsx";
+  const fname = mes ? `tesoreria_${mes.replace("-","")}.xlsx` : "tesoreria_todos.xlsx";
   XLSX.writeFile(wb, fname);
   toast("Excel exportado ✓", "ok");
 }

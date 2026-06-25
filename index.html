@@ -688,6 +688,10 @@ function esc(s) {
 function normStr(s) {
   return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim().toLowerCase();
 }
+// Limpia el prefijo "GRP:" que versiones viejas guardaban por error en jugadorCT
+function stripGrpPrefix(s) {
+  return String(s||"").replace(/^GRP:/i, "").trim();
+}
 const DIAS_SEMANA = ["Dom","Lun","Mar","Mi\u00e9","Jue","Vie","S\u00e1b"];
 // "2026-06-23" \u2192 "Mar 23/06"
 function fechaCorta(fecha) {
@@ -821,7 +825,7 @@ async function loadAllData() {
       Storage.getConfig(),
       Storage.listPartidos(),
     ]);
-    if (rMov.ok) movimientos = rMov.movimientos || [];
+    if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
     if (rJug.ok) jugadores   = rJug.jugadores   || [];
     if (rGrp.ok) grupos      = rGrp.grupos       || [];
     if (rAdh.ok) adherentes  = rAdh.adherentes   || [];
@@ -915,10 +919,10 @@ function renderNuevo() {
   const jugOptions = jugadores.sort((a,b)=>a.nombre.localeCompare(b.nombre))
     .map(j => `<option value="${esc(j.nombre)}" ${normStr(F.jugadorCT)===normStr(j.nombre)?"selected":""}>${esc(j.nombre)}</option>`).join("");
   const grpOptions = grupos.sort((a,b)=>a.nombre.localeCompare(b.nombre))
-    .map(g => `<option value="GRP:${esc(g.nombre)}" ${normStr(F.jugadorCT)===normStr("GRP:"+g.nombre)?"selected":""}>${esc(g.nombre)}</option>`).join("");
+    .map(g => `<option value="${esc(g.nombre)}" ${normStr(F.jugadorCT)===normStr(g.nombre)?"selected":""}>${esc(g.nombre)}</option>`).join("");
   // Si el valor almacenado no coincide con ningún jugador/grupo actual, lo agregamos como opción visible
   const jugCTMatchFound = !F.jugadorCT || jugadores.some(j => normStr(j.nombre)===normStr(F.jugadorCT))
-    || grupos.some(g => normStr("GRP:"+g.nombre)===normStr(F.jugadorCT));
+    || grupos.some(g => normStr(g.nombre)===normStr(F.jugadorCT));
   const jugCTOrphan = F.jugadorCT && !jugCTMatchFound
     ? `<option value="${esc(F.jugadorCT)}" selected>${esc(F.jugadorCT)}</option>` : "";
   const adhOptions = adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre))
@@ -3635,7 +3639,7 @@ async function importExcel(event) {
     }
     // Reload
     const r = await Storage.listMov();
-    if (r.ok) movimientos = r.movimientos || [];
+    if (r.ok) movimientos = (r.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
     updateBadge();
     hideOverlay();
     toast(`${saved} movimientos importados ✓`, "ok");

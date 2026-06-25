@@ -3219,23 +3219,25 @@ function exportExcel(mes) {
 
   const headers = ["MES","Fecha","Cód. Rubro","Rubro","CONCEPTO",
                    "# EGRESOS","# INGRESOS","# MONTO FINAL","SALDO",
-                   "CUENTA","MODO PAGO","Jug/Ct","Adherente","Observacion","Comprobante"];
+                   "CUENTA","MODO PAGO","Jug/Ct","Adherente","Partido","Observacion","Comprobante"];
   let saldo = 0;
   const rows = data.map(m => {
     const ing = m.tipo==="INGRESO" ? m.ingreso : 0;
     const egr = m.tipo==="EGRESO"  ? m.egreso  : 0;
     if (m.tipo !== "INTERNO") saldo += ing - egr;
+    const p = m.partidoId ? partidos.find(x => x.id === m.partidoId) : null;
+    const partidoLabel = p ? `${p.numeroFecha} — ${p.rival}` : "";
     return [
       m.mes, m.fecha, m.codRubro, m.rubro, m.concepto,
       egr||"", ing||"", m.montoFinal||"", saldo,
       m.cuenta, m.modoPago, m.jugadorCT||"", m.adherente||"",
-      m.observacion||"", m.comprobante||""
+      partidoLabel, m.observacion||"", m.comprobante||""
     ];
   });
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  ws["!cols"] = [8,12,8,30,30,12,12,12,12,12,14,20,20,20,14].map(w=>({wch:w}));
+  ws["!cols"] = [8,12,8,30,30,12,12,12,12,12,14,20,20,24,20,14].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
   const fname = mes ? `tesoreria_${mes.replace("-","")}.xlsx` : "tesoreria_todos.xlsx";
   XLSX.writeFile(wb, fname);

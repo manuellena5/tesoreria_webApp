@@ -632,6 +632,7 @@ let adherenteAnio       = String(new Date().getFullYear());
 let adherenteExpandido  = new Set();
 let adherenteVista      = getDefaultVista("adherentes_vista");
 let jugadorResAnio       = String(new Date().getFullYear());
+let jugadorResMes        = "";
 let jugadorResExpandido  = new Set();
 let jugadorResVista       = getDefaultVista("jugadores_vista");
 let jugadorResAgrupacion  = localStorage.getItem("jugadores_agrupacion") || "jugador";
@@ -2482,6 +2483,13 @@ function renderAdherenteDetalle(r) {
 // ── Jugadores — gastos/recuperos netos por jugador o grupo ──────
 function setJugadorResAnio(v) {
   jugadorResAnio = v;
+  jugadorResMes = "";
+  jugadorResExpandido.clear();
+  renderResumen();
+}
+
+function setJugadorResMes(v) {
+  jugadorResMes = v;
   jugadorResExpandido.clear();
   renderResumen();
 }
@@ -2521,11 +2529,13 @@ function jugadorResMiembrosNombres(grupo) {
 }
 
 // anio: string "YYYY" para filtrar, o "" para todos los años
+// mes: string "MM" para filtrar dentro del año seleccionado, o "" para todo el año
 // agrupacion: "jugador" (prorratea grupos entre miembros) o "grupo" (solo grupos, monto completo)
-function calcJugadoresResumen(anio, agrupacion) {
+function calcJugadoresResumen(anio, mes, agrupacion) {
   const movs = movimientos.filter(m => {
     if (!m.jugadorCT) return false;
     if (anio && m.fecha.slice(0,4) !== anio) return false;
+    if (anio && mes && m.fecha.slice(5,7) !== mes) return false;
     return jugadorResCategoria(m.codRubro) !== null;
   });
 
@@ -2597,11 +2607,26 @@ function renderJugadoresResumen() {
     jugadorResAnio = anios[0];
   }
 
-  const rows = calcJugadoresResumen(jugadorResAnio, jugadorResAgrupacion)
+  // El filtro por mes solo aplica cuando hay un año específico seleccionado
+  const mesesDisponibles = jugadorResAnio
+    ? [...new Set(movsAll.filter(m => m.fecha.slice(0,4) === jugadorResAnio).map(m => m.fecha.slice(5,7)))].sort()
+    : [];
+  if (jugadorResMes && !mesesDisponibles.includes(jugadorResMes)) jugadorResMes = "";
+
+  const rows = calcJugadoresResumen(jugadorResAnio, jugadorResMes, jugadorResAgrupacion)
     .sort((a,b) => Math.abs(b.total) - Math.abs(a.total));
 
   const anioOptions = `<option value="" ${jugadorResAnio===""?"selected":""}>Todos los años</option>` +
     anios.map(a => `<option value="${a}" ${jugadorResAnio===a?"selected":""}>${a}</option>`).join("");
+
+  const mesSelector = jugadorResAnio ? `
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Mes:</label>
+          <select class="inp" style="flex:1" onchange="setJugadorResMes(this.value)">
+            <option value="" ${jugadorResMes===""?"selected":""}>Todo el año</option>
+            ${mesesDisponibles.map(mm => `<option value="${mm}" ${jugadorResMes===mm?"selected":""}>${MESES_LABELS[Number(mm)-1]}</option>`).join("")}
+          </select>
+        </div>` : "";
 
   const viewToggle = `
     <div class="reint-view-toggle">
@@ -2616,7 +2641,8 @@ function renderJugadoresResumen() {
     </div>`;
 
   const totalGastado = rows.reduce((s,r) => s + (r.total < 0 ? -r.total : 0), 0);
-  const totalesLine = `${rows.length} ${jugadorResAgrupacion==='grupo'?'grupo':'jugador'}${rows.length!==1?"s":""} · Total gastado: ${fmt(totalGastado)}`;
+  const periodoTxt = jugadorResMes ? ` (${MESES_LABELS[Number(jugadorResMes)-1]})` : "";
+  const totalesLine = `${rows.length} ${jugadorResAgrupacion==='grupo'?'grupo':'jugador'}${rows.length!==1?"s":""}${periodoTxt} · Total gastado: ${fmt(totalGastado)}`;
 
   const body = !rows.length
     ? `<p class="note" style="text-align:center;padding:16px 0">Sin movimientos con jugador/grupo asignado</p>`
@@ -2629,6 +2655,7 @@ function renderJugadoresResumen() {
           <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
           <select class="inp" style="flex:1" onchange="setJugadorResAnio(this.value)">${anioOptions}</select>
         </div>
+        ${mesSelector}
         ${viewToggle}
       </div>
       <div style="margin-bottom:8px">${agrupacionToggle}</div>

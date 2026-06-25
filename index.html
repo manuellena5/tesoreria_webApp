@@ -631,6 +631,10 @@ let reintegroVista     = getDefaultVista("reintegros_vista");
 let adherenteAnio       = String(new Date().getFullYear());
 let adherenteExpandido  = new Set();
 let adherenteVista      = getDefaultVista("adherentes_vista");
+let jugadorResAnio       = String(new Date().getFullYear());
+let jugadorResExpandido  = new Set();
+let jugadorResVista       = getDefaultVista("jugadores_vista");
+let jugadorResAgrupacion  = localStorage.getItem("jugadores_agrupacion") || "jugador";
 let movOrden = localStorage.getItem("clubfm_orden_mov") || "fecha_desc";
 
 // "cards" en mobile (<600px), "tabla" en desktop; el usuario puede override y se persiste
@@ -1760,6 +1764,7 @@ function renderResumen() {
       <button class="entity-tab ${resumenSubTab==='partido'?'active':''}"    onclick="setResumenSubTab('partido')">Por Partido</button>
       <button class="entity-tab ${resumenSubTab==='reintegros'?'active':''}" onclick="setResumenSubTab('reintegros')">Reintegros${pendienteGlobal>0?" 🏥":""}</button>
       <button class="entity-tab ${resumenSubTab==='adherentes'?'active':''}" onclick="setResumenSubTab('adherentes')">Adherentes${adherentePendienteGlobal>0?" 👥":""}</button>
+      <button class="entity-tab ${resumenSubTab==='jugadoresRes'?'active':''}" onclick="setResumenSubTab('jugadoresRes')">Jugadores</button>
     </div>`;
 
   const alertHtml = (pendienteGlobal > 0 && resumenSubTab !== "reintegros") ? `
@@ -1941,6 +1946,7 @@ function renderResumen() {
 
     ${resumenSubTab === "reintegros" ? renderReintegrosMedicos() : ""}
     ${resumenSubTab === "adherentes" ? renderAdherentesResumen() : ""}
+    ${resumenSubTab === "jugadoresRes" ? renderJugadoresResumen() : ""}
   `);
 }
 
@@ -1967,6 +1973,7 @@ function setResumenSubTab(tab) {
   resumenSubTab = tab;
   reintegroExpandido.clear();
   adherenteExpandido.clear();
+  jugadorResExpandido.clear();
   renderResumen();
 }
 
@@ -2470,6 +2477,294 @@ function renderAdherenteDetalle(r) {
     k = nextMes(k);
   }
   return `<div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">${bloques.join("")}</div>`;
+}
+
+// ── Jugadores — gastos/recuperos netos por jugador o grupo ──────
+function setJugadorResAnio(v) {
+  jugadorResAnio = v;
+  jugadorResExpandido.clear();
+  renderResumen();
+}
+
+function setJugadorResVista(v) {
+  jugadorResVista = v;
+  localStorage.setItem("jugadores_vista", v);
+  renderResumen();
+}
+
+function setJugadorResAgrupacion(v) {
+  jugadorResAgrupacion = v;
+  jugadorResExpandido.clear();
+  localStorage.setItem("jugadores_agrupacion", v);
+  renderResumen();
+}
+
+function toggleJugadorResDetalle(key) {
+  if (jugadorResExpandido.has(key)) jugadorResExpandido.delete(key);
+  else jugadorResExpandido.add(key);
+  renderResumen();
+}
+
+// Devuelve la categoría de un codRubro para la sección Jugadores, o null si se excluye
+// (rubro 6 = Adherentes, rubro 49 = Internos)
+function jugadorResCategoria(codRubro) {
+  if (codRubro === "18" || codRubro === "19") return "sueldos";
+  if (codRubro === "16") return "movilidad";
+  if (codRubro === "20" || codRubro === "37") return "atencion";
+  if (codRubro === "21") return "medico";
+  if (codRubro === "6" || codRubro === "49") return null;
+  return "otros";
+}
+
+function jugadorResMiembrosNombres(grupo) {
+  return (grupo.miembros || []).map(id => jugadores.find(j => j.id === id)?.nombre).filter(Boolean);
+}
+
+// anio: string "YYYY" para filtrar, o "" para todos los años
+// agrupacion: "jugador" (prorratea grupos entre miembros) o "grupo" (solo grupos, monto completo)
+function calcJugadoresResumen(anio, agrupacion) {
+  const movs = movimientos.filter(m => {
+    if (!m.jugadorCT) return false;
+    if (anio && m.fecha.slice(0,4) !== anio) return false;
+    return jugadorResCategoria(m.codRubro) !== null;
+  });
+
+  const map = {};
+  function ensure(key, esGrupo) {
+    if (!map[key]) map[key] = { nombre:key, esGrupo, sueldos:0, movilidad:0, atencion:0, medico:0, otros:0, movimientos:[] };
+    return map[key];
+  }
+
+  if (agrupacion === "grupo") {
+    for (const m of movs) {
+      const grupo = grupos.find(g => g.nombre === m.jugadorCT);
+      if (!grupo) continue;
+      const cat  = jugadorResCategoria(m.codRubro);
+      const neto = m.ingreso - m.egreso;
+      const row  = ensure(grupo.nombre, true);
+      row[cat] += neto;
+      row.movimientos.push({ ...m, montoAplicado: neto, prorrateado: false });
+    }
+    for (const key in map) {
+      const grupo = grupos.find(g => g.nombre === key);
+      map[key].miembros = grupo ? jugadorResMiembrosNombres(grupo) : [];
+    }
+  } else {
+    const directos = movs.filter(m => !grupos.some(g => g.nombre === m.jugadorCT));
+    const grupales = movs.filter(m => grupos.some(g => g.nombre === m.jugadorCT));
+
+    for (const m of directos) {
+      const cat  = jugadorResCategoria(m.codRubro);
+      const neto = m.ingreso - m.egreso;
+      const row  = ensure(m.jugadorCT, false);
+      row[cat] += neto;
+      row.movimientos.push({ ...m, montoAplicado: neto, prorrateado: false });
+    }
+
+    for (const m of grupales) {
+      const grupo = grupos.find(g => g.nombre === m.jugadorCT);
+      const cat   = jugadorResCategoria(m.codRubro);
+      const neto  = m.ingreso - m.egreso;
+      const nombresMiembros = jugadorResMiembrosNombres(grupo);
+
+      if (!nombresMiembros.length) {
+        const row = ensure(grupo.nombre, true);
+        row[cat] += neto;
+        row.movimientos.push({ ...m, montoAplicado: neto, prorrateado: false, grupoOriginal: grupo.nombre, montoOriginal: neto });
+        continue;
+      }
+
+      const n = nombresMiembros.length;
+      let acumulado = 0;
+      nombresMiembros.forEach((nombre, idx) => {
+        const esUltimo = idx === n - 1;
+        const monto = esUltimo ? (neto - acumulado) : Math.round(neto / n);
+        acumulado += monto;
+        const row = ensure(nombre, false);
+        row[cat] += monto;
+        row.movimientos.push({ ...m, montoAplicado: monto, prorrateado: true, grupoOriginal: grupo.nombre, montoOriginal: neto, miembrosCount: n });
+      });
+    }
+  }
+
+  return Object.values(map).map(r => ({ ...r, total: r.sueldos + r.movilidad + r.atencion + r.medico + r.otros }));
+}
+
+function renderJugadoresResumen() {
+  const movsAll = movimientos.filter(m => m.jugadorCT && jugadorResCategoria(m.codRubro) !== null);
+  const anios = [...new Set(movsAll.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
+  if (jugadorResAnio !== "" && !anios.includes(jugadorResAnio) && anios.length) {
+    jugadorResAnio = anios[0];
+  }
+
+  const rows = calcJugadoresResumen(jugadorResAnio, jugadorResAgrupacion)
+    .sort((a,b) => Math.abs(b.total) - Math.abs(a.total));
+
+  const anioOptions = `<option value="" ${jugadorResAnio===""?"selected":""}>Todos los años</option>` +
+    anios.map(a => `<option value="${a}" ${jugadorResAnio===a?"selected":""}>${a}</option>`).join("");
+
+  const viewToggle = `
+    <div class="reint-view-toggle">
+      <button class="reint-view-btn ${jugadorResVista==='tabla'?'active':''}" onclick="setJugadorResVista('tabla')">⊞ Tabla</button>
+      <button class="reint-view-btn ${jugadorResVista==='cards'?'active':''}" onclick="setJugadorResVista('cards')">▤ Cards</button>
+    </div>`;
+
+  const agrupacionToggle = `
+    <div class="reint-view-toggle">
+      <button class="reint-view-btn ${jugadorResAgrupacion==='jugador'?'active':''}" onclick="setJugadorResAgrupacion('jugador')">👤 Por Jugador</button>
+      <button class="reint-view-btn ${jugadorResAgrupacion==='grupo'?'active':''}" onclick="setJugadorResAgrupacion('grupo')">👥 Por Grupo</button>
+    </div>`;
+
+  const totalGastado = rows.reduce((s,r) => s + (r.total < 0 ? -r.total : 0), 0);
+  const totalesLine = `${rows.length} ${jugadorResAgrupacion==='grupo'?'grupo':'jugador'}${rows.length!==1?"s":""} · Total gastado: ${fmt(totalGastado)}`;
+
+  const body = !rows.length
+    ? `<p class="note" style="text-align:center;padding:16px 0">Sin movimientos con jugador/grupo asignado</p>`
+    : jugadorResVista === "cards" ? renderJugadoresResCards(rows) : renderJugadoresResTabla(rows);
+
+  return `
+    <div class="reint-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
+          <select class="inp" style="flex:1" onchange="setJugadorResAnio(this.value)">${anioOptions}</select>
+        </div>
+        ${viewToggle}
+      </div>
+      <div style="margin-bottom:8px">${agrupacionToggle}</div>
+      <p class="note" style="margin-bottom:12px">${totalesLine}</p>
+      ${body}
+    </div>`;
+}
+
+function renderJugadoresResTabla(rows) {
+  const isMobile = window.matchMedia("(max-width:599px)").matches;
+
+  let totSueldos=0, totMovilidad=0, totAtencion=0, totMedico=0, totOtros=0, totTotal=0;
+  function cell(v) {
+    if (!v) return `<td style="text-align:right;color:var(--text3)">—</td>`;
+    return `<td style="text-align:right;font-family:var(--mono)" class="${v<0?'egr':'ing'}">${v<0?"-":"+"}${fmt(Math.abs(v))}</td>`;
+  }
+
+  const bodyRows = rows.map(r => {
+    totSueldos   += r.sueldos;
+    totMovilidad += r.movilidad;
+    totAtencion  += r.atencion;
+    totMedico    += r.medico;
+    totOtros     += r.otros;
+    totTotal     += r.total;
+    const isExp = jugadorResExpandido.has(r.nombre);
+    const detalle = isExp ? renderJugadorResDetalle(r) : "";
+    const rowClass = r.esGrupo ? "reint-row" : "reint-row";
+    const otrosCell = isMobile ? "" : cell(r.otros);
+    const nombreLbl = (r.esGrupo ? "👥 " : "") + esc(r.nombre);
+    const colspan = isMobile ? 6 : 7;
+    return `
+    <tr class="${rowClass}" style="${r.esGrupo?'background:var(--bg3)':''}" onclick="toggleJugadorResDetalle('${esc(r.nombre)}')">
+      <td class="jugador-col" title="${esc(r.nombre)}">${nombreLbl}</td>
+      ${cell(r.sueldos)}
+      ${cell(r.movilidad)}
+      ${cell(r.atencion)}
+      ${cell(r.medico)}
+      ${otrosCell}
+      <td style="text-align:right;font-family:var(--mono);font-weight:600" class="${r.total<0?'egr':'ing'}">${r.total<0?"-":"+"}${fmt(Math.abs(r.total))}</td>
+    </tr>${isExp ? `
+    <tr><td colspan="${colspan}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
+  }).join("");
+
+  const totRow = `<tr class="reint-tot-row">
+    <td class="jugador-col">TOTALES</td>
+    ${cell(totSueldos)}
+    ${cell(totMovilidad)}
+    ${cell(totAtencion)}
+    ${cell(totMedico)}
+    ${isMobile ? "" : cell(totOtros)}
+    <td style="text-align:right;font-family:var(--mono);font-weight:600" class="${totTotal<0?'egr':'ing'}">${totTotal<0?"-":"+"}${fmt(Math.abs(totTotal))}</td>
+  </tr>`;
+
+  const otrosHeader = isMobile ? "" : `<th style="text-align:right">Otros</th>`;
+  const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Vista reducida — cambiá a Cards para ver la columna Otros</p>` : "";
+
+  return `
+    <div class="reint-table-wrap">
+      <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}" style="${isMobile?'font-size:11px':''}">
+        <thead><tr>
+          <th class="jugador-col">Jugador/Grupo</th>
+          <th style="text-align:right">Sueldos</th>
+          <th style="text-align:right">Movilidad</th>
+          <th style="text-align:right">Atención</th>
+          <th style="text-align:right">Médico</th>
+          ${otrosHeader}
+          <th style="text-align:right">TOTAL</th>
+        </tr></thead>
+        <tbody>${bodyRows}${totRow}</tbody>
+      </table>
+    </div>
+    ${footnote}`;
+}
+
+function renderJugadorResCard(r) {
+  const isExp = jugadorResExpandido.has(r.nombre);
+  const cols = [
+    ["SUELDOS", r.sueldos], ["MOVILIDAD", r.movilidad], ["ATENCIÓN", r.atencion],
+    ["MÉDICO", r.medico], ["OTROS", r.otros]
+  ].filter(([,v]) => v !== 0);
+
+  const miembrosSub = r.esGrupo && r.miembros && r.miembros.length
+    ? `<div class="entity-sub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.miembros.length} miembros: ${esc(r.miembros.join(", "))}</div>`
+    : "";
+
+  const colsHtml = cols.map(([label, v]) => `
+    <div class="reint-card-col">
+      <label>${label}</label>
+      <div class="val ${v<0?'egr':'ing'}">${v<0?"-":"+"}${fmt(Math.abs(v))}</div>
+    </div>`).join("");
+
+  return `
+  <div class="reint-card" onclick="toggleJugadorResDetalle('${esc(r.nombre)}')">
+    <div class="reint-card-hdr">
+      <span class="reint-card-nombre" title="${esc(r.nombre)}">${r.esGrupo?"👥 ":"👤 "}${esc(r.nombre)}</span>
+      <span class="val ${r.total<0?'egr':'ing'}" style="font-family:var(--mono);font-weight:600">${r.total<0?"-":"+"}${fmt(Math.abs(r.total))}</span>
+    </div>
+    ${miembrosSub}
+    <div class="reint-card-body">${colsHtml}</div>
+    ${isExp ? `<div class="reint-card-detalle" onclick="event.stopPropagation()">${renderJugadorResDetalle(r)}</div>` : ""}
+  </div>`;
+}
+
+function renderJugadoresResCards(rows) {
+  return rows.map(renderJugadorResCard).join("");
+}
+
+const JUGADOR_RES_CAT_LABEL = { sueldos:"Sueldos", movilidad:"Movilidad", atencion:"Atención", medico:"Médico", otros:"Otros" };
+
+function renderJugadorResDetalle(r) {
+  const sorted = [...r.movimientos].sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const rows = sorted.map(m => {
+    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
+    const mesTxt = mesLabel(mesFromRecord(m));
+    const cat = JUGADOR_RES_CAT_LABEL[jugadorResCategoria(m.codRubro)] || "Otros";
+    const grupoBadge = m.prorrateado ? `<span class="reint-detalle-badge">👥 ${esc(m.grupoOriginal)}</span>` : "";
+    const prorrateoNota = m.prorrateado
+      ? ` · Original: ${fmt(Math.abs(m.montoOriginal))} ÷ ${m.miembrosCount}`
+      : "";
+    return `
+    <div class="reint-detalle-row">
+      <div class="reint-detalle-top">
+        <span class="reint-detalle-fecha">${fechaD} · ${mesTxt}</span>
+        ${grupoBadge}
+      </div>
+      <div class="reint-detalle-concepto">${esc(m.concepto)||"—"}</div>
+      <div class="reint-detalle-montos">
+        <span class="${m.montoAplicado<0?'egr':'ing'}">${m.montoAplicado<0?"-":"+"}${fmt(Math.abs(m.montoAplicado))}</span>
+        <span style="color:var(--text3)">[${cat}]${prorrateoNota}</span>
+      </div>
+    </div>`;
+  }).join("");
+  return `
+    <div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
+      ${rows}
+    </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════

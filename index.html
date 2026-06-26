@@ -219,7 +219,7 @@ textarea.inp { resize:none; }
 .ss-group { font-size:10px; font-weight:600; color:var(--text3); text-transform:uppercase;
   letter-spacing:.07em; padding:8px 14px 4px; }
 .ss-item { padding:10px 14px; font-size:14px; color:var(--text); cursor:pointer; transition:background .1s; }
-.ss-item:hover, .ss-item:active { background:var(--bg4); }
+.ss-item:hover, .ss-item:active, .ss-item.active { background:var(--bg4); }
 .ss-empty { padding:12px 14px; font-size:13px; color:var(--text3); }
 
 /* ── Section header ── */
@@ -1103,6 +1103,8 @@ function cancelEdit() { resetF(); renderNuevo(); }
 function clearForm()  { resetF(); renderNuevo(); }
 
 // ── Rubro Searchable Select ───────────────────────────────────
+let ssRubroActiveIndex = -1;
+
 function initRubroSelect() {
   const input = document.getElementById("ss-rubro-input");
   const drop  = document.getElementById("ss-rubro-drop");
@@ -1121,33 +1123,73 @@ function initRubroSelect() {
       else input.value = "[" + F.codRubro + "] " + F.rubro;
     }, 200);
   };
+  input.onkeydown = function(e) {
+    if (drop.style.display === "none") return;
+    const items = [...drop.querySelectorAll(".ss-item[data-cod]")];
+    if (!items.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      ssRubroActiveIndex = (ssRubroActiveIndex + 1) % items.length;
+      highlightRubroItem(items);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      ssRubroActiveIndex = (ssRubroActiveIndex - 1 + items.length) % items.length;
+      highlightRubroItem(items);
+    } else if (e.key === "Escape") {
+      drop.style.display = "none";
+      input.blur();
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      // Selecciona el ítem resaltado, o el primero si todavía no se navegó con flechas
+      const item = items[ssRubroActiveIndex >= 0 ? ssRubroActiveIndex : 0];
+      if (e.key === "Enter") {
+        e.preventDefault(); // evita submit accidental
+        selectRubroItem(item, input, drop, true);
+      } else {
+        // Tab: no forzamos blur ni preventDefault, así el navegador mueve el foco
+        // de forma nativa al siguiente campo (Concepto) después de seleccionar.
+        selectRubroItem(item, input, drop, false);
+      }
+    }
+  };
   drop.onmousedown = function(e) {
     const item = e.target.closest("[data-cod]");
     if (!item) return;
     e.preventDefault(); // Previene que el input pierda el foco
-    F.codRubro  = item.dataset.cod;
-    F.rubro     = item.dataset.nombre;
-    F.categoria = item.dataset.cat;
-    input.value = "[" + F.codRubro + "] " + F.rubro;
-    drop.style.display = "none";
-    input.blur(); // Forzamos el blur después de seleccionar
-    // Auto-set tipo to INTERNO if rubro 49
-    if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
-    // Re-render for rubro 21 to show/hide conditional checkbox
-    if (F.codRubro === "21" || F.codRubro === "49") { renderNuevo(); return; }
-    // Highlight adherente row
-    const adhRow = document.getElementById("adherente-row");
-    if (adhRow) {
-      if (F.rubro.toUpperCase().includes("ADHERENTE")) adhRow.classList.add("highlighted");
-      else adhRow.classList.remove("highlighted");
-    }
+    selectRubroItem(item, input, drop, true);
   };
   filterRubros("");
+}
+
+function highlightRubroItem(items) {
+  items.forEach((it, i) => it.classList.toggle("active", i === ssRubroActiveIndex));
+  const active = items[ssRubroActiveIndex];
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+function selectRubroItem(item, input, drop, blurAfter) {
+  if (!item) return;
+  F.codRubro  = item.dataset.cod;
+  F.rubro     = item.dataset.nombre;
+  F.categoria = item.dataset.cat;
+  input.value = "[" + F.codRubro + "] " + F.rubro;
+  drop.style.display = "none";
+  if (blurAfter) input.blur(); // Forzamos el blur después de seleccionar (clic / Enter)
+  // Auto-set tipo to INTERNO if rubro 49
+  if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
+  // Re-render for rubro 21 to show/hide conditional checkbox
+  if (F.codRubro === "21" || F.codRubro === "49") { renderNuevo(); return; }
+  // Highlight adherente row
+  const adhRow = document.getElementById("adherente-row");
+  if (adhRow) {
+    if (F.rubro.toUpperCase().includes("ADHERENTE")) adhRow.classList.add("highlighted");
+    else adhRow.classList.remove("highlighted");
+  }
 }
 
 function filterRubros(query) {
   const drop = document.getElementById("ss-rubro-drop");
   if (!drop) return;
+  ssRubroActiveIndex = -1;
   const q = (query || "").toLowerCase();
   const cats = [...new Set(RUBROS.map(r => r.cat))];
   let html = "";
@@ -1163,6 +1205,11 @@ function filterRubros(query) {
     }
   }
   drop.innerHTML = html || `<div class="ss-empty">Sin resultados</div>`;
+  // Resalta el primer resultado para que Enter/Tab lo seleccione directamente al tipear
+  if (q) {
+    ssRubroActiveIndex = 0;
+    highlightRubroItem([...drop.querySelectorAll(".ss-item[data-cod]")]);
+  }
 }
 
 // ── Save ─────────────────────────────────────────────────────

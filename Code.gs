@@ -173,7 +173,7 @@ function handleAction(data) {
           return { ok: true };
         }
       }
-      return { ok: true };
+      return { ok: false, error: "Movimiento no encontrado: " + data.id };
     }
 
     // ─── JUGADORES ───────────────────────────────────────────
@@ -215,7 +215,7 @@ function handleAction(data) {
           return { ok: true };
         }
       }
-      return { ok: true };
+      return { ok: false, error: "Jugador no encontrado: " + data.id };
     }
 
     // ─── GRUPOS ──────────────────────────────────────────────
@@ -262,7 +262,7 @@ function handleAction(data) {
           return { ok: true };
         }
       }
-      return { ok: true };
+      return { ok: false, error: "Grupo no encontrado: " + data.id };
     }
 
     // ─── ADHERENTES ──────────────────────────────────────────
@@ -309,7 +309,7 @@ function handleAction(data) {
           return { ok: true };
         }
       }
-      return { ok: true };
+      return { ok: false, error: "Adherente no encontrado: " + data.id };
     }
 
     // ─── PAGOS ADHERENTES ─────────────────────────────────────
@@ -466,7 +466,7 @@ function handleAction(data) {
           return { ok: true };
         }
       }
-      return { ok: true };
+      return { ok: false, error: "Partido no encontrado: " + data.id };
     }
 
     default:

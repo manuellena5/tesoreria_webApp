@@ -1672,7 +1672,8 @@ function renderResumen() {
   // Adherentes del mes
   const mesCod = sharedMes.replace("-","");
   // Movimientos del mes con rubro adherentes (fallback para registros sin pago en Pagos_Adh)
-  const adhMovMes = movMes.filter(m => m.rubro.toUpperCase().includes("ADHERENTE") && m.adherente);
+  // Mismos rubros que se consideran aporte de adherente en Resumen > Adherentes: [6] ADHERENTES | COLABORADORES y [5] PUBLICIDAD - Lonas y otros
+  const adhMovMes = movMes.filter(m => ADH_RUBROS.includes(m.codRubro) && m.tipo === "INGRESO" && m.adherente);
   function resolveEstado(adh) {
     const pago = pagos.find(p => p.adherenteId === adh.id && p.mes === mesCod);
     if (pago) return pago.estado;

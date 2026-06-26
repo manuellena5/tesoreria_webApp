@@ -1650,13 +1650,6 @@ function renderResumen() {
     .map(([cat, v]) => ({ cat, ...v }))
     .filter(d => d.egr > 0 || d.ing > 0)
     .sort((a,b) => b.egr - a.egr);
-  const maxEgr = Math.max(...catItems.map(d => d.egr), 1);
-
-  const catBars = catItems.map(d => `
-    <div class="cat-row">
-      <div class="cat-name"><span>${esc(d.cat)}</span><span class="cat-total">${fmt(d.egr)}</span></div>
-      <div class="bar-bg"><div class="bar-fill bar-egr" style="width:${Math.round(d.egr/maxEgr*100)}%"></div></div>
-    </div>`).join("");
 
   // Table
   const tableRows = catItems.map(d => {
@@ -1830,9 +1823,6 @@ function renderResumen() {
 
       <div>
         ${catItems.length ? `
-        <div class="sec-hdr"><span class="sec-title">Egresos por categoría</span></div>
-        <div class="cat-list">${catBars}</div>
-
         <div class="sec-hdr"><span class="sec-title">Tabla por categoría</span></div>
         <table class="sum-table">
           <thead><tr><th>Categoría</th><th style="text-align:right">Ing.</th><th style="text-align:right">Egr.</th><th style="text-align:right">Neto</th></tr></thead>

@@ -116,7 +116,7 @@ function handleAction(data) {
         m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts,
         m.partidoId||""
       ]);
-      if (m.adherente && isAdherentesRubro(m.rubro)) {
+      if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
       }
       return { ok: true, id };
@@ -136,7 +136,7 @@ function handleAction(data) {
             m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", new Date().toISOString(),
             m.partidoId||""
           ]]);
-          if (m.adherente && isAdherentesRubro(m.rubro)) {
+          if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
           }
           return { ok: true };
@@ -157,6 +157,9 @@ function handleAction(data) {
           m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo, m.timestamp,
           m.partidoId||""
         ]);
+        if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
+          autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
+        }
       }
       return { ok: true, saved: list.length };
     }
@@ -496,8 +499,10 @@ function autoFillIds(sh, hasData, fixRow) {
   }
 }
 
-function isAdherentesRubro(rubro) {
-  return rubro && rubro.toUpperCase().includes("ADHERENTE");
+// Mismos rubros que se consideran aporte de adherente en el front-end (ADH_RUBROS):
+// [6] ADHERENTES | COLABORADORES y [5] PUBLICIDAD - Lonas y otros
+function isAdherenteRubro(codRubro) {
+  return codRubro === "5" || codRubro === "6";
 }
 
 /**
@@ -532,6 +537,33 @@ function autoUpsertPago(movId, adherenteNombre, mes, estado) {
   } catch (e) {
     // No interrumpir la transacción principal
   }
+}
+
+/**
+ * Backfill manual (ejecutar UNA VEZ desde el editor de Apps Script, seleccionando
+ * esta función en el desplegable y clic en "Ejecutar"): recorre todos los
+ * movimientos de tipo INGRESO con rubro de adherente (5 o 6) y adherente asignado,
+ * y marca PAGADO en Pagos_Adh para cada combinación adherente+mes encontrada.
+ * Corrige registros viejos de Pagos_Adh que quedaron en PENDIENTE porque el bug de
+ * isAdherenteRubro (antes solo detectaba rubro 6) o el import por Excel (saveBatch)
+ * nunca los actualizó. No borra ni modifica movimientos, solo corrige Pagos_Adh.
+ */
+function resyncPagosAdh() {
+  const movSh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+  const movAll = movSh.getDataRange().getValues();
+  let actualizados = 0;
+  for (let i = 1; i < movAll.length; i++) {
+    const row       = movAll[i];
+    const id        = String(row[0]  || "");
+    const mes       = String(row[1]  || "");
+    const codRubro  = String(row[3]  || "");
+    const adherente = String(row[14] || "").trim();
+    const tipo      = String(row[18] || "");
+    if (!id || !adherente || tipo !== "INGRESO" || !isAdherenteRubro(codRubro)) continue;
+    autoUpsertPago(id, adherente, mes, "PAGADO");
+    actualizados++;
+  }
+  Logger.log("resyncPagosAdh: " + actualizados + " movimientos de adherentes procesados.");
 }
 
 function getSpreadsheet() {

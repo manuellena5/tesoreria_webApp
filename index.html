@@ -543,7 +543,13 @@ const RUBROS = [
   {cod:"18",  nombre:"SUELDO DT Y CT",                      cat:"Jugadores y Cuerpo Técnico"},
   {cod:"19",  nombre:"SUELDO JUGADORES",                    cat:"Jugadores y Cuerpo Técnico"},
   {cod:"20",  nombre:"GASTOS ATENCION JUGADORES",           cat:"Jugadores y Cuerpo Técnico"},
-  {cod:"37",  nombre:"GASTOS ATENCION REFUERZOS|DT",        cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"37",  nombre:"GASTOS ATENCION REFUERZOS|DT",        cat:"Jugadores y Cuerpo Técnico", legacy:true},
+  {cod:"43",  nombre:"Vianda",                              cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"44",  nombre:"Almacén",                             cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"45",  nombre:"Alquiler",                            cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"46",  nombre:"Asado",                                cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"47",  nombre:"Comida",                               cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"48",  nombre:"Otros (Refuerzos/DT)",                cat:"Jugadores y Cuerpo Técnico"},
   {cod:"11",  nombre:"COBROS Y PAGOS PASE JUGADOR",         cat:"Jugadores y Cuerpo Técnico"},
   {cod:"17",  nombre:"SERVICIO GIMNASIO",                   cat:"Jugadores y Cuerpo Técnico"},
   {cod:"21",  nombre:"GASTOS MEDICOS Y FARMACIA | REINT SEG", cat:"Gastos Medicos"},
@@ -564,11 +570,17 @@ const RUBROS = [
   {cod:"10",  nombre:"LIGA - FICHAJES Y MULTAS",            cat:"Administrativos y Financieros"},
   {cod:"28",  nombre:"LIBRERÍA",                            cat:"Administrativos y Financieros"},
   {cod:"30",  nombre:"SERVICIOS GENERALES | M. de Obra",    cat:"Administrativos y Financieros"},
-  {cod:"16",  nombre:"MOVILIDAD-APORTES Y GASTOS",        cat:"Movilidad"},
+  {cod:"16",  nombre:"MOVILIDAD-APORTES Y GASTOS",        cat:"Movilidad", legacy:true},
+  {cod:"15",  nombre:"Combustible",                        cat:"Movilidad"},
+  {cod:"22",  nombre:"Remís",                               cat:"Movilidad"},
+  {cod:"40",  nombre:"Viático",                             cat:"Movilidad"},
+  {cod:"41",  nombre:"Colectivo/Pasaje",                    cat:"Movilidad"},
+  {cod:"42",  nombre:"APORTE MOVILIDAD",                    cat:"Movilidad"},
   {cod:"34",  nombre:"CEREAL - INGRESOS Y GASTOS",          cat:"Otros | Internos"},
   {cod:"38",  nombre:"INGRESOS Y GASTOS SUBCOM",            cat:"Otros | Internos"},
   {cod:"39",  nombre:"SALDO NOCTURNO",                      cat:"Otros | Internos"},
   {cod:"49",  nombre:"TRANSFERENCIA ENTRE CUENTAS",         cat:"Internos"},
+  {cod:"50",  nombre:"SALDO INICIAL / APERTURA",            cat:"Internos"},
 ];
 
 const MESES_LABELS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
@@ -578,7 +590,7 @@ const DEFAULT_CUENTAS = ["MACRO","NARANJA X","MUTUAL","EFECTIVO","MP","UALA"];
 const DEFAULT_METODOS = ["EFECTIVO","TRANSFERENCIA","CHEQUE"];
 
 const SEED_JUGADORES = [
-  "IRAZOSQUI Pablo","FOSSARELLI Adrian","GAMARINO Emiliano","CARRANZA Matias",
+  "IRAZOQUI Pablo","FOSSARELLI Adrian","GAMARINO Emiliano","CARRANZA Matias",
   "LANDRIEL Federico","LECUIMA Esteban","LENCINA Nicolás","PAIRETTI Franco",
   "VILLARRUEL Daniel","BERNAUS Agustin","BERNAUS Federico","FOSSARELLI Antonio",
   "ÑAÑEZ Rubén","VIJARRA Nahuel","MENDOZA Alexis","POCHETTINO Dante",
@@ -617,6 +629,8 @@ let pagos       = [];
 let partidos    = [];
 let cuentas     = [...DEFAULT_CUENTAS];
 let metodos     = [...DEFAULT_METODOS];
+let reservas      = [];
+let preciosGranos = { Soja: 480000, Trigo: 293600 };
 
 let currentTab    = "nuevo";
 let editId        = null;
@@ -795,6 +809,13 @@ const Storage = {
   async listPartidos()       { return this._post({ action:"listPartidos"              }); },
   async savePartido(p)       { return this._post({ action:"savePartido",  partido:p   }); },
   async deletePartido(id)    { return this._post({ action:"deletePartido", id          }); },
+  async listReservas()       { return this._post({ action:"listReservas"              }); },
+  async saveReserva(r)       { return this._post({ action:"saveReserva",  reserva:r   }); },
+  async deleteReserva(id)    { return this._post({ action:"deleteReserva", id         }); },
+  async seedGranos()         { return this._post({ action:"seedGranos"                }); },
+  async previewMigracion()   { return this._post({ action:"previewMigracion"          }); },
+  async ejecutarMigracion()  { return this._post({ action:"ejecutarMigracion"         }); },
+  async revertMigracion(batchId) { return this._post({ action:"revertMigracion", batchId }); },
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -816,7 +837,7 @@ async function initApp() {
 
 async function loadAllData() {
   try {
-    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar] = await Promise.all([
+    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes] = await Promise.all([
       Storage.listMov(),
       Storage.listJugadores(),
       Storage.listGrupos(),
@@ -824,6 +845,7 @@ async function loadAllData() {
       Storage.listPagos(),
       Storage.getConfig(),
       Storage.listPartidos(),
+      Storage.listReservas(),
     ]);
     if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
     if (rJug.ok) jugadores   = rJug.jugadores   || [];
@@ -831,8 +853,10 @@ async function loadAllData() {
     if (rAdh.ok) adherentes  = rAdh.adherentes   || [];
     if (rPag.ok) pagos       = rPag.pagos        || [];
     if (rPar.ok) partidos    = rPar.partidos     || [];
+    if (rRes.ok) reservas    = rRes.reservas     || [];
     if (rCfg.ok) {
       applyCuentasMetodos(rCfg.config || {});
+      applyPreciosGranos(rCfg.config || {});
       // If not yet seeded, run initSeed
       if (!rCfg.config || !rCfg.config.seeded) {
         await runInitSeed();
@@ -846,10 +870,23 @@ async function loadAllData() {
         if (r2Adh.ok) adherentes = r2Adh.adherentes  || [];
         if (r2Cfg.ok) applyCuentasMetodos(r2Cfg.config || {});
       }
+      // Stock inicial de granos — corre una sola vez (gateado por seededGranos)
+      if (!rCfg.config || !rCfg.config.seededGranos) {
+        await Storage.seedGranos();
+        const [r3Res, r3Cfg] = await Promise.all([Storage.listReservas(), Storage.getConfig()]);
+        if (r3Res.ok) reservas = r3Res.reservas || [];
+        if (r3Cfg.ok) applyPreciosGranos(r3Cfg.config || {});
+      }
     }
     updateBadge();
   } catch(e) {
     toast("Error cargando datos: " + e.message, "err");
+  }
+}
+
+function applyPreciosGranos(config) {
+  if (config.preciosGranos) {
+    try { preciosGranos = JSON.parse(config.preciosGranos); } catch(e) {}
   }
 }
 
@@ -1191,10 +1228,10 @@ function filterRubros(query) {
   if (!drop) return;
   ssRubroActiveIndex = -1;
   const q = (query || "").toLowerCase();
-  const cats = [...new Set(RUBROS.map(r => r.cat))];
+  const cats = [...new Set(RUBROS.filter(r => !r.legacy).map(r => r.cat))];
   let html = "";
   for (const cat of cats) {
-    const items = RUBROS.filter(r => r.cat === cat && (!q ||
+    const items = RUBROS.filter(r => r.cat === cat && !r.legacy && (!q ||
       r.nombre.toLowerCase().includes(q) ||
       r.cod.toLowerCase().includes(q)
     ));
@@ -1811,6 +1848,7 @@ function renderResumen() {
       <button class="entity-tab ${resumenSubTab==='reintegros'?'active':''}" onclick="setResumenSubTab('reintegros')">Reintegros${pendienteGlobal>0?" 🏥":""}</button>
       <button class="entity-tab ${resumenSubTab==='adherentes'?'active':''}" onclick="setResumenSubTab('adherentes')">Adherentes${adherentePendienteGlobal>0?" 👥":""}</button>
       <button class="entity-tab ${resumenSubTab==='jugadoresRes'?'active':''}" onclick="setResumenSubTab('jugadoresRes')">Jugadores</button>
+      <button class="entity-tab ${resumenSubTab==='patrimonio'?'active':''}" onclick="setResumenSubTab('patrimonio')">Patrimonio</button>
     </div>`;
 
   const alertHtml = (pendienteGlobal > 0 && resumenSubTab !== "reintegros") ? `
@@ -1990,7 +2028,55 @@ function renderResumen() {
     ${resumenSubTab === "reintegros" ? renderReintegrosMedicos() : ""}
     ${resumenSubTab === "adherentes" ? renderAdherentesResumen() : ""}
     ${resumenSubTab === "jugadoresRes" ? renderJugadoresResumen() : ""}
+    ${resumenSubTab === "patrimonio" ? renderPatrimonio() : ""}
   `);
+}
+
+// ── Patrimonio: saldo de cuentas + valor de granos en stock ──────
+function renderPatrimonio() {
+  const saldos = calcSaldosCuentas(movimientos);
+  const totalCuentas = Object.values(saldos).reduce((s,v) => s+v, 0);
+  const valorGranos = valorTotalGranos();
+  const patrimonioTotal = totalCuentas + valorGranos;
+
+  const cuentasHtml = cuentas.map(c => {
+    const s = saldos[c] || 0;
+    return `<div class="cuenta-item">
+      <span class="cuenta-nombre">${esc(c)}</span>
+      <span class="cuenta-saldo ${s>0?"pos":s<0?"neg":"zer"}">${s<0?"-":""}${fmt(s)}</span>
+    </div>`;
+  }).join("");
+
+  const stock = calcStockGranos();
+  const granosHtml = Object.keys(stock).sort().map(g => {
+    const kg = stock[g] || 0;
+    const valor = (kg/1000) * (preciosGranos[g]||0);
+    return `<div class="cuenta-item">
+      <span class="cuenta-nombre">${esc(g)} (${fmt(kg)} kg)</span>
+      <span class="cuenta-saldo pos">${fmt(valor)}</span>
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="sum-grid three">
+      <div class="stat-card">
+        <div class="stat-label">Cuentas</div>
+        <div class="stat-val ${totalCuentas>=0?"ing":"egr"}">${fmt(totalCuentas)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Granos</div>
+        <div class="stat-val ing">${fmt(valorGranos)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Patrimonio total</div>
+        <div class="stat-val ${patrimonioTotal>=0?"ing":"egr"}">${fmt(patrimonioTotal)}</div>
+      </div>
+    </div>
+    <div class="cfg-title" style="margin:14px 0 8px">🏦 Cuentas</div>
+    ${cuentasHtml}
+    <div class="cfg-title" style="margin:14px 0 8px">🌾 Granos en stock</div>
+    ${granosHtml || '<p class="note">Sin stock registrado</p>'}
+  `;
 }
 
 function calcSaldosCuentas(movs) {
@@ -2256,7 +2342,7 @@ function toggleAdherenteDetalle(key) {
 }
 
 // Rubros que se consideran aportes de adherentes: [6] ADHERENTES | COLABORADORES y [5] PUBLICIDAD - Lonas y otros
-const ADH_RUBROS = ["5", "6"];
+const ADH_RUBROS = ["5", "6", "42"];
 
 // anio: string "YYYY" para filtrar, o "" para todos los años
 function calcAdherentesPorAnio(anio) {
@@ -2846,6 +2932,7 @@ function renderEntidades() {
     {key:"grupos",    label:"Grupos"},
     {key:"adherentes",label:"Adherentes"},
     {key:"partidos",  label:"Partidos"},
+    {key:"granos",    label:"Granos"},
   ];
   const tabBtns = tabs.map(t =>
     `<button class="entity-tab ${entidadesTab===t.key?"active":""}" onclick="setEntidadesTab('${t.key}')">${t.label}</button>`
@@ -2856,6 +2943,7 @@ function renderEntidades() {
   if (entidadesTab === "grupos")     inner = renderGrupos();
   if (entidadesTab === "adherentes") inner = renderAdherentes();
   if (entidadesTab === "partidos")   inner = renderPartidos();
+  if (entidadesTab === "granos")     inner = renderGranos();
 
   setContent(`
     <div class="entity-tabs">${tabBtns}</div>
@@ -3128,6 +3216,190 @@ async function deletePartido(id) {
     if (!r.ok) throw new Error(r.error || "Error");
     partidos = partidos.filter(p => p.id !== id);
     toast("Partido eliminado", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+// ── Reserva de Granos ────────────────────────────────────────────
+// kg en stock por grano = Σ COSECHA - Σ VENTA (mismo patrón que calcSaldosCuentas).
+function calcStockGranos() {
+  const stock = {};
+  for (const r of reservas) {
+    if (!stock[r.grano]) stock[r.grano] = 0;
+    if (r.tipo === "COSECHA") stock[r.grano] += r.kg;
+    else if (r.tipo === "VENTA") stock[r.grano] -= r.kg;
+  }
+  return stock;
+}
+
+function valorTotalGranos() {
+  const stock = calcStockGranos();
+  let total = 0;
+  for (const grano in stock) {
+    total += (stock[grano] / 1000) * (preciosGranos[grano] || 0);
+  }
+  return total;
+}
+
+function renderGranos() {
+  const stock = calcStockGranos();
+  const granos = [...new Set([...Object.keys(stock), ...Object.keys(preciosGranos)])].sort();
+
+  const stockHtml = granos.map(g => {
+    const kg = stock[g] || 0;
+    const precio = preciosGranos[g] || 0;
+    const valor = (kg / 1000) * precio;
+    return `
+    <div class="entity-item" style="flex-direction:column;align-items:stretch;gap:6px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span class="entity-name">${esc(g)}</span>
+        <span class="cuenta-saldo pos">${fmt(kg)} kg</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <label style="font-size:12px;color:var(--text2);white-space:nowrap">$/tonelada</label>
+        <input class="inp" type="number" min="0" step="any" value="${precio}"
+               onchange="updatePrecioGrano('${esc(g)}', this.value)" style="flex:1">
+      </div>
+      <div style="font-size:13px;color:var(--text2)">Valor estimado: <b style="color:var(--text)">${fmt(valor)}</b></div>
+    </div>`;
+  }).join("");
+
+  const sorted = [...reservas].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  const histHtml = sorted.map(r => `
+    <div class="entity-item" id="res-${r.id}">
+      <div>
+        <span class="entity-name">${r.tipo === "COSECHA" ? "🌾" : "💰"} ${esc(r.grano)} — ${fmt(r.kg)} kg</span>
+        <div style="font-size:11px;color:var(--text3)">${r.fecha} · ${esc(r.tipo)}${r.nota ? " · "+esc(r.nota) : ""}</div>
+      </div>
+      <button class="btn-sm danger" id="resdel-${r.id}" onclick="confirmDeleteReserva('${r.id}')">✕</button>
+    </div>`).join("");
+
+  return `
+    <div class="cfg-title" style="margin-bottom:8px">📦 Stock de granos</div>
+    ${stockHtml || '<p class="note">Sin stock registrado</p>'}
+
+    <div class="cfg-title" style="margin:18px 0 8px">＋ Registrar cosecha</div>
+    <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
+      <select class="inp" id="cosecha-grano">
+        <option value="Soja">Soja</option>
+        <option value="Trigo">Trigo</option>
+        <option value="">Otro…</option>
+      </select>
+      <input class="inp" id="cosecha-grano-otro" type="text" placeholder="Nombre del grano (si elegiste 'Otro')">
+      <input class="inp" id="cosecha-fecha" type="date" value="${today()}">
+      <input class="inp" id="cosecha-kg" type="number" min="0" step="any" placeholder="Kg ingresados">
+      <input class="inp" id="cosecha-nota" type="text" placeholder="Nota (opcional)">
+      <button class="btn-sm accent" onclick="addCosecha()">+ Agregar cosecha</button>
+    </div>
+
+    <div class="cfg-title" style="margin:18px 0 8px">💰 Registrar venta</div>
+    <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
+      <select class="inp" id="venta-grano">
+        ${granos.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join("")}
+      </select>
+      <input class="inp" id="venta-fecha" type="date" value="${today()}">
+      <input class="inp" id="venta-kg" type="number" min="0" step="any" placeholder="Kg vendidos">
+      <input class="inp" id="venta-monto" type="number" min="0" step="any" placeholder="Monto del ingreso ($)">
+      <select class="inp" id="venta-cuenta">${cuentas.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
+      <select class="inp" id="venta-metodo">${metodos.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>
+      <input class="inp" id="venta-nota" type="text" placeholder="Nota (opcional)">
+      <button class="btn-sm accent" onclick="addVentaGrano()">+ Registrar venta y generar ingreso</button>
+    </div>
+
+    <div class="cfg-title" style="margin:18px 0 8px">Historial</div>
+    ${histHtml || '<p class="note">Sin movimientos de stock</p>'}
+  `;
+}
+
+async function updatePrecioGrano(grano, valor) {
+  preciosGranos[grano] = Number(valor) || 0;
+  try {
+    await Storage.saveConfig("preciosGranos", JSON.stringify(preciosGranos));
+    toast("Precio actualizado ✓", "ok");
+  } catch(e) { toast("Error: " + e.message, "err"); }
+  renderEntidades();
+}
+
+async function addCosecha() {
+  const selGrano = document.getElementById("cosecha-grano")?.value || "";
+  const otro     = (document.getElementById("cosecha-grano-otro")?.value || "").trim();
+  const grano    = selGrano || otro;
+  const fecha    = document.getElementById("cosecha-fecha")?.value || today();
+  const kg       = parseFloat(document.getElementById("cosecha-kg")?.value || "0");
+  const nota     = document.getElementById("cosecha-nota")?.value || "";
+  if (!grano)            { toast("Indicá el grano", "err"); return; }
+  if (!kg || kg <= 0)    { toast("Ingresá los kg ingresados", "err"); return; }
+  try {
+    const r = await Storage.saveReserva({ fecha, grano, tipo: "COSECHA", kg, nota });
+    if (!r.ok) throw new Error(r.error || "Error");
+    reservas.push({ id: r.id, fecha, grano, tipo: "COSECHA", kg, nota, movimientoId: "" });
+    toast("Cosecha registrada ✓", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+async function addVentaGrano() {
+  const grano  = document.getElementById("venta-grano")?.value || "";
+  const fecha  = document.getElementById("venta-fecha")?.value || today();
+  const kg     = parseFloat(document.getElementById("venta-kg")?.value || "0");
+  const monto  = parseFloat(document.getElementById("venta-monto")?.value || "0");
+  const cuenta = document.getElementById("venta-cuenta")?.value || cuentas[0] || "";
+  const modo   = document.getElementById("venta-metodo")?.value || metodos[0] || "";
+  const nota   = document.getElementById("venta-nota")?.value || "";
+  if (!grano)             { toast("Seleccioná el grano", "err"); return; }
+  if (!kg || kg <= 0)     { toast("Ingresá los kg vendidos", "err"); return; }
+  if (!monto || monto<=0) { toast("Ingresá el monto del ingreso", "err"); return; }
+  const stock = calcStockGranos();
+  if (kg > (stock[grano] || 0)) {
+    toast(`No hay suficiente stock de ${grano} (disponible: ${fmt(stock[grano]||0)} kg)`, "err");
+    return;
+  }
+  showOverlay("Guardando…");
+  try {
+    const mes = fecha.slice(0,7).replace("-","");
+    const movPayload = {
+      id: uid(), mes, fecha,
+      codRubro: "34", rubro: "CEREAL - INGRESOS Y GASTOS", categoria: "Otros | Internos",
+      concepto: `Venta ${grano} ${fmt(kg)} kg`,
+      egreso: 0, ingreso: monto, montoFinal: monto,
+      cuenta, cuentaDestino: "", modoPago: modo,
+      jugadorCT: "", adherente: "",
+      observacion: nota, comprobante: "", seguroReintegro: 0, tipo: "INGRESO",
+    };
+    const rMov = await Storage.saveMov(movPayload);
+    if (!rMov.ok) throw new Error(rMov.error || "Error al guardar el ingreso");
+    movimientos.push(movPayload);
+
+    const rRes = await Storage.saveReserva({ fecha, grano, tipo: "VENTA", kg, nota, movimientoId: rMov.id });
+    if (!rRes.ok) throw new Error(rRes.error || "Error al descontar el stock");
+    reservas.push({ id: rRes.id, fecha, grano, tipo: "VENTA", kg, nota, movimientoId: rMov.id });
+
+    updateBadge();
+    toast("Venta registrada e ingreso generado ✓", "ok");
+    renderEntidades();
+  } catch(e) {
+    toast("Error: " + e.message, "err");
+  } finally {
+    hideOverlay();
+  }
+}
+
+function confirmDeleteReserva(id) {
+  const btn = document.getElementById("resdel-"+id);
+  if (!btn) return;
+  if (btn.dataset.confirm) { deleteReserva(id); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
+    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+  }
+}
+
+async function deleteReserva(id) {
+  try {
+    const r = await Storage.deleteReserva(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    reservas = reservas.filter(r => r.id !== id);
+    toast("Registro eliminado", "ok");
     renderEntidades();
   } catch(e) { toast("Error: " + e.message, "err"); }
 }
@@ -3523,7 +3795,105 @@ function renderConfig() {
       <button class="btn-secondary" onclick="refreshData()">↻ Recargar todos los datos</button>
       <p class="cfg-note" style="margin-top:8px">Si agregaste filas directamente en la hoja de cálculo, tocá este botón para sincronizar.</p>
     </div>
+
+    <!-- Auditoría -->
+    <div class="cfg-card">
+      <div class="cfg-title">🔍 Auditoría</div>
+      <p class="cfg-note" style="margin-bottom:10px">Busca movimientos con rubro fuera de catálogo, jugador/adherente no encontrado en las listas, o Tipo vacío/incoherente.</p>
+      <button class="btn-secondary" onclick="runAudit()">Ejecutar auditoría</button>
+      <div id="audit-result" style="margin-top:10px"></div>
+    </div>
+
+    <!-- Migración de rubros históricos -->
+    <div class="cfg-card">
+      <div class="cfg-title">🧮 Migración de rubros (cod 16 / cod 37 / grafías)</div>
+      <p class="cfg-note" style="margin-bottom:10px">Reclasifica movimientos históricos a los rubros nuevos. Primero mostrá la vista previa (no escribe nada), revisá los conteos, y recién después confirmá.</p>
+      <button class="btn-secondary" onclick="runPreviewMigracion()">Vista previa</button>
+      <div id="migracion-result" style="margin-top:10px"></div>
+    </div>
   `);
+}
+
+// ── Auditoría de movimientos (Tarea 7) ───────────────────────────
+function runAudit() {
+  const rubrosByCod = {};
+  for (const r of RUBROS) rubrosByCod[r.cod] = r;
+  const nombresJug = new Set([...jugadores, ...grupos].map(j => j.nombre.toLowerCase().trim()));
+  const nombresAdh = new Set(adherentes.map(a => a.nombre.toLowerCase().trim()));
+
+  const problemas = []; // { id, fecha, concepto, motivo }
+  for (const m of movimientos) {
+    const motivos = [];
+    const cat = rubrosByCod[m.codRubro];
+    if (m.codRubro && (!cat || cat.nombre !== m.rubro)) motivos.push("Rubro fuera de catálogo o desincronizado con CodRubro");
+    if (m.jugadorCT && !nombresJug.has(m.jugadorCT.toLowerCase().trim())) motivos.push("Jugador/CT no está en la lista");
+    if (m.adherente && !nombresAdh.has(m.adherente.toLowerCase().trim())) motivos.push("Adherente no está en la lista");
+    if (!m.tipo) motivos.push("Tipo vacío");
+    else if (m.tipo === "INGRESO" && (m.egreso > 0 || !(m.ingreso > 0))) motivos.push("Tipo INGRESO incoherente con Egreso/Ingreso");
+    else if (m.tipo === "EGRESO"  && (m.ingreso > 0 || !(m.egreso > 0))) motivos.push("Tipo EGRESO incoherente con Egreso/Ingreso");
+    if (motivos.length) problemas.push({ id: m.id, fecha: m.fecha, concepto: m.concepto, motivos });
+  }
+
+  const el = document.getElementById("audit-result");
+  if (!el) return;
+  if (!problemas.length) { el.innerHTML = `<p class="note">✓ Sin inconsistencias detectadas</p>`; return; }
+  el.innerHTML = `
+    <p class="note" style="margin-bottom:8px"><b>${problemas.length}</b> movimientos con inconsistencias:</p>
+    ${problemas.slice(0,100).map(p => `
+      <div class="entity-item" style="flex-direction:column;align-items:stretch;gap:4px">
+        <div style="display:flex;justify-content:space-between">
+          <span class="entity-name">${esc(p.fecha)} — ${esc(p.concepto)||"—"}</span>
+          <button class="btn-sm accent" onclick="editMovimiento('${p.id}')">Editar</button>
+        </div>
+        <div style="font-size:11px;color:var(--red)">${p.motivos.map(esc).join(" · ")}</div>
+      </div>`).join("")}
+    ${problemas.length > 100 ? `<p class="note">…y ${problemas.length-100} más</p>` : ""}
+  `;
+}
+
+// ── Migración de rubros históricos (Tareas 2 y 4) ────────────────
+function renderMigracionResult(data, ejecutada) {
+  const el = document.getElementById("migracion-result");
+  if (!el) return;
+  const countsHtml = Object.entries(data.counts||{}).map(([k,v]) =>
+    `<div class="cuenta-item"><span class="cuenta-nombre">${esc(k)}</span><span class="cuenta-saldo pos">${v}</span></div>`
+  ).join("") || '<p class="note">Sin cambios detectados</p>';
+  const flaggedHtml = (data.flagged||[]).slice(0,50).map(f =>
+    `<div class="note">${esc(f.fecha)} — ${esc(f.concepto)||"—"} (${esc(f.tipo)}, ${fmt(f.monto)}) · <b>${esc(f.motivo)}</b></div>`
+  ).join("");
+  el.innerHTML = `
+    <p class="cfg-note">Conteo por rubro nuevo / corrección:</p>
+    ${countsHtml}
+    ${data.flagged && data.flagged.length ? `
+      <p class="cfg-note" style="margin-top:8px"><b>${data.flagged.length}</b> para revisión manual:</p>
+      ${flaggedHtml}` : ""}
+    ${ejecutada
+      ? `<p class="cfg-note" style="margin-top:8px;color:var(--green)">✓ Aplicado (lote ${esc(data.batchId)}, ${data.aplicados} cambios). Podés revertirlo desde el editor de Apps Script con revertMigracion("${esc(data.batchId)}").</p>`
+      : `<button class="btn-main" style="margin-top:10px" onclick="runEjecutarMigracion()">Confirmar y aplicar</button>`}
+  `;
+}
+
+async function runPreviewMigracion() {
+  showOverlay("Calculando vista previa…");
+  try {
+    const r = await Storage.previewMigracion();
+    if (!r.ok) throw new Error(r.error || "Error");
+    renderMigracionResult(r, false);
+  } catch(e) { toast("Error: " + e.message, "err"); }
+  finally { hideOverlay(); }
+}
+
+async function runEjecutarMigracion() {
+  showOverlay("Aplicando migración…");
+  try {
+    const r = await Storage.ejecutarMigracion();
+    if (!r.ok) throw new Error(r.error || "Error");
+    renderMigracionResult(r, true);
+    toast("Migración aplicada ✓", "ok");
+    const rMov = await Storage.listMov();
+    if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
+  } catch(e) { toast("Error: " + e.message, "err"); }
+  finally { hideOverlay(); }
 }
 
 function saveUrl() {
@@ -3639,6 +4009,10 @@ async function importExcel(event) {
     const iComp  = idxOf(["COMPROBANTE"]);
 
     const importedMovs = [];
+    const sinRubro = [], sinJugador = [], sinAdherente = [];
+    const jugNombres = new Set([...jugadores, ...grupos].map(j => j.nombre.toLowerCase().trim()));
+    const adhNombres = new Set(adherentes.map(a => a.nombre.toLowerCase().trim()));
+
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
       const egr   = parseFloat(r[iEgr]  || 0) || 0;
@@ -3647,20 +4021,31 @@ async function importExcel(event) {
       const tipo  = ing > 0 ? "INGRESO" : egr > 0 ? "EGRESO" : "INTERNO";
       const fecha = iFecha >= 0 ? normFecha(String(r[iFecha]||"")) : today();
       const mes   = iMes >= 0 ? String(r[iMes]||"").replace("-","") : fecha.slice(0,7).replace("-","");
-      const rubro = iRubro >= 0 ? String(r[iRubro]||"") : "";
+      let codRubro = iCod   >= 0 ? String(r[iCod]  ||"").trim() : "";
+      let rubro    = iRubro >= 0 ? String(r[iRubro]||"").trim() : "";
+      let categoria = "";
       if (!rubro && !ing && !egr) continue; // skip empty rows
+
+      // Canonicalizar contra el catálogo: por cod si está, si no por nombre exacto.
+      let catalogado = codRubro && RUBROS.find(x => x.cod === codRubro);
+      if (!catalogado && rubro) catalogado = RUBROS.find(x => x.nombre.toLowerCase() === rubro.toLowerCase());
+      if (catalogado) { codRubro = catalogado.cod; rubro = catalogado.nombre; categoria = catalogado.cat; }
+      else if (rubro || codRubro) sinRubro.push({ fecha, codRubro, rubro, concepto: String(r[iConc]||"") });
+
+      const jugadorCT = iJug >= 0 ? String(r[iJug]||"").trim() : "";
+      if (jugadorCT && !jugNombres.has(jugadorCT.toLowerCase())) sinJugador.push({ fecha, jugadorCT });
+      const adherente = iAdh >= 0 ? String(r[iAdh]||"").trim() : "";
+      if (adherente && !adhNombres.has(adherente.toLowerCase())) sinAdherente.push({ fecha, adherente });
+
       importedMovs.push({
         id: uid(), mes, fecha,
-        codRubro: iCod   >= 0 ? String(r[iCod]  ||"") : "",
-        rubro:    rubro,
-        categoria:"",
+        codRubro, rubro, categoria,
         concepto: iConc  >= 0 ? String(r[iConc] ||"") : "",
         egreso: egr, ingreso: ing, montoFinal: monto,
         cuenta:   iCuenta>= 0 ? String(r[iCuenta]||cuentas[0]||"") : (cuentas[0]||""),
         cuentaDestino: "",
         modoPago: iModo  >= 0 ? String(r[iModo] ||"") : "",
-        jugadorCT: iJug  >= 0 ? String(r[iJug]  ||"") : "",
-        adherente: iAdh  >= 0 ? String(r[iAdh]  ||"") : "",
+        jugadorCT, adherente,
         observacion: iObs>= 0 ? String(r[iObs]  ||"") : "",
         comprobante: iComp>=0 ? String(r[iComp] ||"") : "",
         tipo,
@@ -3682,10 +4067,29 @@ async function importExcel(event) {
     hideOverlay();
     toast(`${saved} movimientos importados ✓`, "ok");
     renderConfig();
+    if (sinRubro.length || sinJugador.length || sinAdherente.length) {
+      showImportWarningsModal(sinRubro, sinJugador, sinAdherente);
+    }
   } catch(e) {
     hideOverlay();
     toast("Error importando: " + e.message, "err");
   }
+}
+
+function showImportWarningsModal(sinRubro, sinJugador, sinAdherente) {
+  const list = (arr, render) => arr.slice(0,30).map(render).join("") +
+    (arr.length > 30 ? `<p class="note">…y ${arr.length-30} más</p>` : "");
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div style="text-align:center;font-size:14px;font-weight:600;margin-bottom:10px">⚠️ Filas a revisar</div>
+        ${sinRubro.length ? `<p><b>${sinRubro.length}</b> con rubro no reconocido:</p>${list(sinRubro, x=>`<div class="note">${esc(x.fecha)} — [${esc(x.codRubro)}] ${esc(x.rubro)} (${esc(x.concepto)})</div>`)}` : ""}
+        ${sinJugador.length ? `<p style="margin-top:10px"><b>${sinJugador.length}</b> con Jugador/CT no encontrado:</p>${list(sinJugador, x=>`<div class="note">${esc(x.fecha)} — ${esc(x.jugadorCT)}</div>`)}` : ""}
+        ${sinAdherente.length ? `<p style="margin-top:10px"><b>${sinAdherente.length}</b> con Adherente no encontrado:</p>${list(sinAdherente, x=>`<div class="note">${esc(x.fecha)} — ${esc(x.adherente)}</div>`)}` : ""}
+        <div class="modal-footer" style="margin-top:12px"><button class="btn-secondary" style="flex:1" onclick="closeModal()">Cerrar</button></div>
+      </div>
+    </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════

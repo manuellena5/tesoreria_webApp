@@ -40,6 +40,67 @@ const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","Movimient
 const JUG_COLS = ["ID","Nombre","Activo"];
 const GRP_COLS = ["ID","Nombre","Miembros","Activo"];
 const CFG_COLS = ["Clave","Valor"];
+const RES_SHEET = "Reservas";
+const RES_COLS  = ["ID","Fecha","Grano","Tipo","Kg","Nota","MovimientoID","timestamp"];
+const MIG_SHEET = "Migracion_Log";
+const MIG_COLS  = ["timestamp","BatchId","MovId","Campo","ValorOriginal","ValorNuevo"];
+
+// ── Catálogo de rubros (debe mantenerse sincronizado a mano con RUBROS en index.html) ──
+// Se usa para sincronizar Rubro/Categoria a partir de CodRubro en cada grabación
+// (normalizeMovFields) y para la migración de cod 16 / cod 37 / grafías históricas.
+const RUBROS_MAP = {
+  "1":   { nombre:"ENTRADAS | CANCHA",                    cat:"Ingresos de cancha" },
+  "2":   { nombre:"UTILIDAD BAR Y PARRILLA | CANCHA",     cat:"Ingresos de cancha" },
+  "3":   { nombre:"VENTA NÚMERO EN CANCHA | CANCHA",      cat:"Ingresos de cancha" },
+  "4":   { nombre:"TRIBUNA | CANCHA",                     cat:"Ingresos de cancha" },
+  "14a": { nombre:"GOPASS (ingreso filmación)",           cat:"Ingresos de cancha" },
+  "7":   { nombre:"PEÑAS - INGRESOS VARIOS",              cat:"Ingresos varios" },
+  "8":   { nombre:"COMISIONES VENTA RIFAS ETC.",          cat:"Ingresos varios" },
+  "5":   { nombre:"PUBLICIDAD - Lonas y otros",           cat:"Publicidad, Aportes y Sponsors" },
+  "24":  { nombre:"PUBLICIDAD - PAGOS VARIOS",            cat:"Publicidad, Aportes y Sponsors" },
+  "6":   { nombre:"ADHERENTES | COLABORADORES",           cat:"Publicidad, Aportes y Sponsors" },
+  "18":  { nombre:"SUELDO DT Y CT",                       cat:"Jugadores y Cuerpo Técnico" },
+  "19":  { nombre:"SUELDO JUGADORES",                     cat:"Jugadores y Cuerpo Técnico" },
+  "20":  { nombre:"GASTOS ATENCION JUGADORES",            cat:"Jugadores y Cuerpo Técnico" },
+  "37":  { nombre:"GASTOS ATENCION REFUERZOS|DT",         cat:"Jugadores y Cuerpo Técnico" },
+  "43":  { nombre:"Vianda",                               cat:"Jugadores y Cuerpo Técnico" },
+  "44":  { nombre:"Almacén",                              cat:"Jugadores y Cuerpo Técnico" },
+  "45":  { nombre:"Alquiler",                             cat:"Jugadores y Cuerpo Técnico" },
+  "46":  { nombre:"Asado",                                cat:"Jugadores y Cuerpo Técnico" },
+  "47":  { nombre:"Comida",                               cat:"Jugadores y Cuerpo Técnico" },
+  "48":  { nombre:"Otros (Refuerzos/DT)",                 cat:"Jugadores y Cuerpo Técnico" },
+  "11":  { nombre:"COBROS Y PAGOS PASE JUGADOR",          cat:"Jugadores y Cuerpo Técnico" },
+  "17":  { nombre:"SERVICIO GIMNASIO",                    cat:"Jugadores y Cuerpo Técnico" },
+  "21":  { nombre:"GASTOS MEDICOS Y FARMACIA | REINT SEG",cat:"Gastos Medicos" },
+  "23":  { nombre:"SEGURO JUGADORES Y CANCHA",            cat:"Gastos Medicos" },
+  "12":  { nombre:"SERVICIO DE ÁRBITROS | CANCHA",        cat:"Gastos Operativos Cancha" },
+  "13":  { nombre:"SERVICIO POLICIA ADICIONAL | CANCHA",  cat:"Gastos Operativos Cancha" },
+  "31":  { nombre:"LIMPIEZA -Servicio y elementos",       cat:"Gastos Operativos Cancha" },
+  "26":  { nombre:"ENERGÍA ELÉCTRICA",                    cat:"Gastos Operativos Cancha" },
+  "25":  { nombre:"GAS",                                  cat:"Gastos Operativos Cancha" },
+  "36":  { nombre:"SERVICIO MEDICO Y AMBULANCIA | CANCHA",cat:"Gastos Operativos Cancha" },
+  "14b": { nombre:"SERVICIO DE FILMACIÓN (egreso)",       cat:"Gastos Operativos Cancha" },
+  "29":  { nombre:"MANT.CANCHA Y INSTALACIONES",          cat:"Obras y Mant. Cancha" },
+  "32":  { nombre:"OBRAS",                                cat:"Obras y Mant. Cancha" },
+  "33":  { nombre:"BIENES DE USO",                        cat:"Obras y Mant. Cancha" },
+  "35":  { nombre:"INDUMENTARIA Y MERCH.",                cat:"Indumentaria y Equipamiento" },
+  "27":  { nombre:"PELOTAS - EQUIPO DEPORTIVO",           cat:"Indumentaria y Equipamiento" },
+  "9":   { nombre:"INTERESES Y GASTOS CUENTA",            cat:"Administrativos y Financieros" },
+  "10":  { nombre:"LIGA - FICHAJES Y MULTAS",             cat:"Administrativos y Financieros" },
+  "28":  { nombre:"LIBRERÍA",                             cat:"Administrativos y Financieros" },
+  "30":  { nombre:"SERVICIOS GENERALES | M. de Obra",     cat:"Administrativos y Financieros" },
+  "16":  { nombre:"MOVILIDAD-APORTES Y GASTOS",           cat:"Movilidad" },
+  "15":  { nombre:"Combustible",                          cat:"Movilidad" },
+  "22":  { nombre:"Remís",                                cat:"Movilidad" },
+  "40":  { nombre:"Viático",                              cat:"Movilidad" },
+  "41":  { nombre:"Colectivo/Pasaje",                     cat:"Movilidad" },
+  "42":  { nombre:"APORTE MOVILIDAD",                     cat:"Movilidad" },
+  "34":  { nombre:"CEREAL - INGRESOS Y GASTOS",           cat:"Otros | Internos" },
+  "38":  { nombre:"INGRESOS Y GASTOS SUBCOM",             cat:"Otros | Internos" },
+  "39":  { nombre:"SALDO NOCTURNO",                       cat:"Otros | Internos" },
+  "49":  { nombre:"TRANSFERENCIA ENTRE CUENTAS",          cat:"Internos" },
+  "50":  { nombre:"SALDO INICIAL / APERTURA",             cat:"Internos" },
+};
 
 // ════════════════════════════════════════════════════════════
 // ENTRY POINTS
@@ -105,7 +166,7 @@ function handleAction(data) {
 
     case "saveMov": {
       const sh = getOrCreateSheet(MOV_SHEET, MOV_COLS);
-      const m  = data.mov;
+      const m  = normalizeMovFields(data.mov);
       const id = m.id || uid_gs();
       const ts = new Date().toISOString();
       sh.appendRow([
@@ -124,7 +185,7 @@ function handleAction(data) {
 
     case "updateMov": {
       const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
-      const m   = data.mov;
+      const m   = normalizeMovFields(data.mov);
       const all = sh.getDataRange().getValues();
       for (let i = 1; i < all.length; i++) {
         if (String(all[i][0]) === String(m.id)) {
@@ -147,7 +208,7 @@ function handleAction(data) {
 
     case "saveBatch": {
       const sh   = getOrCreateSheet(MOV_SHEET, MOV_COLS);
-      const list = data.movimientos || [];
+      const list = (data.movimientos || []).map(normalizeMovFields);
       for (const m of list) {
         sh.appendRow([
           m.id, m.mes, m.fecha, m.codRubro, m.rubro, m.categoria,
@@ -469,6 +530,111 @@ function handleAction(data) {
       return { ok: true };
     }
 
+    // ─── MIGRACIÓN DE RUBROS HISTÓRICOS (Tareas 2 y 4) ────────
+
+    case "previewMigracion": {
+      const plan = construirPlanMigracion();
+      return { ok: true, counts: plan.counts, flagged: plan.flagged, cambios: plan.plan.length };
+    }
+
+    case "ejecutarMigracion": {
+      const plan = construirPlanMigracion();
+      if (!plan.plan.length) return { ok: true, counts: plan.counts, flagged: plan.flagged, batchId: null, aplicados: 0 };
+      const sh    = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const migSh = getOrCreateSheet(MIG_SHEET, MIG_COLS);
+      const batchId = "mig-" + new Date().getTime();
+      const ts = new Date().toISOString();
+      const colNum = { codRubro: 4, rubro: 5, categoria: 6 };
+      for (const ch of plan.plan) {
+        sh.getRange(ch.rowIndex + 1, colNum[ch.campo]).setValue(ch.nuevo);
+        migSh.appendRow([ts, batchId, ch.id, ch.campo, ch.original, ch.nuevo]);
+      }
+      return { ok: true, counts: plan.counts, flagged: plan.flagged, batchId, aplicados: plan.plan.length };
+    }
+
+    case "revertMigracion": {
+      const migSh  = getOrCreateSheet(MIG_SHEET, MIG_COLS);
+      const migAll = migSh.getDataRange().getValues();
+      const sh     = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const movAll = sh.getDataRange().getValues();
+      const idToRow = {};
+      for (let i = 1; i < movAll.length; i++) idToRow[String(movAll[i][0])] = i + 1;
+      const colNum = { codRubro: 4, rubro: 5, categoria: 6 };
+      let reverted = 0;
+      for (let i = 1; i < migAll.length; i++) {
+        const row = migAll[i];
+        if (String(row[1]) !== String(data.batchId)) continue;
+        const rowNum = idToRow[String(row[2])];
+        const campo  = String(row[3]);
+        if (!rowNum || !colNum[campo]) continue;
+        sh.getRange(rowNum, colNum[campo]).setValue(row[4]);
+        reverted++;
+      }
+      return { ok: true, reverted };
+    }
+
+    // ─── RESERVA DE GRANOS ──────────────────────────────────────
+
+    case "listReservas": {
+      const sh  = getOrCreateSheet(RES_SHEET, RES_COLS);
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, reservas: [] };
+      const reservas = all.slice(1).filter(r => r[0]).map(r => ({
+        id:           String(r[0]),
+        fecha:        formatFecha(r[1]),
+        grano:        String(r[2] || ""),
+        tipo:         String(r[3] || ""),
+        kg:           Number(r[4] || 0),
+        nota:         String(r[5] || ""),
+        movimientoId: String(r[6] || ""),
+      }));
+      return { ok: true, reservas };
+    }
+
+    case "saveReserva": {
+      const sh = getOrCreateSheet(RES_SHEET, RES_COLS);
+      const r  = data.reserva;
+      const id = r.id || uid_gs();
+      sh.appendRow([
+        id, r.fecha || "", r.grano || "", r.tipo || "", Number(r.kg || 0),
+        r.nota || "", r.movimientoId || "", new Date().toISOString()
+      ]);
+      return { ok: true, id };
+    }
+
+    case "deleteReserva": {
+      const sh  = getOrCreateSheet(RES_SHEET, RES_COLS);
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(data.id)) {
+          sh.deleteRow(i + 1);
+          return { ok: true };
+        }
+      }
+      return { ok: true };
+    }
+
+    // Siembra el stock inicial de granos y el precio de referencia (una sola vez).
+    case "seedGranos": {
+      const resSh = getOrCreateSheet(RES_SHEET, RES_COLS);
+      if (resSh.getLastRow() <= 1) {
+        const ts = new Date().toISOString();
+        const fecha = ts.slice(0, 10);
+        resSh.appendRow([uid_gs(), fecha, "Soja",  "COSECHA", 36020, "Stock inicial", "", ts]);
+        resSh.appendRow([uid_gs(), fecha, "Trigo", "COSECHA", 43860, "Stock inicial", "", ts]);
+      }
+      const cfgSh = getOrCreateSheet(CFG_SHEET, CFG_COLS);
+      const all   = cfgSh.getDataRange().getValues();
+      let hasPrecios = false, hasSeeded = false;
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === "preciosGranos") hasPrecios = true;
+        if (String(all[i][0]) === "seededGranos")  hasSeeded  = true;
+      }
+      if (!hasPrecios) cfgSh.appendRow(["preciosGranos", JSON.stringify({ Soja: 480000, Trigo: 293600 })]);
+      if (!hasSeeded)  cfgSh.appendRow(["seededGranos", "true"]);
+      return { ok: true };
+    }
+
     default:
       return { ok: false, error: "Acción desconocida: " + data.action };
   }
@@ -499,10 +665,131 @@ function autoFillIds(sh, hasData, fixRow) {
   }
 }
 
+/**
+ * Refuerza la coherencia de un movimiento antes de grabarlo, sin importar si viene
+ * del formulario, de saveBatch o de un import de Excel:
+ * - Si CodRubro está en el catálogo (RUBROS_MAP), fuerza Rubro/Categoria al texto
+ *   canónico (evita que quede texto libre desincronizado del código).
+ * - Si Tipo viene vacío, lo infiere de Ingreso/Egreso.
+ * - Recalcula MontoFinal para que sea coherente con Tipo/Egreso/Ingreso.
+ */
+function normalizeMovFields(m) {
+  const out = Object.assign({}, m);
+  const cat = RUBROS_MAP[String(out.codRubro || "")];
+  if (cat) {
+    out.rubro     = cat.nombre;
+    out.categoria = cat.cat;
+  }
+  const egreso  = Number(out.egreso  || 0);
+  const ingreso = Number(out.ingreso || 0);
+  if (!out.tipo) {
+    if (ingreso > 0) out.tipo = "INGRESO";
+    else if (egreso > 0) out.tipo = "EGRESO";
+  }
+  if (out.tipo === "INGRESO")      out.montoFinal = ingreso;
+  else if (out.tipo === "EGRESO")  out.montoFinal = egreso;
+  else if (out.tipo === "INTERNO") out.montoFinal = Number(out.montoFinal || egreso || ingreso || 0);
+  return out;
+}
+
 // Mismos rubros que se consideran aporte de adherente en el front-end (ADH_RUBROS):
-// [6] ADHERENTES | COLABORADORES y [5] PUBLICIDAD - Lonas y otros
+// [6] ADHERENTES | COLABORADORES, [5] PUBLICIDAD - Lonas y otros, [42] APORTE MOVILIDAD
 function isAdherenteRubro(codRubro) {
-  return codRubro === "5" || codRubro === "6";
+  return codRubro === "5" || codRubro === "6" || codRubro === "42";
+}
+
+/** cod 16 (MOVILIDAD-APORTES Y GASTOS) → uno de los 5 rubros nuevos, según Concepto/Tipo. */
+function clasificarRubro16(concepto, tipo) {
+  if (tipo === "INGRESO") return "42"; // APORTE MOVILIDAD
+  const c = (concepto || "").toLowerCase();
+  if (c.indexOf("combustible") >= 0) return "15";
+  if (c.indexOf("remis") >= 0) return "22";
+  if (c.indexOf("viatic") >= 0 || c.indexOf("viático") >= 0) return "40";
+  if (c.indexOf("colectivo") >= 0 || c.indexOf("pasaje") >= 0) return "41";
+  return null; // sin clasificar
+}
+
+/** cod 37 (GASTOS ATENCION REFUERZOS|DT) → uno de los 6 rubros nuevos, según Concepto/Tipo. */
+function clasificarRubro37(concepto, tipo) {
+  if (tipo === "INGRESO") return { cod: null, motivo: "INGRESO en cod37 - revisar a mano" };
+  const c = (concepto || "").toLowerCase();
+  if (c.indexOf("vianda") >= 0) return { cod: "43" };
+  if (c.indexOf("almac") >= 0) return { cod: "44" };
+  if (c.indexOf("alquiler") >= 0) return { cod: "45" };
+  if (c.indexOf("asado") >= 0) return { cod: "46" };
+  if (c.indexOf("comida") >= 0 || c.indexOf("almuerzo") >= 0) return { cod: "47" };
+  return { cod: "48", motivo: "sin match de palabra clave -> Otros, revisar" };
+}
+
+/**
+ * Construye el plan de migración (Tareas 2 y 4) leyendo Movimientos en vivo:
+ * - Reclasifica cod 16 y cod 37 según clasificarRubro16/37.
+ * - Corrige grafías de cod 9 y cod 27.
+ * - Reasigna "SALDO TRANSPORTE 2025" (sin cod) al cod 50.
+ * - Junta en "flagged" lo que no se puede resolver solo (para revisión manual):
+ *   cod37 sin match (igual se manda a Otros pero se avisa), cod37 con INGRESO,
+ *   y JugadorCT "GALARZA" (no está en la lista de jugadores).
+ * No escribe nada — `ejecutarMigracion` reusa este plan para aplicar los cambios.
+ */
+function construirPlanMigracion() {
+  const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+  const all = sh.getDataRange().getValues();
+  const plan = [];
+  const counts = {};
+  const flagged = [];
+
+  function addCambioRubro(rowIndex, id, codActual, rubroActual, catActual, nuevoCod) {
+    const info = RUBROS_MAP[nuevoCod];
+    if (codActual !== nuevoCod)   plan.push({ rowIndex, id, campo: "codRubro", original: codActual,   nuevo: nuevoCod });
+    if (rubroActual !== info.nombre) plan.push({ rowIndex, id, campo: "rubro",     original: rubroActual, nuevo: info.nombre });
+    if (catActual !== info.cat)   plan.push({ rowIndex, id, campo: "categoria", original: catActual,   nuevo: info.cat });
+    counts[info.nombre] = (counts[info.nombre] || 0) + 1;
+  }
+
+  for (let i = 1; i < all.length; i++) {
+    const r = all[i];
+    const id = String(r[0] || "");
+    if (!id) continue;
+    const codRubro  = String(r[3] || "");
+    const rubro     = String(r[4] || "");
+    const categoria = String(r[5] || "");
+    const concepto  = String(r[6] || "");
+    const monto     = Number(r[9] || 0);
+    const tipo      = String(r[18] || "");
+    const fecha     = formatFecha(r[2]);
+
+    if (codRubro === "16") {
+      const nuevoCod = clasificarRubro16(concepto, tipo);
+      if (!nuevoCod) {
+        flagged.push({ id, fecha, concepto, tipo, monto, motivo: "cod16 sin clasificar" });
+        continue;
+      }
+      addCambioRubro(i, id, codRubro, rubro, categoria, nuevoCod);
+    } else if (codRubro === "37") {
+      const res = clasificarRubro37(concepto, tipo);
+      if (!res.cod) {
+        flagged.push({ id, fecha, concepto, tipo, monto, motivo: res.motivo });
+        continue;
+      }
+      addCambioRubro(i, id, codRubro, rubro, categoria, res.cod);
+      if (res.motivo) flagged.push({ id, fecha, concepto, tipo, monto, motivo: res.motivo });
+    } else if (rubro === "INTERESES y GASTOS Cuenta") {
+      plan.push({ rowIndex: i, id, campo: "rubro", original: rubro, nuevo: RUBROS_MAP["9"].nombre });
+      counts["INTERESES Y GASTOS CUENTA (grafía corregida)"] = (counts["INTERESES Y GASTOS CUENTA (grafía corregida)"] || 0) + 1;
+    } else if (rubro === "PELOTAS-EQUIPO DEPOR.") {
+      plan.push({ rowIndex: i, id, campo: "rubro", original: rubro, nuevo: RUBROS_MAP["27"].nombre });
+      counts["PELOTAS - EQUIPO DEPORTIVO (grafía corregida)"] = (counts["PELOTAS - EQUIPO DEPORTIVO (grafía corregida)"] || 0) + 1;
+    } else if (rubro.indexOf("SALDO TRANSPORTE") >= 0) {
+      addCambioRubro(i, id, codRubro, rubro, categoria, "50");
+    }
+
+    const jugadorCT = String(r[13] || "").trim();
+    if (jugadorCT.toUpperCase() === "GALARZA") {
+      flagged.push({ id, fecha, concepto, tipo, monto, motivo: "JugadorCT 'GALARZA' no está en la lista de jugadores" });
+    }
+  }
+
+  return { plan, counts, flagged };
 }
 
 /**

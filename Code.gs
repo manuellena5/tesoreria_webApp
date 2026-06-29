@@ -66,7 +66,6 @@ const RUBROS_MAP = {
   "43":  { nombre:"Vianda",                               cat:"Jugadores y Cuerpo Técnico" },
   "44":  { nombre:"Almacén",                              cat:"Jugadores y Cuerpo Técnico" },
   "45":  { nombre:"Alquiler",                             cat:"Jugadores y Cuerpo Técnico" },
-  "46":  { nombre:"Asado",                                cat:"Jugadores y Cuerpo Técnico" },
   "47":  { nombre:"Comida",                               cat:"Jugadores y Cuerpo Técnico" },
   "48":  { nombre:"Otros (Refuerzos/DT)",                 cat:"Jugadores y Cuerpo Técnico" },
   "11":  { nombre:"COBROS Y PAGOS PASE JUGADOR",          cat:"Jugadores y Cuerpo Técnico" },
@@ -167,7 +166,11 @@ function handleAction(data) {
     case "saveMov": {
       const sh = getOrCreateSheet(MOV_SHEET, MOV_COLS);
       const m  = normalizeMovFields(data.mov);
-      const id = m.id || uid_gs();
+      // Si el ID ya existe en la hoja (reintento con estado de formulario viejo,
+      // doble click, etc.), generamos uno nuevo en vez de duplicarlo — appendRow
+      // siempre agrega una fila nueva, nunca pisa una existente.
+      let id = m.id || uid_gs();
+      if (idExisteEnMov(sh, id)) id = uid_gs();
       const ts = new Date().toISOString();
       sh.appendRow([
         id, m.mes||"", m.fecha||"", m.codRubro||"", m.rubro||"", m.categoria||"",
@@ -210,6 +213,7 @@ function handleAction(data) {
       const sh   = getOrCreateSheet(MOV_SHEET, MOV_COLS);
       const list = (data.movimientos || []).map(normalizeMovFields);
       for (const m of list) {
+        if (idExisteEnMov(sh, m.id)) m.id = uid_gs();
         sh.appendRow([
           m.id, m.mes, m.fecha, m.codRubro, m.rubro, m.categoria,
           m.concepto, m.egreso || 0, m.ingreso || 0, m.montoFinal || 0,
@@ -226,15 +230,20 @@ function handleAction(data) {
     }
 
     case "deleteMov": {
+      // Borra TODAS las filas con ese ID, no solo la primera que encuentre — si
+      // alguna vez quedó un ID duplicado (ver saveMov), borrar de a una hacía que
+      // la fila restante reapareciera al recargar.
       const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
       const all = sh.getDataRange().getValues();
+      let borradas = 0;
       for (let i = all.length - 1; i >= 1; i--) {
         if (String(all[i][0]) === String(data.id)) {
           sh.deleteRow(i + 1);
-          return { ok: true };
+          borradas++;
         }
       }
-      return { ok: false, error: "Movimiento no encontrado: " + data.id };
+      if (!borradas) return { ok: false, error: "Movimiento no encontrado: " + data.id };
+      return { ok: true, borradas };
     }
 
     // ─── JUGADORES ───────────────────────────────────────────
@@ -665,6 +674,16 @@ function autoFillIds(sh, hasData, fixRow) {
   }
 }
 
+/** true si ya existe una fila con ese ID en la hoja de Movimientos. */
+function idExisteEnMov(sh, id) {
+  if (!id) return false;
+  const ids = sh.getDataRange().getValues();
+  for (let i = 1; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) return true;
+  }
+  return false;
+}
+
 /**
  * Refuerza la coherencia de un movimiento antes de grabarlo, sin importar si viene
  * del formulario, de saveBatch o de un import de Excel:
@@ -716,9 +735,8 @@ function clasificarRubro37(concepto, tipo) {
   if (c.indexOf("vianda") >= 0) return { cod: "43" };
   if (c.indexOf("almac") >= 0) return { cod: "44" };
   if (c.indexOf("alquiler") >= 0) return { cod: "45" };
-  if (c.indexOf("asado") >= 0) return { cod: "46" };
   if (c.indexOf("comida") >= 0 || c.indexOf("almuerzo") >= 0) return { cod: "47" };
-  return { cod: "48", motivo: "sin match de palabra clave -> Otros, revisar" };
+  return { cod: "48", motivo: "sin match de palabra clave (incluye 'asado') -> Otros, revisar" };
 }
 
 /**

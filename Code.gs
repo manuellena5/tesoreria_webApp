@@ -230,20 +230,22 @@ function handleAction(data) {
     }
 
     case "deleteMov": {
-      // Borra TODAS las filas con ese ID, no solo la primera que encuentre — si
-      // alguna vez quedó un ID duplicado (ver saveMov), borrar de a una hacía que
-      // la fila restante reapareciera al recargar.
-      const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
-      const all = sh.getDataRange().getValues();
-      let borradas = 0;
-      for (let i = all.length - 1; i >= 1; i--) {
-        if (String(all[i][0]) === String(data.id)) {
-          sh.deleteRow(i + 1);
-          borradas++;
-        }
+      // Valida que el ID identifique EXACTAMENTE una fila antes de borrar. Si
+      // hay más de una coincidencia (ID duplicado), no borra nada — borrar "la
+      // primera que aparezca" podía eliminar una fila distinta a la que el
+      // usuario eligió en pantalla. Avisa para resolverlo a mano.
+      const sh    = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const all   = sh.getDataRange().getValues();
+      const filas = [];
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(data.id)) filas.push(i + 1);
       }
-      if (!borradas) return { ok: false, error: "Movimiento no encontrado: " + data.id };
-      return { ok: true, borradas };
+      if (!filas.length) return { ok: false, error: "Movimiento no encontrado: " + data.id };
+      if (filas.length > 1) {
+        return { ok: false, error: "Hay " + filas.length + " movimientos con el mismo ID (" + data.id + "). No se borró nada — corregilo a mano en la hoja antes de eliminar." };
+      }
+      sh.deleteRow(filas[0]);
+      return { ok: true };
     }
 
     // ─── JUGADORES ───────────────────────────────────────────

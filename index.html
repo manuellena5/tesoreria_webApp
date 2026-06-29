@@ -549,6 +549,9 @@ const RUBROS = [
   {cod:"45",  nombre:"Alquiler",                            cat:"Jugadores y Cuerpo Técnico"},
   {cod:"47",  nombre:"Comida",                               cat:"Jugadores y Cuerpo Técnico"},
   {cod:"48",  nombre:"Otros (Refuerzos/DT)",                cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"51",  nombre:"Arreglos/Compras Casa Refuerzos",     cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"52",  nombre:"Impuestos/Servicios Casa Refuerzos",  cat:"Jugadores y Cuerpo Técnico"},
+  {cod:"53",  nombre:"Aporte Botines",                       cat:"Jugadores y Cuerpo Técnico"},
   {cod:"11",  nombre:"COBROS Y PAGOS PASE JUGADOR",         cat:"Jugadores y Cuerpo Técnico"},
   {cod:"17",  nombre:"SERVICIO GIMNASIO",                   cat:"Jugadores y Cuerpo Técnico"},
   {cod:"21",  nombre:"GASTOS MEDICOS Y FARMACIA | REINT SEG", cat:"Gastos Medicos"},
@@ -1226,13 +1229,13 @@ function filterRubros(query) {
   const drop = document.getElementById("ss-rubro-drop");
   if (!drop) return;
   ssRubroActiveIndex = -1;
-  const q = (query || "").toLowerCase();
+  const q = normStr(query);
   const cats = [...new Set(RUBROS.filter(r => !r.legacy).map(r => r.cat))];
   let html = "";
   for (const cat of cats) {
     const items = RUBROS.filter(r => r.cat === cat && !r.legacy && (!q ||
-      r.nombre.toLowerCase().includes(q) ||
-      r.cod.toLowerCase().includes(q)
+      normStr(r.nombre).includes(q) ||
+      normStr(r.cod).includes(q)
     ));
     if (!items.length) continue;
     html += `<div class="ss-group">${esc(cat)}</div>`;

@@ -547,7 +547,6 @@ const RUBROS = [
   {cod:"43",  nombre:"Vianda",                              cat:"Jugadores y Cuerpo Técnico"},
   {cod:"44",  nombre:"Almacén",                             cat:"Jugadores y Cuerpo Técnico"},
   {cod:"45",  nombre:"Alquiler",                            cat:"Jugadores y Cuerpo Técnico"},
-  {cod:"46",  nombre:"Asado",                                cat:"Jugadores y Cuerpo Técnico"},
   {cod:"47",  nombre:"Comida",                               cat:"Jugadores y Cuerpo Técnico"},
   {cod:"48",  nombre:"Otros (Refuerzos/DT)",                cat:"Jugadores y Cuerpo Técnico"},
   {cod:"11",  nombre:"COBROS Y PAGOS PASE JUGADOR",         cat:"Jugadores y Cuerpo Técnico"},
@@ -1310,6 +1309,9 @@ async function saveMovimiento() {
       ? await Storage.updateMov(mov)
       : await Storage.saveMov(mov);
     if (!r.ok) throw new Error(r.error || "Error al guardar");
+    // saveMov puede devolver un ID distinto al enviado si detectó una colisión
+    // (reintento con F.id viejo, etc.) — usamos siempre el que confirmó el backend.
+    if (r.id) mov.id = r.id;
 
     // Update local state
     if (editId) {

@@ -700,6 +700,11 @@ function fmt(n) {
 function esc(s) {
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/\|/g,"&#124;");
 }
+// Escapa para insertar dentro de un string JS de comillas simples (ej. onclick="fn('...')"),
+// necesario antes de esc() para que apóstrofes en nombres (ej. "BAR D'MICHELIN") no rompan el handler
+function escJs(s) {
+  return String(s||"").replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/\n/g," ").replace(/\r/g,"");
+}
 // Normaliza tildes y espacios para comparaciones tolerantes
 function normStr(s) {
   return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim().toLowerCase();
@@ -2215,7 +2220,7 @@ function renderReintegrosTabla(rows) {
     const rowClass = r.estado === "OK" ? "reint-row row-ok" : "reint-row";
     const reintegradoCell = isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${fmt(r.reintegrado)}</td>`;
     return `
-    <tr class="${rowClass}" onclick="toggleReintegroDetalle('${esc(r.jugador)}')">
+    <tr class="${rowClass}" onclick="toggleReintegroDetalle('${esc(escJs(r.jugador))}')">
       <td class="jugador-col" title="${esc(r.jugador)}">${esc(r.jugador)}</td>
       <td style="text-align:right;font-family:var(--mono)">${fmt(r.abonado)}</td>
       ${reintegradoCell}
@@ -2264,7 +2269,7 @@ function renderReintegroCard(r) {
     : r.estado==="DIF"     ? `~ DIFERENCIAS (${fmt(r.diferencia)})`
     : r.estado==="PARCIAL" ? "⚠️ Parcial" : "🔴 Sin reintegro";
   return `
-  <div class="reint-card" onclick="toggleReintegroDetalle('${esc(r.jugador)}')">
+  <div class="reint-card" onclick="toggleReintegroDetalle('${esc(escJs(r.jugador))}')">
     <div class="reint-card-hdr">
       <span class="reint-card-nombre" title="${esc(r.jugador)}">${esc(r.jugador)}</span>
       <span class="reint-badge ${badgeClass}">${badgeTxt}</span>
@@ -2468,7 +2473,7 @@ function renderAdherentesTabla(rows) {
       : `<td style="text-align:right;color:var(--text3)">—</td>`;
     const colspan = isMobile ? 4 : 6;
     return `
-    <tr class="${rowClass}" onclick="toggleAdherenteDetalle('${esc(r.adherente)}')">
+    <tr class="${rowClass}" onclick="toggleAdherenteDetalle('${esc(escJs(r.adherente))}')">
       <td class="jugador-col" title="${esc(r.adherente)}">${esc(r.adherente)}</td>
       ${cuotasCell}
       <td style="text-align:right;font-family:var(--mono)" class="ing">${fmt(r.totalAportado)}</td>
@@ -2542,7 +2547,7 @@ function renderAdherenteCard(r) {
     </div>`;
 
   return `
-  <div class="reint-card" onclick="toggleAdherenteDetalle('${esc(r.adherente)}')">
+  <div class="reint-card" onclick="toggleAdherenteDetalle('${esc(escJs(r.adherente))}')">
     <div class="reint-card-hdr">
       <span class="reint-card-nombre" title="${esc(r.adherente)}">${esc(r.adherente)}</span>
       ${badge}
@@ -2834,7 +2839,7 @@ function renderJugadoresResTabla(rows) {
     const nombreLbl = (r.esGrupo ? "👥 " : "") + esc(r.nombre);
     const colspan = isMobile ? 6 : 7;
     return `
-    <tr class="${rowClass}" style="${r.esGrupo?'background:var(--bg3)':''}" onclick="toggleJugadorResDetalle('${esc(r.nombre)}')">
+    <tr class="${rowClass}" style="${r.esGrupo?'background:var(--bg3)':''}" onclick="toggleJugadorResDetalle('${esc(escJs(r.nombre))}')">
       <td class="jugador-col" title="${esc(r.nombre)}">${nombreLbl}</td>
       ${cell(r.sueldos)}
       ${cell(r.movilidad)}
@@ -2895,7 +2900,7 @@ function renderJugadorResCard(r) {
     </div>`).join("");
 
   return `
-  <div class="reint-card" onclick="toggleJugadorResDetalle('${esc(r.nombre)}')">
+  <div class="reint-card" onclick="toggleJugadorResDetalle('${esc(escJs(r.nombre))}')">
     <div class="reint-card-hdr">
       <span class="reint-card-nombre" title="${esc(r.nombre)}">${r.esGrupo?"👥 ":"👤 "}${esc(r.nombre)}</span>
       <span class="val ${r.total<0?'egr':'ing'}" style="font-family:var(--mono);font-weight:600">${r.total<0?"-":"+"}${fmt(Math.abs(r.total))}</span>

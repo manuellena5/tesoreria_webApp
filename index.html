@@ -1485,8 +1485,8 @@ function setMovOrden(v) {
 function renderMovList() {
   const movMes = movimientos
     .filter(m => mesFromRecord(m) === sharedMes)
-    .filter(m => !listFiltros.rubro  || m.rubro.toLowerCase().includes(listFiltros.rubro.toLowerCase()))
-    .filter(m => !listFiltros.cat    || m.categoria.toLowerCase().includes(listFiltros.cat.toLowerCase()))
+    .filter(m => !listFiltros.rubro  || normStr(m.rubro).includes(normStr(listFiltros.rubro)))
+    .filter(m => !listFiltros.cat    || normStr(m.categoria).includes(normStr(listFiltros.cat)))
     .filter(m => !listFiltros.cuenta || m.cuenta     === listFiltros.cuenta)
     .filter(m => !listFiltros.tipo      || m.tipo        === listFiltros.tipo)
     .filter(m => !listFiltros.adherente || normStr(m.adherente).includes(normStr(listFiltros.adherente)))
@@ -1497,8 +1497,8 @@ function renderMovList() {
       return m.partidoId === listFiltros.partido;
     })
     .filter(m => {
-      const q = listFiltros.search.toLowerCase();
-      return !q || (m.concepto||"").toLowerCase().includes(q) || (m.observacion||"").toLowerCase().includes(q);
+      const q = normStr(listFiltros.search);
+      return !q || normStr(m.concepto).includes(q) || normStr(m.observacion).includes(q);
     });
 
   // KPIs sobre el subtotal filtrado (igual al total del mes cuando no hay filtros extra)

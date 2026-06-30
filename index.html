@@ -2669,7 +2669,7 @@ function toggleJugadorResDetalle(key) {
 // (rubro 6 = Adherentes, rubro 49 = Internos)
 function jugadorResCategoria(codRubro) {
   if (codRubro === "18" || codRubro === "19") return "sueldos";
-  if (codRubro === "16") return "movilidad";
+  if (codRubro === "15" || codRubro === "16" || codRubro === "22" || codRubro === "40" || codRubro === "41") return "movilidad";
   if (codRubro === "43") return "viandas";
   if (codRubro === "44") return "almacen";
   if (codRubro === "45" || codRubro === "51" || codRubro === "52") return "alquilerCasa";

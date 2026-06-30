@@ -2139,13 +2139,19 @@ function calcReintegrosPorJugador(anio) {
   const map = {};
   for (const m of movs21) {
     const key = m.jugadorCT || "Sin jugador";
-    if (!map[key]) map[key] = { jugador: key, abonado: 0, reintegrado: 0, movs: [] };
-    if (m.tipo === "EGRESO") map[key].abonado += m.egreso;
-    else map[key].reintegrado += m.ingreso;
+    if (!map[key]) map[key] = { jugador: key, abonado: 0, abonadoConReintegro: 0, sinReintegro: 0, reintegrado: 0, movs: [] };
+    if (m.tipo === "EGRESO") {
+      map[key].abonado += m.egreso;
+      if (m.seguroReintegro) map[key].abonadoConReintegro += m.egreso;
+      else map[key].sinReintegro += m.egreso;
+    } else {
+      map[key].reintegrado += m.ingreso;
+    }
     map[key].movs.push(m);
   }
   return Object.values(map).map(r => {
-    const pendienteRaw = r.abonado - r.reintegrado;
+    // Pendiente solo considera egresos marcados con reintegro de seguro (seguroReintegro=1)
+    const pendienteRaw = r.abonadoConReintegro - r.reintegrado;
     const pendiente = Math.round(pendienteRaw) === 0 ? 0 : pendienteRaw;
     const diferencia = pendiente < 0 ? Math.abs(pendiente) : 0;
     const estado = pendiente < 0 ? "DIF" : pendiente === 0 ? "OK" : (r.reintegrado > 0 ? "PARCIAL" : "SIN");
@@ -2198,11 +2204,12 @@ function estadoCorto(estado, diferencia) {
 function renderReintegrosTabla(rows) {
   const isMobile = window.matchMedia("(max-width:599px)").matches;
 
-  let totAbonado=0, totReintegrado=0, totPendiente=0;
+  let totAbonado=0, totReintegrado=0, totPendiente=0, totSinReintegro=0;
   const bodyRows = rows.map(r => {
-    totAbonado     += r.abonado;
-    totReintegrado += r.reintegrado;
-    totPendiente   += Math.max(r.pendiente,0);
+    totAbonado      += r.abonado;
+    totReintegrado  += r.reintegrado;
+    totPendiente    += Math.max(r.pendiente,0);
+    totSinReintegro += r.sinReintegro;
     const isExp = reintegroExpandido.has(r.jugador);
     const detalle = isExp ? renderReintegroDetalle(r) : "";
     const rowClass = r.estado === "OK" ? "reint-row row-ok" : "reint-row";
@@ -2213,9 +2220,10 @@ function renderReintegrosTabla(rows) {
       <td style="text-align:right;font-family:var(--mono)">${fmt(r.abonado)}</td>
       ${reintegradoCell}
       <td style="text-align:right;font-family:var(--mono)" class="${r.pendiente>0?'egr':'ing'}">${fmt(Math.max(r.pendiente,0))}</td>
+      <td style="text-align:right;font-family:var(--mono)">${fmt(r.sinReintegro)}</td>
       <td>${estadoCorto(r.estado, r.diferencia)}</td>
     </tr>${isExp ? `
-    <tr><td colspan="${isMobile?4:5}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
+    <tr><td colspan="${isMobile?5:6}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
   }).join("");
 
   const totReintegradoCell = isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${fmt(totReintegrado)}</td>`;
@@ -2224,6 +2232,7 @@ function renderReintegrosTabla(rows) {
     <td style="text-align:right;font-family:var(--mono)">${fmt(totAbonado)}</td>
     ${totReintegradoCell}
     <td style="text-align:right;font-family:var(--mono)" class="${totPendiente>0?'egr':'ing'}">${fmt(totPendiente)}</td>
+    <td style="text-align:right;font-family:var(--mono)">${fmt(totSinReintegro)}</td>
     <td></td>
   </tr>`;
 
@@ -2238,6 +2247,7 @@ function renderReintegrosTabla(rows) {
           <th style="text-align:right">Abonado</th>
           ${reintegradoHeader}
           <th style="text-align:right">Pendiente</th>
+          <th style="text-align:right">Sin reintegro</th>
           <th>Estado</th>
         </tr></thead>
         <tbody>${bodyRows}${totRow}</tbody>
@@ -2259,7 +2269,7 @@ function renderReintegroCard(r) {
       <span class="reint-card-nombre" title="${esc(r.jugador)}">${esc(r.jugador)}</span>
       <span class="reint-badge ${badgeClass}">${badgeTxt}</span>
     </div>
-    <div class="reint-card-body">
+    <div class="reint-card-body" style="grid-template-columns:1fr 1fr 1fr 1fr">
       <div class="reint-card-col">
         <label>Abonado</label>
         <div class="val">${fmt(r.abonado)}</div>
@@ -2271,6 +2281,10 @@ function renderReintegroCard(r) {
       <div class="reint-card-col">
         <label>Pendiente</label>
         <div class="val ${r.pendiente>0?'egr':'ing'}">${fmt(Math.max(r.pendiente,0))}</div>
+      </div>
+      <div class="reint-card-col">
+        <label>Sin reintegro</label>
+        <div class="val">${fmt(r.sinReintegro)}</div>
       </div>
     </div>
     ${isExp ? `<div class="reint-card-detalle" onclick="event.stopPropagation()">${renderReintegroDetalle(r)}</div>` : ""}

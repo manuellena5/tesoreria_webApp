@@ -2670,7 +2670,9 @@ function toggleJugadorResDetalle(key) {
 function jugadorResCategoria(codRubro) {
   if (codRubro === "18" || codRubro === "19") return "sueldos";
   if (codRubro === "16") return "movilidad";
-  if (codRubro === "20" || codRubro === "37") return "atencion";
+  if (codRubro === "43") return "viandas";
+  if (codRubro === "44") return "almacen";
+  if (codRubro === "45" || codRubro === "51" || codRubro === "52") return "alquilerCasa";
   if (codRubro === "21") return "medico";
   if (codRubro === "6" || codRubro === "49") return null;
   return "otros";
@@ -2693,7 +2695,7 @@ function calcJugadoresResumen(anio, mes, agrupacion) {
 
   const map = {};
   function ensure(key, esGrupo) {
-    if (!map[key]) map[key] = { nombre:key, esGrupo, sueldos:0, movilidad:0, atencion:0, medico:0, otros:0, movimientos:[] };
+    if (!map[key]) map[key] = { nombre:key, esGrupo, sueldos:0, movilidad:0, viandas:0, almacen:0, alquilerCasa:0, medico:0, otros:0, movimientos:[] };
     return map[key];
   }
 
@@ -2749,7 +2751,7 @@ function calcJugadoresResumen(anio, mes, agrupacion) {
     }
   }
 
-  return Object.values(map).map(r => ({ ...r, total: r.sueldos + r.movilidad + r.atencion + r.medico + r.otros }));
+  return Object.values(map).map(r => ({ ...r, total: r.sueldos + r.movilidad + r.viandas + r.almacen + r.alquilerCasa + r.medico + r.otros }));
 }
 
 function renderJugadoresResumen() {
@@ -2819,31 +2821,35 @@ function renderJugadoresResumen() {
 function renderJugadoresResTabla(rows) {
   const isMobile = window.matchMedia("(max-width:599px)").matches;
 
-  let totSueldos=0, totMovilidad=0, totAtencion=0, totMedico=0, totOtros=0, totTotal=0;
+  let totSueldos=0, totMovilidad=0, totViandas=0, totAlmacen=0, totAlquilerCasa=0, totMedico=0, totOtros=0, totTotal=0;
   function cell(v) {
     if (!v) return `<td style="text-align:right;color:var(--text3)">—</td>`;
     return `<td style="text-align:right;font-family:var(--mono)" class="${v<0?'egr':'ing'}">${v<0?"-":"+"}${fmt(Math.abs(v))}</td>`;
   }
 
   const bodyRows = rows.map(r => {
-    totSueldos   += r.sueldos;
-    totMovilidad += r.movilidad;
-    totAtencion  += r.atencion;
-    totMedico    += r.medico;
-    totOtros     += r.otros;
-    totTotal     += r.total;
+    totSueldos      += r.sueldos;
+    totMovilidad    += r.movilidad;
+    totViandas      += r.viandas;
+    totAlmacen      += r.almacen;
+    totAlquilerCasa += r.alquilerCasa;
+    totMedico       += r.medico;
+    totOtros        += r.otros;
+    totTotal        += r.total;
     const isExp = jugadorResExpandido.has(r.nombre);
     const detalle = isExp ? renderJugadorResDetalle(r) : "";
     const rowClass = r.esGrupo ? "reint-row" : "reint-row";
     const otrosCell = isMobile ? "" : cell(r.otros);
     const nombreLbl = (r.esGrupo ? "👥 " : "") + esc(r.nombre);
-    const colspan = isMobile ? 6 : 7;
+    const colspan = isMobile ? 6 : 9;
     return `
     <tr class="${rowClass}" style="${r.esGrupo?'background:var(--bg3)':''}" onclick="toggleJugadorResDetalle('${esc(escJs(r.nombre))}')">
       <td class="jugador-col" title="${esc(r.nombre)}">${nombreLbl}</td>
       ${cell(r.sueldos)}
       ${cell(r.movilidad)}
-      ${cell(r.atencion)}
+      ${cell(r.viandas)}
+      ${cell(r.almacen)}
+      ${cell(r.alquilerCasa)}
       ${cell(r.medico)}
       ${otrosCell}
       <td style="text-align:right;font-family:var(--mono);font-weight:600" class="${r.total<0?'egr':'ing'}">${r.total<0?"-":"+"}${fmt(Math.abs(r.total))}</td>
@@ -2855,7 +2861,9 @@ function renderJugadoresResTabla(rows) {
     <td class="jugador-col">TOTALES</td>
     ${cell(totSueldos)}
     ${cell(totMovilidad)}
-    ${cell(totAtencion)}
+    ${cell(totViandas)}
+    ${cell(totAlmacen)}
+    ${cell(totAlquilerCasa)}
     ${cell(totMedico)}
     ${isMobile ? "" : cell(totOtros)}
     <td style="text-align:right;font-family:var(--mono);font-weight:600" class="${totTotal<0?'egr':'ing'}">${totTotal<0?"-":"+"}${fmt(Math.abs(totTotal))}</td>
@@ -2869,9 +2877,11 @@ function renderJugadoresResTabla(rows) {
       <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}" style="${isMobile?'font-size:11px':''}">
         <thead><tr>
           <th class="jugador-col">Jugador/Grupo</th>
-          <th style="text-align:right">Sueldos</th>
+          <th style="text-align:right">Sueldo</th>
           <th style="text-align:right">Movilidad</th>
-          <th style="text-align:right">Atención</th>
+          <th style="text-align:right">Viandas</th>
+          <th style="text-align:right">Almacén</th>
+          <th style="text-align:right">Alquiler y gastos casa</th>
           <th style="text-align:right">Médico</th>
           ${otrosHeader}
           <th style="text-align:right">TOTAL</th>
@@ -2885,7 +2895,8 @@ function renderJugadoresResTabla(rows) {
 function renderJugadorResCard(r) {
   const isExp = jugadorResExpandido.has(r.nombre);
   const cols = [
-    ["SUELDOS", r.sueldos], ["MOVILIDAD", r.movilidad], ["ATENCIÓN", r.atencion],
+    ["SUELDO", r.sueldos], ["MOVILIDAD", r.movilidad], ["VIANDAS", r.viandas],
+    ["ALMACÉN", r.almacen], ["ALQUILER Y GASTOS CASA", r.alquilerCasa],
     ["MÉDICO", r.medico], ["OTROS", r.otros]
   ].filter(([,v]) => v !== 0);
 
@@ -2915,7 +2926,7 @@ function renderJugadoresResCards(rows) {
   return rows.map(renderJugadorResCard).join("");
 }
 
-const JUGADOR_RES_CAT_LABEL = { sueldos:"Sueldos", movilidad:"Movilidad", atencion:"Atención", medico:"Médico", otros:"Otros" };
+const JUGADOR_RES_CAT_LABEL = { sueldos:"Sueldo", movilidad:"Movilidad", viandas:"Viandas", almacen:"Almacén", alquilerCasa:"Alquiler y gastos casa", medico:"Médico", otros:"Otros" };
 
 function renderJugadorResDetalle(r) {
   const sorted = [...r.movimientos].sort((a,b) => a.fecha.localeCompare(b.fecha));

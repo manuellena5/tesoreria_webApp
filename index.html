@@ -320,6 +320,11 @@ textarea.inp { resize:none; }
 .entity-tab { flex:1; background:none; border:none; color:var(--text3); font-family:var(--font); font-size:13px; font-weight:500; padding:10px 8px; cursor:pointer; text-align:center; transition:all .15s; }
 .entity-tab + .entity-tab { border-left:1px solid var(--border); }
 .entity-tab.active { background:var(--accent-bg); color:var(--accent); }
+/* Tabs que wrappean en 2 filas cuando no entran en mobile */
+.entity-tabs--wrap { flex-wrap:wrap; }
+.entity-tabs--wrap .entity-tab { flex:1 1 33%; min-width:33%; border-left:none; border-top:1px solid var(--border); }
+.entity-tabs--wrap .entity-tab:nth-child(-n+3) { border-top:none; }
+.entity-tabs--wrap .entity-tab:not(:nth-child(3n+1)) { border-left:1px solid var(--border); }
 .entity-item {
   background:var(--bg2); border:1px solid var(--border); border-radius:var(--rs);
   padding:11px 14px; margin-bottom:7px; display:flex; align-items:center; gap:10px;
@@ -1852,7 +1857,7 @@ function renderResumen() {
     .reduce((s,r) => s + Math.abs(r.diferencia), 0);
 
   const subTabsHtml = `
-    <div class="entity-tabs">
+    <div class="entity-tabs entity-tabs--wrap">
       <button class="entity-tab ${resumenSubTab==='mensual'?'active':''}"    onclick="setResumenSubTab('mensual')">Mensual</button>
       <button class="entity-tab ${resumenSubTab==='partido'?'active':''}"    onclick="setResumenSubTab('partido')">Por Partido</button>
       <button class="entity-tab ${resumenSubTab==='reintegros'?'active':''}" onclick="setResumenSubTab('reintegros')">Reintegros${pendienteGlobal>0?" 🏥":""}</button>

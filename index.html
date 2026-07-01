@@ -499,10 +499,10 @@ textarea.inp { resize:none; }
   .reint-table-wrap .jugador-col { width:auto; min-width:160px; max-width:none; overflow:visible; text-overflow:clip; white-space:normal; }
 }
 
-/* ── Desktop ancho (PC) ── */
+/* ── Desktop ancho (PC): solo la pantalla Resumen se ensancha, para que sus tablas
+   entren sin recortarse. Las demás pantallas siguen centradas en 940px. ── */
 @media (min-width: 1200px) {
-  #app { max-width: 1600px; }
-  .bnav { max-width: 1600px; }
+  #app.tab-resumen { max-width: 1600px; }
 }
 </style>
 </head>
@@ -975,6 +975,7 @@ function updateBadge() {
 
 function goTab(tab) {
   currentTab = tab;
+  document.getElementById("app").classList.toggle("tab-resumen", tab === "resumen");
   document.querySelectorAll(".bnav-btn").forEach(b => b.classList.remove("active"));
   const btn = document.getElementById("nav-" + tab);
   if (btn) btn.classList.add("active");

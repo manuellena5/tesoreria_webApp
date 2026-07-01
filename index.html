@@ -1492,7 +1492,7 @@ function renderMovList() {
     .filter(m => mesFromRecord(m) === sharedMes)
     .filter(m => !listFiltros.rubro  || normStr(m.rubro).includes(normStr(listFiltros.rubro)))
     .filter(m => !listFiltros.cat    || normStr(m.categoria).includes(normStr(listFiltros.cat)))
-    .filter(m => !listFiltros.cuenta || m.cuenta     === listFiltros.cuenta)
+    .filter(m => !listFiltros.cuenta || m.cuenta === listFiltros.cuenta || m.cuentaDestino === listFiltros.cuenta)
     .filter(m => !listFiltros.tipo      || m.tipo        === listFiltros.tipo)
     .filter(m => !listFiltros.adherente || normStr(m.adherente).includes(normStr(listFiltros.adherente)))
     .filter(m => !listFiltros.jugadorCT || normStr(m.jugadorCT).includes(normStr(listFiltros.jugadorCT)))
@@ -1507,9 +1507,21 @@ function renderMovList() {
     });
 
   // KPIs sobre el subtotal filtrado (igual al total del mes cuando no hay filtros extra)
-  const ingTotal = movMes.filter(m => m.tipo === "INGRESO").reduce((s,m) => s + m.ingreso, 0);
-  const egrTotal = movMes.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s + m.egreso,  0);
-  const saldo    = ingTotal - egrTotal;
+  // Nota: las transferencias INTERNAS no suman al total general del club (no
+  // entra ni sale plata, sólo cambia de cuenta), pero cuando el usuario filtra
+  // por una cuenta puntual sí representan un movimiento real para esa cuenta:
+  // egreso si la cuenta es el origen, ingreso si es el destino.
+  const cuentaFiltro = listFiltros.cuenta;
+  let ingTotal = movMes.filter(m => m.tipo === "INGRESO").reduce((s,m) => s + m.ingreso, 0);
+  let egrTotal = movMes.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s + m.egreso,  0);
+  if (cuentaFiltro) {
+    for (const m of movMes) {
+      if (m.tipo !== "INTERNO") continue;
+      if (m.cuenta === cuentaFiltro)        egrTotal += m.montoFinal;
+      if (m.cuentaDestino === cuentaFiltro) ingTotal += m.montoFinal;
+    }
+  }
+  const saldo = ingTotal - egrTotal;
   const kpiIng = document.getElementById("kpi-ing");
   const kpiEgr = document.getElementById("kpi-egr");
   const kpiSaldo = document.getElementById("kpi-saldo");
@@ -1522,9 +1534,14 @@ function renderMovList() {
   const filtersActive = !!(listFiltros.rubro || listFiltros.cat || listFiltros.cuenta || listFiltros.tipo ||
     listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.search);
   const noteEl = document.getElementById("kpi-filter-note");
-  if (noteEl) noteEl.innerHTML = filtersActive
-    ? `Mostrando subtotal filtrado · <a href="#" onclick="clearListFilters();return false;" style="color:var(--accent)">Ver mes completo</a>`
-    : "";
+  if (noteEl) {
+    const notaCuenta = cuentaFiltro
+      ? ` · Incluye transferencias internas hacia/desde ${esc(cuentaFiltro)}`
+      : "";
+    noteEl.innerHTML = filtersActive
+      ? `Mostrando subtotal filtrado${notaCuenta} · <a href="#" onclick="clearListFilters();return false;" style="color:var(--accent)">Ver mes completo</a>`
+      : "";
+  }
 
   // Orden, aplicado después de filtrar
   movMes.sort((a,b) => {

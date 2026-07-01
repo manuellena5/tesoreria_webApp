@@ -28,12 +28,14 @@ const GRP_SHEET = "Grupos";
 const CFG_SHEET = "Config";
 const PAR_SHEET = "Partidos";
 const PAR_COLS  = ["ID","Fecha","Rival","NumeroFecha","Condicion","Activo","Torneo"];
+const EVE_SHEET = "Eventos";
+const EVE_COLS  = ["ID","Nombre","Fecha","Activo"];
 
 // ── Columnas de cada pestaña ─────────────────────────────────
 const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
-  "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID"
+  "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID"
 ];
 const ADH_COLS = ["ID","Nombre","Activo","CuotaMensual","CuotasAnuales"];
 const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","MovimientoID","timestamp"];
@@ -102,6 +104,15 @@ const RUBROS_MAP = {
   "39":  { nombre:"SALDO NOCTURNO",                       cat:"Otros | Internos" },
   "49":  { nombre:"TRANSFERENCIA ENTRE CUENTAS",          cat:"Internos" },
   "50":  { nombre:"SALDO INICIAL / APERTURA",             cat:"Internos" },
+  "54":  { nombre:"PEÑA-BUFFET",                          cat:"Peñas y Eventos" },
+  "55":  { nombre:"PEÑA-GASTOS BUFFET",                   cat:"Peñas y Eventos" },
+  "56":  { nombre:"PEÑA-INGRESO TARJETAS",                cat:"Peñas y Eventos" },
+  "57":  { nombre:"PEÑA-GASTOS COMIDA",                   cat:"Peñas y Eventos" },
+  "58":  { nombre:"PEÑA-SHOW",                            cat:"Peñas y Eventos" },
+  "59":  { nombre:"PEÑA-COLABORACIONES",                  cat:"Peñas y Eventos" },
+  "60":  { nombre:"PEÑA-RETIROS",                         cat:"Peñas y Eventos" },
+  "61":  { nombre:"PEÑA-OTROS GASTOS",                    cat:"Peñas y Eventos" },
+  "62":  { nombre:"PEÑA-OTROS INGRESOS",                  cat:"Peñas y Eventos" },
 };
 
 // ════════════════════════════════════════════════════════════
@@ -162,6 +173,7 @@ function handleAction(data) {
         tipo:          String(r[18] || ""),
         timestamp:     String(r[19] || ""),
         partidoId:     String(r[20]||""),
+        eventoId:      String(r[21]||""),
       }));
       return { ok: true, movimientos };
     }
@@ -181,7 +193,7 @@ function handleAction(data) {
         m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
         m.jugadorCT||"", m.adherente||"",
         m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts,
-        m.partidoId||""
+        m.partidoId||"", m.eventoId||""
       ]);
       if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -201,7 +213,7 @@ function handleAction(data) {
             m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
             m.jugadorCT||"", m.adherente||"",
             m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", new Date().toISOString(),
-            m.partidoId||""
+            m.partidoId||"", m.eventoId||""
           ]]);
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -223,7 +235,7 @@ function handleAction(data) {
           m.cuenta, m.cuentaDestino || "", m.modoPago,
           m.jugadorCT || "", m.adherente || "", m.observacion || "",
           m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo, m.timestamp,
-          m.partidoId||""
+          m.partidoId||"", m.eventoId||""
         ]);
         if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
           autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -543,6 +555,56 @@ function handleAction(data) {
         }
       }
       return { ok: false, error: "Partido no encontrado: " + data.id };
+    }
+
+    // ─── EVENTOS (Peñas y similares) ─────────────────────────
+
+    case "listEventos": {
+      const sh  = getOrCreateSheet(EVE_SHEET, EVE_COLS);
+      autoFillIds(sh, r => r[1] || r[2]); // Nombre o Fecha
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, eventos: [] };
+      const eventos = all.slice(1)
+        .filter(r => r[0] && String(r[3]) !== "false")
+        .map(r => ({
+          id:     String(r[0]),
+          nombre: String(r[1]||""),
+          fecha:  formatFecha(r[2]),
+          activo: String(r[3]) !== "false"
+        }))
+        .sort((a,b) => b.fecha.localeCompare(a.fecha));
+      return { ok: true, eventos };
+    }
+
+    case "saveEvento": {
+      const sh  = getOrCreateSheet(EVE_SHEET, EVE_COLS);
+      const ev  = data.evento;
+      const all = sh.getDataRange().getValues();
+      if (ev.id) {
+        for (let i = 1; i < all.length; i++) {
+          if (String(all[i][0]) === String(ev.id)) {
+            sh.getRange(i + 1, 1, 1, EVE_COLS.length).setValues([[
+              ev.id, ev.nombre||"", ev.fecha||"", "true"
+            ]]);
+            return { ok: true, id: ev.id };
+          }
+        }
+      }
+      const id = uid_gs();
+      sh.appendRow([id, ev.nombre||"", ev.fecha||"", "true"]);
+      return { ok: true, id };
+    }
+
+    case "deleteEvento": {
+      const sh  = getOrCreateSheet(EVE_SHEET, EVE_COLS);
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(data.id)) {
+          sh.getRange(i + 1, 4).setValue("false");
+          return { ok: true };
+        }
+      }
+      return { ok: false, error: "Evento no encontrado: " + data.id };
     }
 
     // ─── MIGRACIÓN DE RUBROS HISTÓRICOS (Tareas 2 y 4) ────────

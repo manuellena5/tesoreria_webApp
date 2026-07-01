@@ -601,7 +601,19 @@ const RUBROS = [
   {cod:"39",  nombre:"SALDO NOCTURNO",                      cat:"Otros | Internos"},
   {cod:"49",  nombre:"TRANSFERENCIA ENTRE CUENTAS",         cat:"Internos"},
   {cod:"50",  nombre:"SALDO INICIAL / APERTURA",            cat:"Internos"},
+  {cod:"54",  nombre:"PEÑA-BUFFET",                          cat:"Peñas y Eventos"},
+  {cod:"55",  nombre:"PEÑA-GASTOS BUFFET",                   cat:"Peñas y Eventos"},
+  {cod:"56",  nombre:"PEÑA-INGRESO TARJETAS",                cat:"Peñas y Eventos"},
+  {cod:"57",  nombre:"PEÑA-GASTOS COMIDA",                   cat:"Peñas y Eventos"},
+  {cod:"58",  nombre:"PEÑA-SHOW",                            cat:"Peñas y Eventos"},
+  {cod:"59",  nombre:"PEÑA-COLABORACIONES",                  cat:"Peñas y Eventos"},
+  {cod:"60",  nombre:"PEÑA-RETIROS",                         cat:"Peñas y Eventos"},
+  {cod:"61",  nombre:"PEÑA-OTROS GASTOS",                    cat:"Peñas y Eventos"},
+  {cod:"62",  nombre:"PEÑA-OTROS INGRESOS",                  cat:"Peñas y Eventos"},
 ];
+
+// Rubros que disparan el selector de Evento en "Nuevo movimiento"
+const PENA_RUBROS = ["54","55","56","57","58","59","60","61","62"];
 
 const MESES_LABELS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                        "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -647,6 +659,7 @@ let grupos      = [];
 let adherentes  = [];
 let pagos       = [];
 let partidos    = [];
+let eventos     = [];
 let cuentas     = [...DEFAULT_CUENTAS];
 let metodos     = [...DEFAULT_METODOS];
 let reservas      = [];
@@ -670,6 +683,10 @@ let jugadorResMes        = "";
 let jugadorResExpandido  = new Set();
 let jugadorResVista       = getDefaultVista("jugadores_vista");
 let jugadorResAgrupacion  = localStorage.getItem("jugadores_agrupacion") || "jugador";
+let eventoResAnio       = String(new Date().getFullYear());
+let eventoResMes        = "";
+let eventoResExpandido  = new Set();
+let eventoResVista      = getDefaultVista("eventos_vista");
 let movOrden = localStorage.getItem("clubfm_orden_mov") || "fecha_desc";
 
 // "cards" en mobile (<600px), "tabla" en desktop; el usuario puede override y se persiste
@@ -766,7 +783,7 @@ function buildDefaultF() {
     codRubro:"", rubro:"", categoria:"", concepto:"", monto:"",
     cuenta: (cuentas[0] || "EFECTIVO"), cuentaDestino: "",
     modoPago: (metodos[0] || "EFECTIVO"),
-    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0, saldoReal:"", partidoId:"" };
+    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0, saldoReal:"", partidoId:"", eventoId:"" };
 }
 function resetF() {
   const savedFecha  = F.fecha;
@@ -834,6 +851,9 @@ const Storage = {
   async listPartidos()       { return this._post({ action:"listPartidos"              }); },
   async savePartido(p)       { return this._post({ action:"savePartido",  partido:p   }); },
   async deletePartido(id)    { return this._post({ action:"deletePartido", id          }); },
+  async listEventos()        { return this._post({ action:"listEventos"               }); },
+  async saveEvento(ev)       { return this._post({ action:"saveEvento",   evento:ev   }); },
+  async deleteEvento(id)     { return this._post({ action:"deleteEvento", id          }); },
   async listReservas()       { return this._post({ action:"listReservas"              }); },
   async saveReserva(r)       { return this._post({ action:"saveReserva",  reserva:r   }); },
   async deleteReserva(id)    { return this._post({ action:"deleteReserva", id         }); },
@@ -862,7 +882,7 @@ async function initApp() {
 
 async function loadAllData() {
   try {
-    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes] = await Promise.all([
+    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes, rEve] = await Promise.all([
       Storage.listMov(),
       Storage.listJugadores(),
       Storage.listGrupos(),
@@ -871,6 +891,7 @@ async function loadAllData() {
       Storage.getConfig(),
       Storage.listPartidos(),
       Storage.listReservas(),
+      Storage.listEventos(),
     ]);
     if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
     if (rJug.ok) jugadores   = rJug.jugadores   || [];
@@ -879,6 +900,7 @@ async function loadAllData() {
     if (rPag.ok) pagos       = rPag.pagos        || [];
     if (rPar.ok) partidos    = rPar.partidos     || [];
     if (rRes.ok) reservas    = rRes.reservas     || [];
+    if (rEve.ok) eventos     = rEve.eventos      || [];
     if (rCfg.ok) {
       applyCuentasMetodos(rCfg.config || {});
       applyPreciosGranos(rCfg.config || {});
@@ -1120,6 +1142,22 @@ function renderNuevo() {
         </select>
       </div>
 
+      ${PENA_RUBROS.includes(F.codRubro) ? `
+      <div class="field">
+        <label>Evento</label>
+        <select class="inp" id="f-evento" onchange="F.eventoId=this.value">
+          <option value="">— Sin evento —</option>
+          ${[...eventos]
+            .filter(ev => ev.activo)
+            .sort((a,b) => b.fecha.localeCompare(a.fecha))
+            .map(ev => {
+              const fd = ev.fecha ? ev.fecha.slice(8)+"/"+ev.fecha.slice(5,7)+"/"+ev.fecha.slice(0,4) : "";
+              const label = fd ? `${ev.nombre} · ${fd}` : ev.nombre;
+              return `<option value="${esc(ev.id)}" ${F.eventoId===ev.id?"selected":""}>${esc(label)}</option>`;
+            }).join("")}
+        </select>
+      </div>` : ""}
+
       <div class="field ${isAdh ? "highlighted" : ""}" id="adherente-row">
         <label>Adherente${isAdh ? " ★" : " (opcional)"}</label>
         <select class="inp" id="f-adherente" onchange="F.adherente=this.value">
@@ -1232,6 +1270,7 @@ function highlightRubroItem(items) {
 
 function selectRubroItem(item, input, drop, blurAfter) {
   if (!item) return;
+  const wasPena = PENA_RUBROS.includes(F.codRubro);
   F.codRubro  = item.dataset.cod;
   F.rubro     = item.dataset.nombre;
   F.categoria = item.dataset.cat;
@@ -1240,8 +1279,9 @@ function selectRubroItem(item, input, drop, blurAfter) {
   if (blurAfter) input.blur(); // Forzamos el blur después de seleccionar (clic / Enter)
   // Auto-set tipo to INTERNO if rubro 49
   if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
-  // Re-render for rubro 21 to show/hide conditional checkbox
-  if (F.codRubro === "21" || F.codRubro === "49") { renderNuevo(); return; }
+  const isPena = PENA_RUBROS.includes(F.codRubro);
+  // Re-render for rubro 21/49 (checkbox) o al entrar/salir de un rubro de Peña (selector de Evento)
+  if (F.codRubro === "21" || F.codRubro === "49" || isPena || wasPena) { renderNuevo(); return; }
   // Highlight adherente row
   const adhRow = document.getElementById("adherente-row");
   if (adhRow) {
@@ -1328,6 +1368,7 @@ async function saveMovimiento() {
       seguroReintegro: F.seguroReintegro || 0,
       tipo: F.tipo,
       partidoId: F.partidoId || "",
+      eventoId: PENA_RUBROS.includes(F.codRubro) ? (F.eventoId || "") : "",
     };
   }
 
@@ -1705,6 +1746,7 @@ function editMovimiento(id) {
   F.seguroReintegro = m.seguroReintegro || 0;
   F.saldoReal = "";
   F.partidoId = m.partidoId || "";
+  F.eventoId  = m.eventoId || "";
   editId = id;
   closeModal();
   goTab("nuevo");
@@ -1895,6 +1937,7 @@ function renderResumen() {
       <button class="entity-tab ${resumenSubTab==='reintegros'?'active':''}" onclick="setResumenSubTab('reintegros')">Reintegros${pendienteGlobal>0?" 🏥":""}</button>
       <button class="entity-tab ${resumenSubTab==='adherentes'?'active':''}" onclick="setResumenSubTab('adherentes')">Adherentes${adherentePendienteGlobal>0?" 👥":""}</button>
       <button class="entity-tab ${resumenSubTab==='jugadoresRes'?'active':''}" onclick="setResumenSubTab('jugadoresRes')">Jugadores</button>
+      <button class="entity-tab ${resumenSubTab==='eventosRes'?'active':''}" onclick="setResumenSubTab('eventosRes')">Eventos</button>
       <button class="entity-tab ${resumenSubTab==='patrimonio'?'active':''}" onclick="setResumenSubTab('patrimonio')">Patrimonio</button>
     </div>`;
 
@@ -2075,6 +2118,7 @@ function renderResumen() {
     ${resumenSubTab === "reintegros" ? renderReintegrosMedicos() : ""}
     ${resumenSubTab === "adherentes" ? renderAdherentesResumen() : ""}
     ${resumenSubTab === "jugadoresRes" ? renderJugadoresResumen() : ""}
+    ${resumenSubTab === "eventosRes" ? renderEventosResumen() : ""}
     ${resumenSubTab === "patrimonio" ? renderPatrimonio() : ""}
   `);
 }
@@ -3018,6 +3062,286 @@ function renderJugadorResDetalle(r) {
     </div>`;
 }
 
+// ── Eventos — resumen de Peñas por evento ───────────────────────
+function setEventoResAnio(v) {
+  eventoResAnio = v;
+  eventoResMes = "";
+  eventoResExpandido.clear();
+  renderResumen();
+}
+
+function setEventoResMes(v) {
+  eventoResMes = v;
+  eventoResExpandido.clear();
+  renderResumen();
+}
+
+function setEventoResVista(v) {
+  eventoResVista = v;
+  localStorage.setItem("eventos_vista", v);
+  renderResumen();
+}
+
+function toggleEventoResDetalle(key) {
+  if (eventoResExpandido.has(key)) eventoResExpandido.delete(key);
+  else eventoResExpandido.add(key);
+  renderResumen();
+}
+
+// Devuelve la categoría de un codRubro para la sección Eventos, o null si no aplica (no es rubro de Peña)
+function eventoResCategoria(codRubro) {
+  if (codRubro === "54") return "buffet";
+  if (codRubro === "55") return "gastosBuffet";
+  if (codRubro === "56") return "tarjetas";
+  if (codRubro === "57") return "gastosComida";
+  if (codRubro === "58") return "show";
+  if (codRubro === "59") return "colaboraciones";
+  if (codRubro === "60") return "retiros";
+  if (codRubro === "61") return "otrosGastos";
+  if (codRubro === "62") return "otrosIngresos";
+  return null;
+}
+
+// anio: string "YYYY" para filtrar, o "" para todos los años
+// mes: string "MM" para filtrar dentro del año seleccionado, o "" para todo el año
+function calcEventosResumen(anio, mes) {
+  const movs = movimientos.filter(m => {
+    if (!m.eventoId) return false;
+    if (anio && m.fecha.slice(0,4) !== anio) return false;
+    if (anio && mes && m.fecha.slice(5,7) !== mes) return false;
+    return eventoResCategoria(m.codRubro) !== null;
+  });
+
+  const map = {};
+  function ensure(eventoId) {
+    if (!map[eventoId]) {
+      const ev = eventos.find(x => x.id === eventoId);
+      map[eventoId] = {
+        eventoId, nombre: ev ? ev.nombre : "(evento eliminado)", fecha: ev ? ev.fecha : "",
+        buffet:0, gastosBuffet:0, tarjetas:0, gastosComida:0, show:0, colaboraciones:0,
+        retiros:0, otrosGastos:0, otrosIngresos:0, movimientos:[]
+      };
+    }
+    return map[eventoId];
+  }
+
+  for (const m of movs) {
+    const cat  = eventoResCategoria(m.codRubro);
+    const neto = m.ingreso - m.egreso;
+    const row  = ensure(m.eventoId);
+    row[cat] += neto;
+    row.movimientos.push({ ...m, montoAplicado: neto });
+  }
+
+  return Object.values(map).map(r => {
+    const totalNetoBuffet = r.buffet + r.gastosBuffet;
+    const totalNetoComida = r.tarjetas + r.gastosComida;
+    const totalNetoPena = totalNetoBuffet + r.otrosIngresos + r.retiros + totalNetoComida + r.show + r.colaboraciones + r.otrosGastos;
+    return { ...r, totalNetoBuffet, totalNetoComida, totalNetoPena };
+  });
+}
+
+function renderEventosResumen() {
+  const movsAll = movimientos.filter(m => m.eventoId && eventoResCategoria(m.codRubro) !== null);
+  const anios = [...new Set(movsAll.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
+  if (eventoResAnio !== "" && !anios.includes(eventoResAnio) && anios.length) {
+    eventoResAnio = anios[0];
+  }
+
+  // El filtro por mes solo aplica cuando hay un año específico seleccionado
+  const mesesDisponibles = eventoResAnio
+    ? [...new Set(movsAll.filter(m => m.fecha.slice(0,4) === eventoResAnio).map(m => m.fecha.slice(5,7)))].sort()
+    : [];
+  if (eventoResMes && !mesesDisponibles.includes(eventoResMes)) eventoResMes = "";
+
+  const rows = calcEventosResumen(eventoResAnio, eventoResMes)
+    .sort((a,b) => b.fecha.localeCompare(a.fecha));
+
+  const anioOptions = `<option value="" ${eventoResAnio===""?"selected":""}>Todos los años</option>` +
+    anios.map(a => `<option value="${a}" ${eventoResAnio===a?"selected":""}>${a}</option>`).join("");
+
+  const mesSelector = eventoResAnio ? `
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Mes:</label>
+          <select class="inp" style="flex:1" onchange="setEventoResMes(this.value)">
+            <option value="" ${eventoResMes===""?"selected":""}>Todo el año</option>
+            ${mesesDisponibles.map(mm => `<option value="${mm}" ${eventoResMes===mm?"selected":""}>${MESES_LABELS[Number(mm)-1]}</option>`).join("")}
+          </select>
+        </div>` : "";
+
+  const viewToggle = `
+    <div class="reint-view-toggle">
+      <button class="reint-view-btn ${eventoResVista==='tabla'?'active':''}" onclick="setEventoResVista('tabla')">⊞ Tabla</button>
+      <button class="reint-view-btn ${eventoResVista==='cards'?'active':''}" onclick="setEventoResVista('cards')">▤ Cards</button>
+    </div>`;
+
+  const totalNeto = rows.reduce((s,r) => s + r.totalNetoPena, 0);
+  const periodoTxt = eventoResMes ? ` (${MESES_LABELS[Number(eventoResMes)-1]})` : "";
+  const totalesLine = `${rows.length} evento${rows.length!==1?"s":""}${periodoTxt} · Total neto: ${totalNeto<0?"-":"+"}${fmt(Math.abs(totalNeto))}`;
+
+  const body = !rows.length
+    ? `<p class="note" style="text-align:center;padding:16px 0">Sin movimientos de Peñas y Eventos con evento asignado</p>`
+    : eventoResVista === "cards" ? renderEventosResCards(rows) : renderEventosResTabla(rows);
+
+  return `
+    <div class="reint-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
+          <select class="inp" style="flex:1" onchange="setEventoResAnio(this.value)">${anioOptions}</select>
+        </div>
+        ${mesSelector}
+        ${viewToggle}
+      </div>
+      <p class="note" style="margin-bottom:12px">${totalesLine}</p>
+      ${body}
+    </div>`;
+}
+
+function renderEventosResTabla(rows) {
+  let totBuffet=0, totGastosBuffet=0, totNetoBuffet=0, totOtrosIng=0, totRetiros=0,
+      totTarjetas=0, totGastosComida=0, totNetoComida=0, totShow=0, totColab=0,
+      totOtrosGastos=0, totNetoPena=0;
+  function cell(v) {
+    if (!v) return `<td style="text-align:right;color:var(--text3)">—</td>`;
+    return `<td style="text-align:right;font-family:var(--mono)" class="${v<0?'egr':'ing'}">${v<0?"-":"+"}${fmt(Math.abs(v))}</td>`;
+  }
+  function cellBold(v) {
+    if (!v) return `<td style="text-align:right;font-family:var(--mono);font-weight:600;color:var(--text3)">—</td>`;
+    return `<td style="text-align:right;font-family:var(--mono);font-weight:600" class="${v<0?'egr':'ing'}">${v<0?"-":"+"}${fmt(Math.abs(v))}</td>`;
+  }
+
+  const bodyRows = rows.map(r => {
+    totBuffet       += r.buffet;
+    totGastosBuffet += r.gastosBuffet;
+    totNetoBuffet   += r.totalNetoBuffet;
+    totOtrosIng     += r.otrosIngresos;
+    totRetiros      += r.retiros;
+    totTarjetas     += r.tarjetas;
+    totGastosComida += r.gastosComida;
+    totNetoComida   += r.totalNetoComida;
+    totShow         += r.show;
+    totColab        += r.colaboraciones;
+    totOtrosGastos  += r.otrosGastos;
+    totNetoPena     += r.totalNetoPena;
+    const isExp = eventoResExpandido.has(r.eventoId);
+    const detalle = isExp ? renderEventoResDetalle(r) : "";
+    const fd = r.fecha ? r.fecha.slice(8)+"/"+r.fecha.slice(5,7)+"/"+r.fecha.slice(0,4) : "";
+    return `
+    <tr class="reint-row" onclick="toggleEventoResDetalle('${esc(escJs(r.eventoId))}')">
+      <td class="jugador-col" title="${esc(r.nombre)}">${esc(r.nombre)}${fd?` <span style="color:var(--text3);font-size:11px">· ${fd}</span>`:""}</td>
+      ${cell(r.buffet)}
+      ${cell(r.gastosBuffet)}
+      ${cellBold(r.totalNetoBuffet)}
+      ${cell(r.otrosIngresos)}
+      ${cell(r.retiros)}
+      ${cell(r.tarjetas)}
+      ${cell(r.gastosComida)}
+      ${cellBold(r.totalNetoComida)}
+      ${cell(r.show)}
+      ${cell(r.colaboraciones)}
+      ${cell(r.otrosGastos)}
+      ${cellBold(r.totalNetoPena)}
+    </tr>${isExp ? `
+    <tr><td colspan="13" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
+  }).join("");
+
+  const totRow = `<tr class="reint-tot-row">
+    <td class="jugador-col">TOTALES</td>
+    ${cell(totBuffet)}
+    ${cell(totGastosBuffet)}
+    ${cellBold(totNetoBuffet)}
+    ${cell(totOtrosIng)}
+    ${cell(totRetiros)}
+    ${cell(totTarjetas)}
+    ${cell(totGastosComida)}
+    ${cellBold(totNetoComida)}
+    ${cell(totShow)}
+    ${cell(totColab)}
+    ${cell(totOtrosGastos)}
+    ${cellBold(totNetoPena)}
+  </tr>`;
+
+  return `
+    <div class="reint-table-wrap">
+      <table class="sum-table reint-table">
+        <thead><tr>
+          <th class="jugador-col">Evento</th>
+          <th style="text-align:right">Buffet</th>
+          <th style="text-align:right">Gastos Buffet</th>
+          <th style="text-align:right">Total Neto Buffet</th>
+          <th style="text-align:right">Otros ingresos</th>
+          <th style="text-align:right">Retiros</th>
+          <th style="text-align:right">Total Ingreso Tarjetas</th>
+          <th style="text-align:right">Gastos Comida</th>
+          <th style="text-align:right">Total Neto Comida</th>
+          <th style="text-align:right">Show</th>
+          <th style="text-align:right">Colaboraciones</th>
+          <th style="text-align:right">Otros Gastos</th>
+          <th style="text-align:right">Total Neto Peña</th>
+        </tr></thead>
+        <tbody>${bodyRows}${totRow}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderEventoResCard(r) {
+  const isExp = eventoResExpandido.has(r.eventoId);
+  const fd = r.fecha ? r.fecha.slice(8)+"/"+r.fecha.slice(5,7)+"/"+r.fecha.slice(0,4) : "";
+  const cols = [
+    ["BUFFET", r.buffet], ["GASTOS BUFFET", r.gastosBuffet], ["TOTAL NETO BUFFET", r.totalNetoBuffet],
+    ["OTROS INGRESOS", r.otrosIngresos], ["RETIROS", r.retiros],
+    ["TOTAL INGRESO TARJETAS", r.tarjetas], ["GASTOS COMIDA", r.gastosComida], ["TOTAL NETO COMIDA", r.totalNetoComida],
+    ["SHOW", r.show], ["COLABORACIONES", r.colaboraciones], ["OTROS GASTOS", r.otrosGastos]
+  ].filter(([,v]) => v !== 0);
+
+  const colsHtml = cols.map(([label, v]) => `
+    <div class="reint-card-col">
+      <label>${label}</label>
+      <div class="val ${v<0?'egr':'ing'}">${v<0?"-":"+"}${fmt(Math.abs(v))}</div>
+    </div>`).join("");
+
+  return `
+  <div class="reint-card" onclick="toggleEventoResDetalle('${esc(escJs(r.eventoId))}')">
+    <div class="reint-card-hdr">
+      <span class="reint-card-nombre" title="${esc(r.nombre)}">🎉 ${esc(r.nombre)}${fd?` · ${fd}`:""}</span>
+      <span class="val ${r.totalNetoPena<0?'egr':'ing'}" style="font-family:var(--mono);font-weight:600">${r.totalNetoPena<0?"-":"+"}${fmt(Math.abs(r.totalNetoPena))}</span>
+    </div>
+    <div class="reint-card-body">${colsHtml}</div>
+    ${isExp ? `<div class="reint-card-detalle" onclick="event.stopPropagation()">${renderEventoResDetalle(r)}</div>` : ""}
+  </div>`;
+}
+
+function renderEventosResCards(rows) {
+  return rows.map(renderEventoResCard).join("");
+}
+
+const EVENTO_RES_CAT_LABEL = { buffet:"Buffet", gastosBuffet:"Gastos Buffet", tarjetas:"Ingreso Tarjetas", gastosComida:"Gastos Comida", show:"Show", colaboraciones:"Colaboraciones", retiros:"Retiros", otrosGastos:"Otros Gastos", otrosIngresos:"Otros Ingresos" };
+
+function renderEventoResDetalle(r) {
+  const sorted = [...r.movimientos].sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const rows = sorted.map(m => {
+    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
+    const mesTxt = mesLabel(mesFromRecord(m));
+    const cat = EVENTO_RES_CAT_LABEL[eventoResCategoria(m.codRubro)] || "";
+    return `
+    <div class="reint-detalle-row">
+      <div class="reint-detalle-top">
+        <span class="reint-detalle-fecha">${fechaD} · ${mesTxt}</span>
+      </div>
+      <div class="reint-detalle-concepto">${esc(m.concepto)||"—"}</div>
+      <div class="reint-detalle-montos">
+        <span class="${m.montoAplicado<0?'egr':'ing'}">${m.montoAplicado<0?"-":"+"}${fmt(Math.abs(m.montoAplicado))}</span>
+        <span style="color:var(--text3)">[${cat}]</span>
+      </div>
+    </div>`;
+  }).join("");
+  return `
+    <div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
+      ${rows}
+    </div>`;
+}
+
 // ══════════════════════════════════════════════════════════════
 // TAB 4 — ENTIDADES
 // ══════════════════════════════════════════════════════════════
@@ -3028,6 +3352,7 @@ function renderEntidades() {
     {key:"grupos",    label:"Grupos"},
     {key:"adherentes",label:"Adherentes"},
     {key:"partidos",  label:"Partidos"},
+    {key:"eventos",   label:"Eventos"},
     {key:"granos",    label:"Granos"},
   ];
   const tabBtns = tabs.map(t =>
@@ -3039,10 +3364,11 @@ function renderEntidades() {
   if (entidadesTab === "grupos")     inner = renderGrupos();
   if (entidadesTab === "adherentes") inner = renderAdherentes();
   if (entidadesTab === "partidos")   inner = renderPartidos();
+  if (entidadesTab === "eventos")    inner = renderEventos();
   if (entidadesTab === "granos")     inner = renderGranos();
 
   setContent(`
-    <div class="entity-tabs">${tabBtns}</div>
+    <div class="entity-tabs entity-tabs--wrap">${tabBtns}</div>
     <div id="entity-content">${inner}</div>
   `);
 }
@@ -3323,6 +3649,92 @@ async function deletePartido(id) {
     if (!r.ok) throw new Error(r.error || "Error");
     partidos = partidos.filter(p => p.id !== id);
     toast("Partido eliminado", "ok");
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+// ── Eventos (Peñas y similares) ───────────────────────────────
+function renderEventos() {
+  const sorted = [...eventos].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  const list = sorted.map(ev => {
+    const fd = ev.fecha ? ev.fecha.slice(8)+"/"+ev.fecha.slice(5,7)+"/"+ev.fecha.slice(0,4) : "";
+    return `
+    <div class="entity-item">
+      <div style="flex:1;min-width:0">
+        <div class="entity-name">${esc(ev.nombre)}</div>
+        <div class="entity-sub">${fd}</div>
+      </div>
+      <button class="btn-sm accent" onclick="openEventoModal('${ev.id}')">✏️</button>
+      <button class="btn-sm danger" id="edel-${ev.id}" onclick="confirmDeleteEvento('${ev.id}')">✕</button>
+    </div>`;
+  }).join("");
+  return `
+    <button class="btn-secondary" onclick="openEventoModal(null)" style="margin-bottom:12px">+ Agregar Evento</button>
+    ${list || '<p class="note">Sin eventos registrados</p>'}`;
+}
+
+function openEventoModal(eventoId) {
+  const ev = eventoId ? eventos.find(x => x.id === eventoId) : null;
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${ev ? "Editar evento" : "Nuevo evento"}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Nombre</label>
+            <input class="inp" id="eve-nombre" type="text" placeholder="Peña de Aniversario…" value="${esc(ev?ev.nombre:"")}">
+          </div>
+          <div class="field">
+            <label>Fecha</label>
+            <input class="inp" id="eve-fecha" type="date" value="${esc(ev?ev.fecha:today())}">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" onclick="saveEvento('${eventoId||""}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function saveEvento(eventoId) {
+  const nombre = (document.getElementById("eve-nombre")?.value || "").trim();
+  const fecha  = (document.getElementById("eve-fecha")?.value  || "").trim();
+  if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  if (!fecha)  { toast("Ingresá una fecha", "err"); return; }
+  const evento = eventoId ? { id:eventoId, nombre, fecha } : { nombre, fecha };
+  try {
+    const r = await Storage.saveEvento(evento);
+    if (!r.ok) throw new Error(r.error || "Error");
+    if (eventoId) {
+      const idx = eventos.findIndex(x => x.id === eventoId);
+      if (idx >= 0) eventos[idx] = { ...eventos[idx], nombre, fecha };
+    } else {
+      eventos.push({ id:r.id, nombre, fecha, activo:true });
+    }
+    toast(eventoId ? "Evento actualizado ✓" : "Evento agregado ✓", "ok");
+    closeModal();
+    renderEntidades();
+  } catch(e) { toast("Error: " + e.message, "err"); }
+}
+
+function confirmDeleteEvento(id) {
+  const btn = document.getElementById("edel-"+id);
+  if (!btn) return;
+  if (btn.dataset.confirm) { deleteEvento(id); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
+    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+  }
+}
+
+async function deleteEvento(id) {
+  try {
+    const r = await Storage.deleteEvento(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    eventos = eventos.filter(ev => ev.id !== id);
+    toast("Evento eliminado", "ok");
     renderEntidades();
   } catch(e) { toast("Error: " + e.message, "err"); }
 }

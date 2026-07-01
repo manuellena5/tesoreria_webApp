@@ -27,7 +27,7 @@ const JUG_SHEET = "Jugadores";
 const GRP_SHEET = "Grupos";
 const CFG_SHEET = "Config";
 const PAR_SHEET = "Partidos";
-const PAR_COLS  = ["ID","Fecha","Rival","NumeroFecha","Condicion","Activo"];
+const PAR_COLS  = ["ID","Fecha","Rival","NumeroFecha","Condicion","Activo","Torneo"];
 
 // ── Columnas de cada pestaña ─────────────────────────────────
 const MOV_COLS = [
@@ -507,7 +507,8 @@ function handleAction(data) {
           rival:        String(r[2]||""),
           numeroFecha:  String(r[3]||""),
           condicion:    String(r[4]||"LOCAL"),
-          activo:       String(r[5]) !== "false"
+          activo:       String(r[5]) !== "false",
+          torneo:       String(r[6]||"")
         }))
         .sort((a,b) => b.fecha.localeCompare(a.fecha));
       return { ok: true, partidos };
@@ -521,14 +522,14 @@ function handleAction(data) {
         for (let i = 1; i < all.length; i++) {
           if (String(all[i][0]) === String(p.id)) {
             sh.getRange(i + 1, 1, 1, PAR_COLS.length).setValues([[
-              p.id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true"
+              p.id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true", p.torneo||""
             ]]);
             return { ok: true, id: p.id };
           }
         }
       }
       const id = uid_gs();
-      sh.appendRow([id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true"]);
+      sh.appendRow([id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true", p.torneo||""]);
       return { ok: true, id };
     }
 

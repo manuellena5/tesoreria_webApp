@@ -487,6 +487,13 @@ textarea.inp { resize:none; }
   .modal-card { max-width:640px; border-radius:var(--r); }
   .modal-overlay { align-items:center; }
   .sum-table td:first-child { max-width:220px; }
+
+  /* Tablas tipo reintegro: ocupar todo el ancho disponible sin scroll horizontal */
+  .reint-table-wrap { overflow-x:visible; }
+  .reint-table-wrap .reint-table { table-layout:fixed; width:100%; }
+  .reint-table-wrap .reint-table th,
+  .reint-table-wrap .reint-table td { white-space:normal; word-break:break-word; }
+  .reint-table-wrap .jugador-col { width:18%; min-width:0; max-width:none; overflow:visible; text-overflow:clip; white-space:normal; }
 }
 </style>
 </head>
@@ -593,7 +600,7 @@ const RUBROS = [
 const MESES_LABELS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                        "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
-const DEFAULT_CUENTAS = ["MACRO","NARANJA X","MUTUAL","EFECTIVO","MP","UALA"];
+const DEFAULT_CUENTAS = ["MACRO","NARANJA X","MUTUAL","EFECTIVO","MP","UALA","MUTUAL - Plazo Fijo"];
 const DEFAULT_METODOS = ["EFECTIVO","TRANSFERENCIA","CHEQUE"];
 
 const SEED_JUGADORES = [
@@ -923,6 +930,8 @@ async function runInitSeed() {
 function applyCuentasMetodos(config) {
   if (config.cuentas) cuentas = config.cuentas.split(",").map(s=>s.trim()).filter(Boolean);
   else cuentas = [...DEFAULT_CUENTAS];
+  // Migración: instalaciones existentes no tienen esta cuenta guardada en Config.
+  if (!cuentas.includes("MUTUAL - Plazo Fijo")) cuentas.push("MUTUAL - Plazo Fijo");
   if (config.metodos) metodos = config.metodos.split(",").map(s=>s.trim()).filter(Boolean);
   else metodos = [...DEFAULT_METODOS];
 }
@@ -3042,10 +3051,13 @@ function renderPartidos() {
     const condBadge = p.condicion === "LOCAL"
       ? `<span style="font-size:10px;color:var(--green);border:1px solid var(--green);padding:1px 5px;border-radius:4px">L</span>`
       : `<span style="font-size:10px;color:var(--blue);border:1px solid var(--blue);padding:1px 5px;border-radius:4px">V</span>`;
+    const torneoBadge = p.torneo
+      ? `<span style="font-size:10px;color:var(--accent);border:1px solid var(--accent);padding:1px 5px;border-radius:4px">${esc(p.torneo)}</span>`
+      : "";
     return `
     <div class="entity-item">
       <div style="flex:1;min-width:0">
-        <div class="entity-name">${esc(p.numeroFecha)} — ${esc(p.rival)} ${condBadge}</div>
+        <div class="entity-name">${esc(p.numeroFecha)} — ${esc(p.rival)} ${condBadge} ${torneoBadge}</div>
         <div class="entity-sub">${fd}</div>
       </div>
       <button class="btn-sm" onclick="openAsociarModal('${p.id}')" style="color:var(--accent)">🔗</button>
@@ -3085,6 +3097,13 @@ function openPartidoModal(partidoId) {
               <option value="VISITANTE" ${(p&&p.condicion==="VISITANTE")?"selected":""}>Visitante</option>
             </select>
           </div>
+          <div class="field">
+            <label>Torneo</label>
+            <select class="inp" id="par-torneo">
+              <option value="Apertura" ${(!p||p.torneo==="Apertura")?"selected":""}>Apertura</option>
+              <option value="Clausura" ${(p&&p.torneo==="Clausura")?"selected":""}>Clausura</option>
+            </select>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
@@ -3099,20 +3118,21 @@ async function savePartido(partidoId) {
   const rival     = (document.getElementById("par-rival")?.value    || "").trim();
   const nfecha    = (document.getElementById("par-nfecha")?.value   || "").trim();
   const condicion = document.getElementById("par-condicion")?.value || "LOCAL";
+  const torneo    = document.getElementById("par-torneo")?.value    || "";
   if (!fecha)  { toast("Ingresá una fecha", "err"); return; }
   if (!rival)  { toast("Ingresá el rival", "err"); return; }
   if (!nfecha) { toast("Ingresá el número de fecha", "err"); return; }
   const partido = partidoId
-    ? { id:partidoId, fecha, rival, numeroFecha:nfecha, condicion }
-    : { fecha, rival, numeroFecha:nfecha, condicion };
+    ? { id:partidoId, fecha, rival, numeroFecha:nfecha, condicion, torneo }
+    : { fecha, rival, numeroFecha:nfecha, condicion, torneo };
   try {
     const r = await Storage.savePartido(partido);
     if (!r.ok) throw new Error(r.error || "Error");
     if (partidoId) {
       const idx = partidos.findIndex(p => p.id === partidoId);
-      if (idx >= 0) partidos[idx] = { ...partidos[idx], fecha, rival, numeroFecha:nfecha, condicion };
+      if (idx >= 0) partidos[idx] = { ...partidos[idx], fecha, rival, numeroFecha:nfecha, condicion, torneo };
     } else {
-      partidos.push({ id:r.id, fecha, rival, numeroFecha:nfecha, condicion, activo:true });
+      partidos.push({ id:r.id, fecha, rival, numeroFecha:nfecha, condicion, torneo, activo:true });
     }
     toast(partidoId ? "Partido actualizado ✓" : "Partido agregado ✓", "ok");
     closeModal();

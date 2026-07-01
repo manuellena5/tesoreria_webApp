@@ -488,18 +488,21 @@ textarea.inp { resize:none; }
   .modal-overlay { align-items:center; }
   .sum-table td:first-child { max-width:220px; }
 
-  /* Tablas tipo reintegro: ocupar todo el ancho disponible sin scroll horizontal */
-  .reint-table-wrap { overflow-x:visible; }
-  .reint-table-wrap .reint-table { table-layout:fixed; width:100%; }
-  .reint-table-wrap .reint-table th,
-  .reint-table-wrap .reint-table td { white-space:normal; word-break:break-word; }
-  .reint-table-wrap .jugador-col { width:18%; min-width:0; max-width:none; overflow:visible; text-overflow:clip; white-space:normal; }
+  /* Tablas tipo reintegro: ocupar el ancho disponible; los valores no deben partirse
+     a la mitad, así que solo los encabezados (más largos) pueden bajar de línea.
+     Si igual no entra (tablas con muchas columnas, ej. Eventos), scrollea en vez de
+     romper los números. */
+  .reint-table-wrap { overflow-x:auto; }
+  .reint-table-wrap .reint-table { table-layout:auto; width:100%; }
+  .reint-table-wrap .reint-table th { white-space:normal; word-break:break-word; }
+  .reint-table-wrap .reint-table td { white-space:nowrap; }
+  .reint-table-wrap .jugador-col { width:auto; min-width:160px; max-width:none; overflow:visible; text-overflow:clip; white-space:normal; }
 }
 
 /* ── Desktop ancho (PC) ── */
 @media (min-width: 1200px) {
-  #app { max-width: 1200px; }
-  .bnav { max-width: 1200px; }
+  #app { max-width: 1600px; }
+  .bnav { max-width: 1600px; }
 }
 </style>
 </head>

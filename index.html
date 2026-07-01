@@ -612,9 +612,6 @@ const RUBROS = [
   {cod:"62",  nombre:"PEÑA-OTROS INGRESOS",                  cat:"Peñas y Eventos"},
 ];
 
-// Rubros que disparan el selector de Evento en "Nuevo movimiento"
-const PENA_RUBROS = ["54","55","56","57","58","59","60","61","62"];
-
 const MESES_LABELS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                        "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
@@ -1142,9 +1139,8 @@ function renderNuevo() {
         </select>
       </div>
 
-      ${PENA_RUBROS.includes(F.codRubro) ? `
       <div class="field">
-        <label>Evento</label>
+        <label>Evento (opcional)</label>
         <select class="inp" id="f-evento" onchange="F.eventoId=this.value">
           <option value="">— Sin evento —</option>
           ${[...eventos]
@@ -1156,7 +1152,7 @@ function renderNuevo() {
               return `<option value="${esc(ev.id)}" ${F.eventoId===ev.id?"selected":""}>${esc(label)}</option>`;
             }).join("")}
         </select>
-      </div>` : ""}
+      </div>
 
       <div class="field ${isAdh ? "highlighted" : ""}" id="adherente-row">
         <label>Adherente${isAdh ? " ★" : " (opcional)"}</label>
@@ -1270,7 +1266,6 @@ function highlightRubroItem(items) {
 
 function selectRubroItem(item, input, drop, blurAfter) {
   if (!item) return;
-  const wasPena = PENA_RUBROS.includes(F.codRubro);
   F.codRubro  = item.dataset.cod;
   F.rubro     = item.dataset.nombre;
   F.categoria = item.dataset.cat;
@@ -1279,9 +1274,8 @@ function selectRubroItem(item, input, drop, blurAfter) {
   if (blurAfter) input.blur(); // Forzamos el blur después de seleccionar (clic / Enter)
   // Auto-set tipo to INTERNO if rubro 49
   if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
-  const isPena = PENA_RUBROS.includes(F.codRubro);
-  // Re-render for rubro 21/49 (checkbox) o al entrar/salir de un rubro de Peña (selector de Evento)
-  if (F.codRubro === "21" || F.codRubro === "49" || isPena || wasPena) { renderNuevo(); return; }
+  // Re-render for rubro 21 to show/hide conditional checkbox
+  if (F.codRubro === "21" || F.codRubro === "49") { renderNuevo(); return; }
   // Highlight adherente row
   const adhRow = document.getElementById("adherente-row");
   if (adhRow) {
@@ -1368,7 +1362,7 @@ async function saveMovimiento() {
       seguroReintegro: F.seguroReintegro || 0,
       tipo: F.tipo,
       partidoId: F.partidoId || "",
-      eventoId: PENA_RUBROS.includes(F.codRubro) ? (F.eventoId || "") : "",
+      eventoId: F.eventoId || "",
     };
   }
 

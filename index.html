@@ -2062,6 +2062,29 @@ function renderPatrimonio() {
     </div>`;
   }).join("");
 
+  // ⚠️ Diagnóstico: cuentas "huérfanas" — nombres de cuenta usados en movimientos
+  // que no coinciden con ninguna de la lista configurada (`cuentas`). Su saldo
+  // entra en totalCuentas pero no se ve en la lista de arriba, lo que puede
+  // explicar por qué la suma visible no coincide con el total mostrado.
+  const cuentasConocidas = new Set(cuentas);
+  const huerfanas = Object.keys(saldos).filter(k => !cuentasConocidas.has(k) && saldos[k] !== 0);
+  const huerfanasHtml = huerfanas.length ? `
+    <div class="cfg-title" style="margin:14px 0 8px;color:var(--red)">⚠️ Cuentas no reconocidas</div>
+    <p class="note" style="margin-bottom:8px">
+      Estos nombres de cuenta aparecen en movimientos pero no están en la lista de cuentas
+      configurada. Su saldo se suma al total de Patrimonio aunque no se muestra en "Cuentas".
+      Revisá esos movimientos (puede ser un typo, una cuenta renombrada o eliminada).
+    </p>
+    ${huerfanas.map(k => {
+      const s = saldos[k] || 0;
+      const movsCount = movimientos.filter(m => m.cuenta === k || m.cuentaDestino === k).length;
+      return `<div class="cuenta-item">
+        <span class="cuenta-nombre">${esc(k || "(vacío)")} <span class="note" style="font-size:11px">(${movsCount} mov.)</span></span>
+        <span class="cuenta-saldo ${s>0?"pos":s<0?"neg":"zer"}">${s<0?"-":""}${fmt(s)}</span>
+      </div>`;
+    }).join("")}
+  ` : "";
+
   const stock = calcStockGranos();
   const granosHtml = Object.keys(stock).sort().map(g => {
     const kg = stock[g] || 0;
@@ -2089,6 +2112,7 @@ function renderPatrimonio() {
     </div>
     <div class="cfg-title" style="margin:14px 0 8px">🏦 Cuentas</div>
     ${cuentasHtml}
+    ${huerfanasHtml}
     <div class="cfg-title" style="margin:14px 0 8px">🌾 Granos en stock</div>
     ${granosHtml || '<p class="note">Sin stock registrado</p>'}
   `;

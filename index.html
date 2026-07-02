@@ -452,10 +452,10 @@ textarea.inp { resize:none; }
   padding:4px 9px; font-family:var(--font); font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap;
 }
 
-/* ── Botón guardar: estados guardando / guardado ── */
-.btn-main.is-saving { opacity:.7; cursor:default; }
-.btn-main.is-saved  { background:linear-gradient(135deg,#4ade80,#22c55e); }
-.btn-main:disabled  { pointer-events:none; }
+/* ── Botones guardar (movimientos y ABM de entidades): estados guardando / guardado ── */
+.btn-main.is-saving, .btn-sm.is-saving, .btn-secondary.is-saving { opacity:.7; cursor:default; }
+.btn-main.is-saved, .btn-sm.accent.is-saved, .btn-sm.is-saved, .btn-secondary.is-saved { background:linear-gradient(135deg,#4ade80,#22c55e); color:#fff; }
+.btn-main:disabled, .btn-sm:disabled, .btn-secondary:disabled { pointer-events:none; }
 
 /* ── Saldo por cuenta ── */
 .cuenta-list { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
@@ -1606,10 +1606,11 @@ async function saveMovimiento() {
   }
 }
 
-// Refleja visualmente el estado del envío en el botón GUARDAR/ACTUALIZAR para que quede
-// claro que el toque se registró y evitar reenvíos accidentales.
-function setSaveBtnState(state) {
-  const btn = document.getElementById("btn-guardar-mov");
+// Refleja visualmente el estado del envío en un botón Guardar/Agregar para que quede
+// claro que el toque se registró y evitar reenvíos accidentales. Genérico: recibe el id
+// del botón (movimientos y todos los ABM de entidades usan la misma función).
+function setBtnState(btnId, state) {
+  const btn = document.getElementById(btnId);
   if (!btn) return;
   if (state === "saving") {
     btn.disabled = true;
@@ -1617,19 +1618,31 @@ function setSaveBtnState(state) {
     btn.dataset.label = btn.textContent;
     btn.textContent = "Guardando…";
   } else if (state === "saved") {
-    const original = btn.textContent;
+    // Si el flujo re-renderizó el botón, textContent ya es el rótulo original;
+    // si no (modales que siguen abiertos), lo recuperamos de dataset.label.
+    const original = btn.dataset.label || btn.textContent;
+    delete btn.dataset.label;
     btn.classList.remove("is-saving");
     btn.classList.add("is-saved");
     btn.textContent = "✓ Guardado";
     btn.disabled = false;
     setTimeout(() => {
       btn.classList.remove("is-saved");
-      if (document.getElementById("btn-guardar-mov") === btn) btn.textContent = original;
+      if (document.getElementById(btnId) === btn) btn.textContent = original;
     }, 1200);
   } else {
     btn.disabled = false;
     btn.classList.remove("is-saving");
+    if (btn.dataset.label) { btn.textContent = btn.dataset.label; delete btn.dataset.label; }
   }
+}
+function setSaveBtnState(state) { setBtnState("btn-guardar-mov", state); }
+
+// Error handler común de los guardados de entidades: rehabilita el botón y distingue
+// error de red (estas pantallas no tienen cola offline) de error de la app.
+function handleSaveError(btnId, e) {
+  setBtnState(btnId, "error");
+  toast(isNetworkError(e) ? "Sin conexión — no se pudo guardar, probá de nuevo" : "Error: " + e.message, "err");
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -3738,13 +3751,15 @@ function openPartidoModal(partidoId) {
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" onclick="savePartido('${partidoId||""}')">Guardar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-partido" onclick="savePartido('${partidoId||""}')">Guardar</button>
         </div>
       </div>
     </div>`;
 }
 
 async function savePartido(partidoId) {
+  const btnId = "btn-guardar-partido";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const fecha     = (document.getElementById("par-fecha")?.value    || "").trim();
   const rival     = (document.getElementById("par-rival")?.value    || "").trim();
   const nfecha    = (document.getElementById("par-nfecha")?.value   || "").trim();
@@ -3753,9 +3768,13 @@ async function savePartido(partidoId) {
   if (!fecha)  { toast("Ingresá una fecha", "err"); return; }
   if (!rival)  { toast("Ingresá el rival", "err"); return; }
   if (!nfecha) { toast("Ingresá el número de fecha", "err"); return; }
+  const dupFecha = partidos.some(p => p.id !== partidoId && p.activo !== false
+    && normStr(p.torneo) === normStr(torneo) && normStr(p.numeroFecha) === normStr(nfecha));
+  if (dupFecha) { toast("Ya hay un partido con ese número de fecha en ese torneo", "err"); return; }
   const partido = partidoId
     ? { id:partidoId, fecha, rival, numeroFecha:nfecha, condicion, torneo }
     : { fecha, rival, numeroFecha:nfecha, condicion, torneo };
+  setBtnState(btnId, "saving");
   try {
     const r = await Storage.savePartido(partido);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -3765,10 +3784,11 @@ async function savePartido(partidoId) {
     } else {
       partidos.push({ id:r.id, fecha, rival, numeroFecha:nfecha, condicion, torneo, activo:true });
     }
+    setBtnState(btnId, "saved");
     toast(partidoId ? "Partido actualizado ✓" : "Partido agregado ✓", "ok");
     closeModal();
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleSaveError(btnId, e); }
 }
 
 function openAsociarModal(partidoId) {
@@ -3991,18 +4011,21 @@ function openEventoModal(eventoId) {
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" onclick="saveEvento('${eventoId||""}')">Guardar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-evento" onclick="saveEvento('${eventoId||""}')">Guardar</button>
         </div>
       </div>
     </div>`;
 }
 
 async function saveEvento(eventoId) {
+  const btnId = "btn-guardar-evento";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const nombre = (document.getElementById("eve-nombre")?.value || "").trim();
   const fecha  = (document.getElementById("eve-fecha")?.value  || "").trim();
   if (!nombre) { toast("Ingresá un nombre", "err"); return; }
   if (!fecha)  { toast("Ingresá una fecha", "err"); return; }
   const evento = eventoId ? { id:eventoId, nombre, fecha } : { nombre, fecha };
+  setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveEvento(evento);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -4012,10 +4035,11 @@ async function saveEvento(eventoId) {
     } else {
       eventos.push({ id:r.id, nombre, fecha, activo:true });
     }
+    setBtnState(btnId, "saved");
     toast(eventoId ? "Evento actualizado ✓" : "Evento agregado ✓", "ok");
     closeModal();
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleSaveError(btnId, e); }
 }
 
 function confirmDeleteEvento(id) {
@@ -4107,7 +4131,7 @@ function renderGranos() {
       <input class="inp" id="cosecha-fecha" type="date" value="${today()}">
       <input class="inp" id="cosecha-kg" type="number" min="0" step="any" placeholder="Kg ingresados">
       <input class="inp" id="cosecha-nota" type="text" placeholder="Nota (opcional)">
-      <button class="btn-sm accent" onclick="addCosecha()">+ Agregar cosecha</button>
+      <button class="btn-sm accent" id="btn-agregar-cosecha" onclick="addCosecha()">+ Agregar cosecha</button>
     </div>
 
     <div class="cfg-title" style="margin:18px 0 8px">💰 Registrar venta</div>
@@ -4121,7 +4145,7 @@ function renderGranos() {
       <select class="inp" id="venta-cuenta">${cuentas.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
       <select class="inp" id="venta-metodo">${metodos.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>
       <input class="inp" id="venta-nota" type="text" placeholder="Nota (opcional)">
-      <button class="btn-sm accent" onclick="addVentaGrano()">+ Registrar venta y generar ingreso</button>
+      <button class="btn-sm accent" id="btn-registrar-venta-grano" onclick="addVentaGrano()">+ Registrar venta y generar ingreso</button>
     </div>
 
     <div class="cfg-title" style="margin:18px 0 8px">Historial</div>
@@ -4139,24 +4163,30 @@ async function updatePrecioGrano(grano, valor) {
 }
 
 async function addCosecha() {
+  const btnId = "btn-agregar-cosecha";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const selGrano = document.getElementById("cosecha-grano")?.value || "";
   const otro     = (document.getElementById("cosecha-grano-otro")?.value || "").trim();
   const grano    = selGrano || otro;
   const fecha    = document.getElementById("cosecha-fecha")?.value || today();
   const kg       = parseFloat(document.getElementById("cosecha-kg")?.value || "0");
   const nota     = document.getElementById("cosecha-nota")?.value || "";
-  if (!grano)            { toast("Indicá el grano", "err"); return; }
-  if (!kg || kg <= 0)    { toast("Ingresá los kg ingresados", "err"); return; }
+  if (!grano)               { toast("Indicá el grano", "err"); return; }
+  if (!isFinite(kg) || kg <= 0) { toast("Ingresá los kg ingresados (número positivo)", "err"); return; }
+  setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveReserva({ fecha, grano, tipo: "COSECHA", kg, nota });
     if (!r.ok) throw new Error(r.error || "Error");
     reservas.push({ id: r.id, fecha, grano, tipo: "COSECHA", kg, nota, movimientoId: "" });
     toast("Cosecha registrada ✓", "ok");
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+    setBtnState(btnId, "saved");
+  } catch(e) { handleSaveError(btnId, e); }
 }
 
 async function addVentaGrano() {
+  const btnId = "btn-registrar-venta-grano";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const grano  = document.getElementById("venta-grano")?.value || "";
   const fecha  = document.getElementById("venta-fecha")?.value || today();
   const kg     = parseFloat(document.getElementById("venta-kg")?.value || "0");
@@ -4164,14 +4194,15 @@ async function addVentaGrano() {
   const cuenta = document.getElementById("venta-cuenta")?.value || cuentas[0] || "";
   const modo   = document.getElementById("venta-metodo")?.value || metodos[0] || "";
   const nota   = document.getElementById("venta-nota")?.value || "";
-  if (!grano)             { toast("Seleccioná el grano", "err"); return; }
-  if (!kg || kg <= 0)     { toast("Ingresá los kg vendidos", "err"); return; }
-  if (!monto || monto<=0) { toast("Ingresá el monto del ingreso", "err"); return; }
+  if (!grano)                      { toast("Seleccioná el grano", "err"); return; }
+  if (!isFinite(kg) || kg <= 0)    { toast("Ingresá los kg vendidos (número positivo)", "err"); return; }
+  if (!isFinite(monto) || monto<=0){ toast("Ingresá el monto del ingreso (número positivo)", "err"); return; }
   const stock = calcStockGranos();
   if (kg > (stock[grano] || 0)) {
     toast(`No hay suficiente stock de ${grano} (disponible: ${fmt(stock[grano]||0)} kg)`, "err");
     return;
   }
+  setBtnState(btnId, "saving");
   showOverlay("Guardando…");
   try {
     const mes = fecha.slice(0,7).replace("-","");
@@ -4195,8 +4226,9 @@ async function addVentaGrano() {
     updateBadge();
     toast("Venta registrada e ingreso generado ✓", "ok");
     renderEntidades();
+    setBtnState(btnId, "saved");
   } catch(e) {
-    toast("Error: " + e.message, "err");
+    handleSaveError(btnId, e);
   } finally {
     hideOverlay();
   }
@@ -4233,22 +4265,29 @@ function renderJugadores() {
   return `
     <div class="add-row">
       <input class="inp" id="new-jug-input" type="text" placeholder="Nombre del jugador / CT…">
-      <button class="btn-sm accent" onclick="addJugador()">+ Agregar</button>
+      <button class="btn-sm accent" id="btn-agregar-jugador" onclick="addJugador()">+ Agregar</button>
     </div>
     ${list || '<p class="note">Sin jugadores registrados</p>'}`;
 }
 
 async function addJugador() {
+  const btnId = "btn-agregar-jugador";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const inp = document.getElementById("new-jug-input");
   const nombre = (inp?.value || "").trim();
   if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  if (jugadores.some(j => normStr(j.nombre) === normStr(nombre))) {
+    toast("Ya existe un jugador con ese nombre", "err"); return;
+  }
+  setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveJugador({ nombre });
     if (!r.ok) throw new Error(r.error || "Error");
     jugadores.push({ id: r.id, nombre });
     toast("Jugador agregado ✓", "ok");
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+    setBtnState(btnId, "saved");
+  } catch(e) { handleSaveError(btnId, e); }
 }
 
 function confirmDeleteJugador(id) {
@@ -4315,18 +4354,24 @@ function openGrupoModal(grupoId) {
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" onclick="saveGrupo('${grupoId||""}')">Guardar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-grupo" onclick="saveGrupo('${grupoId||""}')">Guardar</button>
         </div>
       </div>
     </div>`;
 }
 
 async function saveGrupo(grupoId) {
+  const btnId = "btn-guardar-grupo";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const nombre = (document.getElementById("grupo-nombre")?.value || "").trim();
   if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  if (grupos.some(g => g.id !== grupoId && normStr(g.nombre) === normStr(nombre))) {
+    toast("Ya existe un grupo con ese nombre", "err"); return;
+  }
   const checks = document.querySelectorAll(".grupo-jug-list input[type=checkbox]:checked");
   const miembros = Array.from(checks).map(c => c.value);
   const grupo = grupoId ? { id:grupoId, nombre, miembros } : { nombre, miembros };
+  setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveGrupo(grupo);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -4336,10 +4381,11 @@ async function saveGrupo(grupoId) {
     } else {
       grupos.push({ id: r.id, nombre, miembros });
     }
+    setBtnState(btnId, "saved");
     toast(grupoId ? "Grupo actualizado ✓" : "Grupo creado ✓", "ok");
     closeModal();
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleSaveError(btnId, e); }
 }
 
 function confirmDeleteGrupo(id) {
@@ -4434,7 +4480,7 @@ function openAdherenteModal(adherenteId) {
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" onclick="saveAdherenteModal('${adherenteId||""}')">Guardar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-adherente" onclick="saveAdherenteModal('${adherenteId||""}')">Guardar</button>
         </div>
       </div>
     </div>`;
@@ -4452,13 +4498,21 @@ function updateAdhCompromisoPreview() {
 }
 
 async function saveAdherenteModal(adherenteId) {
+  const btnId = "btn-guardar-adherente";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const nombre = (document.getElementById("adh-nombre")?.value || "").trim();
   const cuotaMensual  = Number(document.getElementById("adh-cuota")?.value || 0);
   const cuotasAnuales = Number(document.getElementById("adh-cuotas-anuales")?.value || 0);
   if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  if (adherentes.some(a => a.id !== adherenteId && normStr(a.nombre) === normStr(nombre))) {
+    toast("Ya existe un adherente con ese nombre", "err"); return;
+  }
+  if (!isFinite(cuotaMensual)  || cuotaMensual  < 0) { toast("La cuota mensual no puede ser negativa", "err"); return; }
+  if (!isFinite(cuotasAnuales) || cuotasAnuales < 0) { toast("Las cuotas por año no pueden ser negativas", "err"); return; }
   const adherente = adherenteId
     ? { id:adherenteId, nombre, cuotaMensual, cuotasAnuales }
     : { nombre, cuotaMensual, cuotasAnuales };
+  setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveAdherente(adherente);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -4468,10 +4522,11 @@ async function saveAdherenteModal(adherenteId) {
     } else {
       adherentes.push({ id:r.id, nombre, cuotaMensual, cuotasAnuales });
     }
+    setBtnState(btnId, "saved");
     toast(adherenteId ? "Adherente actualizado ✓" : "Adherente agregado ✓", "ok");
     closeModal();
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleSaveError(btnId, e); }
 }
 
 function confirmDeleteAdherente(id) {
@@ -4567,9 +4622,9 @@ function renderConfig() {
       ${cuentasHtml}
       <div class="cfg-item" style="margin-top:4px">
         <input class="inp" id="new-cuenta-inp" type="text" placeholder="Nueva cuenta…">
-        <button class="btn-sm accent" onclick="addCuenta()">+</button>
+        <button class="btn-sm accent" id="btn-add-cuenta" onclick="addCuenta()">+</button>
       </div>
-      <button class="btn-secondary" style="margin-top:10px" onclick="saveCuentas()">💾 Guardar cuentas</button>
+      <button class="btn-secondary" style="margin-top:10px" id="btn-guardar-cuentas" onclick="saveCuentas()">💾 Guardar cuentas</button>
     </div>
 
     <!-- Métodos de pago -->
@@ -4578,9 +4633,9 @@ function renderConfig() {
       ${metodosHtml}
       <div class="cfg-item" style="margin-top:4px">
         <input class="inp" id="new-metodo-inp" type="text" placeholder="Nuevo método…">
-        <button class="btn-sm accent" onclick="addMetodo()">+</button>
+        <button class="btn-sm accent" id="btn-add-metodo" onclick="addMetodo()">+</button>
       </div>
-      <button class="btn-secondary" style="margin-top:10px" onclick="saveMetodos()">💾 Guardar métodos</button>
+      <button class="btn-secondary" style="margin-top:10px" id="btn-guardar-metodos" onclick="saveMetodos()">💾 Guardar métodos</button>
     </div>
 
     <!-- Exportar -->
@@ -4612,6 +4667,13 @@ function renderConfig() {
       <div class="cfg-title">🔄 Datos</div>
       <button class="btn-secondary" onclick="refreshData()">↻ Recargar todos los datos</button>
       <p class="cfg-note" style="margin-top:8px">Si agregaste filas directamente en la hoja de cálculo, tocá este botón para sincronizar.</p>
+    </div>
+
+    <!-- Actualización de la app -->
+    <div class="cfg-card">
+      <div class="cfg-title">⬆️ Versión de la app</div>
+      <button class="btn-secondary" id="btn-buscar-update" onclick="checkAppUpdate()">🔎 Buscar actualizaciones</button>
+      <p class="cfg-note" style="margin-top:8px">Comprueba si hay una versión nueva publicada y la aplica al instante (la app se recarga sola).</p>
     </div>
 
     <!-- Auditoría -->
@@ -4742,22 +4804,30 @@ function addMetodo()  { metodos.push(""); renderConfig(); }
 function removeMetodo(i) { metodos.splice(i,1); renderConfig(); }
 
 async function saveCuentas() {
+  const btnId = "btn-guardar-cuentas";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   document.querySelectorAll("[data-cfg-cuenta]").forEach((inp,i) => { if(i<cuentas.length) cuentas[i] = inp.value.trim(); });
   cuentas = cuentas.filter(Boolean);
+  setBtnState(btnId, "saving");
   try {
     await Storage.saveConfig("cuentas", cuentas.join(","));
     toast("Cuentas guardadas ✓", "ok");
     renderConfig();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+    setBtnState(btnId, "saved");
+  } catch(e) { handleSaveError(btnId, e); }
 }
 async function saveMetodos() {
+  const btnId = "btn-guardar-metodos";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   document.querySelectorAll("[data-cfg-metodo]").forEach((inp,i) => { if(i<metodos.length) metodos[i] = inp.value.trim(); });
   metodos = metodos.filter(Boolean);
+  setBtnState(btnId, "saving");
   try {
     await Storage.saveConfig("metodos", metodos.join(","));
     toast("Métodos guardados ✓", "ok");
     renderConfig();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+    setBtnState(btnId, "saved");
+  } catch(e) { handleSaveError(btnId, e); }
 }
 
 // ── Excel Export ──────────────────────────────────────────────
@@ -4956,6 +5026,38 @@ function showUpdateBanner(reg) {
 function applyUpdate() {
   const reg = window._pendingSwReg;
   if (reg && reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+}
+
+// Chequeo manual desde ⚙️ Config: fuerza reg.update() y, si hay una versión nueva
+// lista, la activa al instante (el controllerchange de arriba recarga la app).
+async function checkAppUpdate() {
+  const btn = document.getElementById("btn-buscar-update");
+  if (btn?.disabled) return; // evita doble envío
+  if (!("serviceWorker" in navigator)) { toast("Este navegador no soporta la app instalable", "err"); return; }
+  if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = "Buscando…"; }
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) { toast("El service worker no está registrado todavía — recargá la app", "err"); return; }
+    await reg.update();
+    // Si encontró una versión nueva, esperamos a que termine de instalarse
+    const nuevo = reg.installing;
+    if (nuevo) {
+      await new Promise((res) => nuevo.addEventListener("statechange", () => {
+        if (nuevo.state !== "installing") res();
+      }));
+    }
+    if (reg.waiting) {
+      toast("Versión nueva encontrada — actualizando…", "ok");
+      reg.waiting.postMessage({ type: "SKIP_WAITING" });
+    } else {
+      toast("Ya estás en la última versión ✓", "ok");
+    }
+  } catch (e) {
+    toast(isNetworkError(e) ? "Sin conexión — no se pudo buscar actualizaciones" : "Error: " + e.message, "err");
+  } finally {
+    const b = document.getElementById("btn-buscar-update");
+    if (b) { b.disabled = false; if (b.dataset.label) { b.textContent = b.dataset.label; delete b.dataset.label; } }
+  }
 }
 
 // ══════════════════════════════════════════════════════════════

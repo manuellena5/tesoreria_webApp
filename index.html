@@ -7,7 +7,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tesorería">
 <title>Tesorería Club</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
@@ -425,6 +429,34 @@ textarea.inp { resize:none; }
   margin-bottom:16px; line-height:1.6;
 }
 
+/* ── Update banner (nueva versión de la app) ── */
+.update-banner {
+  position:fixed; top:0; left:0; right:0; z-index:400;
+  background:var(--accent); color:#fff; font-size:13px; font-weight:500;
+  padding:10px 14px; display:flex; align-items:center; justify-content:center; gap:12px;
+  animation:tin .2s ease;
+}
+.update-banner button {
+  background:#fff; color:var(--accent); border:none; border-radius:6px;
+  padding:6px 12px; font-family:var(--font); font-size:12px; font-weight:600; cursor:pointer;
+}
+
+/* ── Offline / sync banner ── */
+.offline-banner {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  background:var(--warn-bg); border:1px solid rgba(251,191,36,.3); color:var(--warn);
+  font-size:12px; font-weight:500; padding:9px 14px; border-radius:var(--rs); margin:0 18px 10px;
+}
+.offline-banner button {
+  background:none; border:1px solid var(--warn); color:var(--warn); border-radius:6px;
+  padding:4px 9px; font-family:var(--font); font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap;
+}
+
+/* ── Botón guardar: estados guardando / guardado ── */
+.btn-main.is-saving { opacity:.7; cursor:default; }
+.btn-main.is-saved  { background:linear-gradient(135deg,#4ade80,#22c55e); }
+.btn-main:disabled  { pointer-events:none; }
+
 /* ── Saldo por cuenta ── */
 .cuenta-list { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
 .cuenta-item { background:var(--bg2); border:1px solid var(--border); border-radius:var(--rs); padding:11px 14px; display:flex; justify-content:space-between; align-items:center; }
@@ -513,6 +545,8 @@ textarea.inp { resize:none; }
   <p id="overlay-msg">Cargando datos…</p>
 </div>
 
+<div id="update-banner-root"></div>
+
 <div id="app">
   <div class="hdr">
     <div>
@@ -521,6 +555,7 @@ textarea.inp { resize:none; }
     <span class="badge" id="badge-count">—</span>
   </div>
   <div class="hdr-sub" id="hdr-sub">Gestión de tesorería</div>
+  <div id="offline-banner-root"></div>
   <div class="content" id="content"></div>
 
   <nav class="bnav">
@@ -864,6 +899,105 @@ const Storage = {
 };
 
 // ══════════════════════════════════════════════════════════════
+// MODO OFFLINE — cache local + cola de movimientos pendientes
+// ══════════════════════════════════════════════════════════════
+
+const CACHE_KEY   = "clubfm_offline_snapshot";
+const PENDING_KEY = "clubfm_pending_movs";
+
+// Detecta errores de red (offline / servidor inalcanzable) vs. errores de la app (ej. "Sin URL configurada").
+function isNetworkError(e) {
+  if (!navigator.onLine) return true;
+  const msg = String(e && e.message || "");
+  return e instanceof TypeError || /fetch|network|failed/i.test(msg);
+}
+
+function saveSnapshotToCache() {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
+      cuentas, metodos, preciosGranos, savedAt: Date.now()
+    }));
+  } catch (e) { /* localStorage lleno o no disponible — no es crítico */ }
+}
+
+function loadSnapshotFromCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+function getPendingMovs() {
+  try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "[]"); }
+  catch (e) { return []; }
+}
+function setPendingMovs(arr) {
+  localStorage.setItem(PENDING_KEY, JSON.stringify(arr));
+}
+function addPendingMov(mov, isEdit) {
+  const q = getPendingMovs();
+  q.push({ mov, isEdit, queuedAt: Date.now() });
+  setPendingMovs(q);
+}
+function removePendingMov(id) {
+  setPendingMovs(getPendingMovs().filter(p => p.mov.id !== id));
+}
+
+// Intenta sincronizar los movimientos cargados offline. Se llama al volver la conexión
+// y también manualmente desde el banner. Si un envío falla por red, corta y reintenta después.
+let syncingPending = false;
+async function syncPendingMovs() {
+  if (syncingPending) return;
+  const pending = getPendingMovs();
+  if (!pending.length) return;
+  if (!getScriptUrl()) return;
+  syncingPending = true;
+  let synced = 0;
+  try {
+    for (const item of pending) {
+      try {
+        const r = item.isEdit ? await Storage.updateMov(item.mov) : await Storage.saveMov(item.mov);
+        if (!r.ok) throw new Error(r.error || "Error al sincronizar");
+        removePendingMov(item.mov.id);
+        const idx = movimientos.findIndex(m => m.id === item.mov.id);
+        if (idx >= 0) { movimientos[idx] = { ...movimientos[idx] }; delete movimientos[idx]._pending; }
+        synced++;
+      } catch (e) {
+        if (isNetworkError(e)) break; // seguimos offline, reintentar más tarde
+        removePendingMov(item.mov.id); // error de datos, no de red: lo sacamos de la cola para no bloquear el resto
+      }
+    }
+  } finally {
+    syncingPending = false;
+    if (synced > 0) {
+      saveSnapshotToCache();
+      toast(synced + " movimiento(s) sincronizado(s)", "ok");
+      renderOfflineBanner();
+      if (currentTab === "movimientos") renderMovimientos();
+    }
+  }
+}
+
+function renderOfflineBanner() {
+  const root = document.getElementById("offline-banner-root");
+  if (!root) return;
+  const pending = getPendingMovs().length;
+  if (navigator.onLine && !pending) { root.innerHTML = ""; return; }
+  const msgs = [];
+  if (!navigator.onLine) msgs.push("📴 Sin conexión — viendo datos guardados localmente");
+  if (pending) msgs.push(pending + " movimiento(s) pendiente(s) de sincronizar");
+  root.innerHTML = `
+    <div class="offline-banner">
+      <span>${msgs.join(" · ")}</span>
+      ${pending && navigator.onLine ? `<button onclick="syncPendingMovs().then(renderOfflineBanner)">Sincronizar</button>` : ""}
+    </div>`;
+}
+
+window.addEventListener("online",  () => { renderOfflineBanner(); syncPendingMovs().then(renderOfflineBanner); });
+window.addEventListener("offline", renderOfflineBanner);
+
+// ══════════════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════════════
 
@@ -874,13 +1008,21 @@ async function initApp() {
     goTab("config");
     return;
   }
-  showOverlay("Cargando datos…");
+  showOverlay(navigator.onLine ? "Cargando datos…" : "Sin conexión — buscando datos guardados…");
   await loadAllData();
   hideOverlay();
+  renderOfflineBanner();
   goTab("nuevo");
+  if (navigator.onLine) syncPendingMovs().then(renderOfflineBanner);
 }
 
 async function loadAllData() {
+  // Sin conexión: no intentamos pegarle a Apps Script, vamos directo al cache local.
+  if (!navigator.onLine) {
+    if (loadFromCacheIfAny()) return;
+    toast("Sin conexión y sin datos guardados localmente todavía", "err");
+    return;
+  }
   try {
     const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes, rEve] = await Promise.all([
       Storage.listMov(),
@@ -926,9 +1068,33 @@ async function loadAllData() {
       }
     }
     updateBadge();
+    saveSnapshotToCache();
   } catch(e) {
-    toast("Error cargando datos: " + e.message, "err");
+    if (isNetworkError(e) && loadFromCacheIfAny()) {
+      toast("Sin conexión — mostrando los últimos datos guardados", "err");
+    } else {
+      toast("Error cargando datos: " + e.message, "err");
+    }
   }
+}
+
+// Restaura el último snapshot guardado en localStorage. Devuelve true si había algo para cargar.
+function loadFromCacheIfAny() {
+  const snap = loadSnapshotFromCache();
+  if (!snap) return false;
+  movimientos = snap.movimientos || [];
+  jugadores   = snap.jugadores   || [];
+  grupos      = snap.grupos      || [];
+  adherentes  = snap.adherentes  || [];
+  pagos       = snap.pagos       || [];
+  partidos    = snap.partidos    || [];
+  reservas    = snap.reservas    || [];
+  eventos     = snap.eventos     || [];
+  if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
+  if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
+  if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
+  updateBadge();
+  return true;
 }
 
 function applyPreciosGranos(config) {
@@ -941,6 +1107,7 @@ async function refreshData() {
   showOverlay("Actualizando…");
   await loadAllData();
   hideOverlay();
+  renderOfflineBanner();
   goTab(currentTab);
   toast("Datos actualizados", "ok");
 }
@@ -1178,7 +1345,7 @@ function renderNuevo() {
                oninput="F.comprobante=this.value">
       </div>` : ""}
 
-      <button class="btn-main ${editId?"editing":""}" onclick="saveMovimiento()">
+      <button class="btn-main ${editId?"editing":""}" id="btn-guardar-mov" onclick="saveMovimiento()">
         ${editId ? "💾 ACTUALIZAR" : "✓ GUARDAR"}
       </button>
       <button class="btn-secondary" onclick="clearForm()">↺ Limpiar</button>
@@ -1316,9 +1483,13 @@ function filterRubros(query) {
 
 // ── Save ─────────────────────────────────────────────────────
 async function saveMovimiento() {
+  const btn = document.getElementById("btn-guardar-mov");
+  if (btn && btn.disabled) return; // evita doble envío (doble tap / doble Enter)
+
   const url = getScriptUrl();
   if (!url) { toast("Configurá la URL del script primero", "err"); goTab("config"); return; }
   if (!F.cuenta) { toast("Seleccioná una cuenta", "err"); return; }
+  if (!F.fecha || isNaN(new Date(F.fecha + "T00:00:00").getTime())) { toast("Ingresá una fecha válida", "err"); return; }
 
   let mov;
 
@@ -1348,14 +1519,18 @@ async function saveMovimiento() {
     };
   } else {
     if (!F.rubro)   { toast("Seleccioná un rubro", "err"); return; }
+    if (!F.concepto || !F.concepto.trim()) { toast("Ingresá un concepto", "err"); return; }
     if (!F.monto || isNaN(+F.monto) || +F.monto <= 0) { toast("Ingresá un monto válido", "err"); return; }
-    if (F.tipo === "INTERNO" && !F.cuentaDestino) { toast("Seleccioná cuenta destino", "err"); return; }
+    if (F.tipo === "INTERNO") {
+      if (!F.cuentaDestino) { toast("Seleccioná cuenta destino", "err"); return; }
+      if (F.cuentaDestino === F.cuenta) { toast("La cuenta destino debe ser distinta a la de origen", "err"); return; }
+    }
     const monto = Math.abs(parseFloat(F.monto));
     const mes   = F.fecha.slice(0,7).replace("-","");
     mov = {
       id: F.id, mes, fecha: F.fecha,
       codRubro: F.codRubro, rubro: F.rubro, categoria: F.categoria,
-      concepto: F.concepto,
+      concepto: F.concepto.trim(),
       egreso:     F.tipo === "EGRESO"  ? monto : (F.tipo === "INTERNO" ? monto : 0),
       ingreso:    F.tipo === "INGRESO" ? monto : 0,
       montoFinal: monto,
@@ -1370,7 +1545,14 @@ async function saveMovimiento() {
     };
   }
 
-  showOverlay("Guardando…");
+  // Fecha llamativamente en el futuro: probablemente un error de tipeo, confirmamos antes de guardar.
+  if (F.fecha > today() && !editId) {
+    if (!confirm("La fecha (" + F.fecha + ") es posterior a hoy. ¿Confirmás que es correcta?")) return;
+  }
+
+  const wasEdit = !!editId;
+  setSaveBtnState("saving");
+  showOverlay(navigator.onLine ? "Guardando…" : "Guardando (sin conexión)…");
   try {
     const r = editId
       ? await Storage.updateMov(mov)
@@ -1392,15 +1574,61 @@ async function saveMovimiento() {
       Storage.listPagos().then(rPag => { if (rPag.ok) pagos = rPag.pagos || []; });
     }
     updateBadge();
-    const wasEdit = !!editId;
+    saveSnapshotToCache();
     resetF();
     hideOverlay();        // ocultar spinner antes del re-render
     renderNuevo();
+    setSaveBtnState("saved");
     showMovSavedModal(mov, wasEdit);
   } catch(e) {
-    toast("Error: " + e.message, "err");
-  } finally {
-    hideOverlay();        // garantía por si hubo error antes del hide explícito
+    hideOverlay();
+    if (isNetworkError(e)) {
+      // Sin conexión: guardamos localmente y encolamos para sincronizar después.
+      mov._pending = true;
+      if (wasEdit) {
+        const idx = movimientos.findIndex(m => m.id === mov.id);
+        if (idx >= 0) movimientos[idx] = mov;
+      } else {
+        movimientos.push(mov);
+      }
+      addPendingMov(mov, wasEdit);
+      saveSnapshotToCache();
+      updateBadge();
+      resetF();
+      renderNuevo();
+      renderOfflineBanner();
+      setSaveBtnState("saved");
+      toast("Sin conexión — guardado localmente, se sincroniza al reconectar", "ok");
+    } else {
+      setSaveBtnState("error");
+      toast("Error: " + e.message, "err");
+    }
+  }
+}
+
+// Refleja visualmente el estado del envío en el botón GUARDAR/ACTUALIZAR para que quede
+// claro que el toque se registró y evitar reenvíos accidentales.
+function setSaveBtnState(state) {
+  const btn = document.getElementById("btn-guardar-mov");
+  if (!btn) return;
+  if (state === "saving") {
+    btn.disabled = true;
+    btn.classList.add("is-saving");
+    btn.dataset.label = btn.textContent;
+    btn.textContent = "Guardando…";
+  } else if (state === "saved") {
+    const original = btn.textContent;
+    btn.classList.remove("is-saving");
+    btn.classList.add("is-saved");
+    btn.textContent = "✓ Guardado";
+    btn.disabled = false;
+    setTimeout(() => {
+      btn.classList.remove("is-saved");
+      if (document.getElementById("btn-guardar-mov") === btn) btn.textContent = original;
+    }, 1200);
+  } else {
+    btn.disabled = false;
+    btn.classList.remove("is-saving");
   }
 }
 
@@ -1620,6 +1848,7 @@ function renderMovList() {
     const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
     const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : m.tipo==="AJUSTE" ? (m.montoFinal>=0?"⊙+":"⊙−") : "⇄";
     const tagsHtml = `
+          ${m._pending ? `<span class="tag" style="color:var(--warn);background:var(--warn-bg)">⏳ pendiente de sincronizar</span>` : ""}
           <span class="tag tag-cuenta">${esc(m.cuenta)}</span>
           ${m.jugadorCT ? `<span class="tag tag-jug">${esc(m.jugadorCT)}</span>` : ""}
           ${m.adherente ? `<span class="tag tag-adh">${esc(m.adherente)}</span>` : ""}
@@ -4682,10 +4911,87 @@ function showImportWarningsModal(sinRubro, sinJugador, sinAdherente) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// PWA — registro del service worker + aviso de nueva versión
+// ══════════════════════════════════════════════════════════════
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.register("sw.js").then((reg) => {
+    // Ya hay una versión nueva esperando (instalada mientras la app estaba cerrada)
+    if (reg.waiting) showUpdateBanner(reg);
+    reg.addEventListener("updatefound", () => {
+      const nuevo = reg.installing;
+      if (!nuevo) return;
+      nuevo.addEventListener("statechange", () => {
+        if (nuevo.state === "installed" && navigator.serviceWorker.controller) {
+          showUpdateBanner(reg);
+        }
+      });
+    });
+    // Revisa si hay una versión nueva publicada cada vez que la app vuelve a primer plano
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") reg.update();
+    });
+  }).catch(() => {});
+
+  // Cuando el SW nuevo toma control, recargamos una sola vez para mostrar la versión actualizada
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloaded) return;
+    reloaded = true;
+    window.location.reload();
+  });
+}
+
+function showUpdateBanner(reg) {
+  const root = document.getElementById("update-banner-root");
+  if (!root) return;
+  root.innerHTML = `
+    <div class="update-banner">
+      <span>🔄 Hay una versión nueva de la app</span>
+      <button onclick="applyUpdate()">Actualizar</button>
+    </div>`;
+  window._pendingSwReg = reg;
+}
+function applyUpdate() {
+  const reg = window._pendingSwReg;
+  if (reg && reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+}
+
+// ══════════════════════════════════════════════════════════════
+// ATAJOS DE TECLADO (útil en PC)
+// ══════════════════════════════════════════════════════════════
+
+document.addEventListener("keydown", (e) => {
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+
+  // Ctrl/Cmd + Enter guarda el movimiento desde cualquier campo del formulario "Nuevo"
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && currentTab === "nuevo") {
+    e.preventDefault();
+    saveMovimiento();
+    return;
+  }
+  // Escape cierra un modal abierto
+  if (e.key === "Escape") {
+    const modalRoot = document.getElementById("modal-root");
+    if (modalRoot && modalRoot.innerHTML.trim()) { modalRoot.innerHTML = ""; return; }
+  }
+  // Navegación rápida entre pestañas con Alt+número (no interfiere con tipeo normal)
+  if (e.altKey && !typing) {
+    const map = { "1":"nuevo", "2":"movimientos", "3":"resumen", "4":"entidades", "5":"config" };
+    if (map[e.key]) { e.preventDefault(); goTab(map[e.key]); }
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
 // ARRANQUE
 // ══════════════════════════════════════════════════════════════
 
-document.addEventListener("DOMContentLoaded", initApp);
+document.addEventListener("DOMContentLoaded", () => {
+  registerServiceWorker();
+  initApp();
+});
 </script>
 </body>
 </html>

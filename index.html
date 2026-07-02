@@ -2481,7 +2481,8 @@ function calcAdherentesPorAnio(anio) {
     map[a.nombre] = { adherente: a.nombre, cuotaMensual: a.cuotaMensual||0, cuotasAnuales: a.cuotasAnuales||0, totalAportado: 0, movs: [] };
   }
   for (const m of movs6) {
-    const key = m.adherente || "Sin adherente";
+    // Aportes de combustible (rubro 42) sin adherente asignado se agrupan como "⛽ Combustible"
+    const key = m.adherente || (m.codRubro === "42" ? "⛽ Combustible" : "Sin adherente");
     if (!map[key]) map[key] = { adherente: key, cuotaMensual: 0, cuotasAnuales: 0, totalAportado: 0, movs: [] };
     map[key].totalAportado += m.ingreso;
     map[key].movs.push(m);

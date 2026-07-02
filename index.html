@@ -2490,13 +2490,21 @@ function calcAdherentesPorAnio(anio) {
     .filter(r => r.totalAportado > 0 || (r.cuotaMensual > 0 && r.cuotasAnuales > 0))
     .map(r => {
       const compromisoAnual = r.cuotaMensual * r.cuotasAnuales;
-      const mesesPagados = new Set(r.movs.map(m => mesFromRecord(m))).size;
+      // pagosCount = cantidad real de movimientos (2 pagos en el mismo mes cuentan 2)
+      const pagosCount = r.movs.length;
+      // porMes: monto sumado por mes (celda de la planilla); el detalle por movimiento
+      // sigue disponible en r.movs al expandir la fila
+      const porMes = {};
+      for (const m of r.movs) {
+        const k = mesFromRecord(m);
+        porMes[k] = (porMes[k] || 0) + m.ingreso;
+      }
       let diferencia = null, estado = null;
       if (compromisoAnual > 0) {
         diferencia = r.totalAportado - compromisoAnual;
         estado = diferencia >= 0 ? "OK" : (r.totalAportado > 0 ? "PARCIAL" : "SIN");
       }
-      return { ...r, compromisoAnual, mesesPagados, diferencia, estado };
+      return { ...r, compromisoAnual, pagosCount, porMes, diferencia, estado };
     });
 }
 
@@ -2508,6 +2516,11 @@ function renderAdherentesResumen() {
   }
 
   const rows = calcAdherentesPorAnio(adherenteAnio);
+
+  // Meses a mostrar como columnas: unión de todos los adherentes del año seleccionado,
+  // solo los que tengan al menos un pago (sin meses futuros vacíos)
+  const movs6Anio = movs6All.filter(m => !adherenteAnio || m.fecha.slice(0,4) === adherenteAnio);
+  const meses = [...new Set(movs6Anio.map(m => mesFromRecord(m)))].filter(Boolean).sort();
 
   const anioOptions = `<option value="" ${adherenteAnio===""?"selected":""}>Todos los años</option>` +
     anios.map(a => `<option value="${a}" ${adherenteAnio===a?"selected":""}>${a}</option>`).join("");
@@ -2523,12 +2536,30 @@ function renderAdherentesResumen() {
     totAportado += r.totalAportado;
     if (r.compromisoAnual > 0) { hayCompromiso = true; totCompromiso += r.compromisoAnual; totDiferencia += r.diferencia; }
   }
-  const totalesLine = `${rows.length} adherente${rows.length!==1?"s":""} · Total aportado: ${fmt(totAportado)}` +
-    (hayCompromiso ? ` · Compromiso: ${fmt(totCompromiso)} · Diferencia: ${totDiferencia>=0?"+":"-"}${fmt(Math.abs(totDiferencia))}` : "");
+  // Resta por cobrar contra el compromiso anual (totDiferencia con signo invertido, como absoluto)
+  const restaPorCobrar = totCompromiso - totAportado;
+  const statCards = `
+    <div class="sum-grid ${hayCompromiso?"three":""}" style="margin-bottom:12px">
+      <div class="stat-card">
+        <div class="stat-label">Acumulado</div>
+        <div class="stat-val ing">${fmt(totAportado)}</div>
+      </div>
+      ${hayCompromiso ? `
+      <div class="stat-card">
+        <div class="stat-label">Prometido</div>
+        <div class="stat-val acc">${fmt(totCompromiso)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Resta por cobrar</div>
+        <div class="stat-val ${restaPorCobrar>0?"egr":"ing"}">${fmt(Math.abs(restaPorCobrar))}</div>
+        <div class="stat-sub">contra el compromiso anual</div>
+      </div>` : ""}
+    </div>`;
+  const totalesLine = `${rows.length} adherente${rows.length!==1?"s":""} con aportes o compromiso registrado`;
 
   const body = !rows.length
     ? `<p class="note" style="text-align:center;padding:16px 0">Sin aportes de adherentes registrados</p>`
-    : adherenteVista === "cards" ? renderAdherentesCards(rows) : renderAdherentesTabla(rows);
+    : adherenteVista === "cards" ? renderAdherentesCards(rows) : renderAdherentesTabla(rows, meses);
 
   return `
     <div class="reint-section">
@@ -2539,6 +2570,7 @@ function renderAdherentesResumen() {
         </div>
         ${viewToggle}
       </div>
+      ${rows.length ? statCards : ""}
       <p class="note" style="margin-bottom:12px">${totalesLine}</p>
       ${body}
     </div>`;
@@ -2551,7 +2583,20 @@ function estadoAdherenteCorto(estado) {
     : "—";
 }
 
-function renderAdherentesTabla(rows) {
+// Encabezado corto de columna de mes: "Mar" (o "Mar '26" en vista Todos los años)
+function mesCortoHeader(k) {
+  const [y,m] = k.split("-");
+  const lbl = MESES_LABELS[+m-1].slice(0,3);
+  return adherenteAnio === "" ? `${lbl} '${y.slice(2)}` : lbl;
+}
+
+// Etiqueta de un movimiento de adherente: rubro 42 (movilidad) = "Aporte combustible"
+function adhConcepto(m) {
+  if (m.codRubro === "42") return "Aporte combustible";
+  return esc(m.concepto) || "Adhesion";
+}
+
+function renderAdherentesTabla(rows, meses) {
   const isMobile = window.matchMedia("(max-width:599px)").matches;
   const rank = { SIN:0, PARCIAL:1, OK:3 };
   const sorted = [...rows].sort((a,b) => {
@@ -2561,56 +2606,82 @@ function renderAdherentesTabla(rows) {
     return a.adherente.localeCompare(b.adherente);
   });
 
-  let totAportado=0, totCompromiso=0, totDiferencia=0;
+  // En mobile ocultamos las columnas de mes, cuota y prometido: Adherente | Acumulado | Resta
+  const showMeses = !isMobile;
+  const mesCols = showMeses ? (meses || []) : [];
+
+  let totAportado=0, totCompromiso=0;
+  let hayMultiPago = false;
+  const totPorMes = {};
   const bodyRows = sorted.map(r => {
     const tieneCompromiso = r.compromisoAnual > 0;
     totAportado += r.totalAportado;
-    if (tieneCompromiso) { totCompromiso += r.compromisoAnual; totDiferencia += r.diferencia; }
+    if (tieneCompromiso) totCompromiso += r.compromisoAnual;
     const isExp = adherenteExpandido.has(r.adherente);
     const detalle = isExp ? renderAdherenteDetalle(r) : "";
     const rowClass = r.estado === "OK" ? "reint-row row-ok" : "reint-row";
-    const cuotasCell = isMobile ? "" : `<td style="text-align:right">${tieneCompromiso ? (r.mesesPagados+" meses") : "—"}</td>`;
-    const compromisoCell = isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${tieneCompromiso ? fmt(r.compromisoAnual) : "—"}</td>`;
-    const difCell = tieneCompromiso
-      ? `<td style="text-align:right;font-family:var(--mono)" class="${r.diferencia>=0?'ing':'egr'}">${r.diferencia>=0?"+":"-"}${fmt(Math.abs(r.diferencia))}</td>`
+    const resta = tieneCompromiso ? (r.compromisoAnual - r.totalAportado) : null;
+
+    // cantidad de movimientos por mes de este adherente (para marcar celdas con >1 pago)
+    const nMovPorMes = {};
+    for (const m of r.movs) { const k = mesFromRecord(m); nMovPorMes[k] = (nMovPorMes[k]||0) + 1; }
+
+    const mesCells = mesCols.map(mk => {
+      const monto = r.porMes[mk];
+      if (!monto) return `<td style="text-align:right;color:var(--text3)">—</td>`;
+      totPorMes[mk] = (totPorMes[mk]||0) + monto;
+      const multi = (nMovPorMes[mk]||0) > 1;
+      if (multi) hayMultiPago = true;
+      return `<td style="text-align:right;font-family:var(--mono)" class="ing"${multi?` title="${nMovPorMes[mk]} pagos"`:""}>${fmt(monto)}${multi?` <span style="color:var(--text3);font-weight:600">*</span>`:""}</td>`;
+    }).join("");
+
+    const cuotaCell = showMeses ? `<td style="text-align:right;font-family:var(--mono);color:var(--text2)">${r.cuotaMensual>0?fmt(r.cuotaMensual):"—"}</td>` : "";
+    const prometidoCell = showMeses ? `<td style="text-align:right;font-family:var(--mono)">${tieneCompromiso?fmt(r.compromisoAnual):"—"}</td>` : "";
+    const restaCell = resta!==null
+      ? `<td style="text-align:right;font-family:var(--mono)" class="${resta>0?'egr':'ing'}">${fmt(Math.abs(resta))}</td>`
       : `<td style="text-align:right;color:var(--text3)">—</td>`;
-    const colspan = isMobile ? 4 : 6;
+
+    const colspan = 3 + mesCols.length + (showMeses ? 2 : 0);
     return `
     <tr class="${rowClass}" onclick="toggleAdherenteDetalle('${esc(escJs(r.adherente))}')">
       <td class="jugador-col" title="${esc(r.adherente)}">${esc(r.adherente)}</td>
-      ${cuotasCell}
+      ${cuotaCell}
+      ${mesCells}
+      ${prometidoCell}
       <td style="text-align:right;font-family:var(--mono)" class="ing">${fmt(r.totalAportado)}</td>
-      ${compromisoCell}
-      ${difCell}
-      <td>${estadoAdherenteCorto(r.estado)}</td>
+      ${restaCell}
     </tr>${isExp ? `
     <tr><td colspan="${colspan}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
   }).join("");
 
-  const totDifClass = totDiferencia >= 0 ? "ing" : "egr";
+  const totResta = totCompromiso - totAportado;
+  const totMesCells = mesCols.map(mk => `<td style="text-align:right;font-family:var(--mono)">${totPorMes[mk]?fmt(totPorMes[mk]):"—"}</td>`).join("");
   const totRow = `<tr class="reint-tot-row">
     <td class="jugador-col">TOTALES</td>
-    ${isMobile ? "" : `<td></td>`}
+    ${showMeses ? `<td></td>` : ""}
+    ${totMesCells}
+    ${showMeses ? `<td style="text-align:right;font-family:var(--mono)">${fmt(totCompromiso)}</td>` : ""}
     <td style="text-align:right;font-family:var(--mono)">${fmt(totAportado)}</td>
-    ${isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${fmt(totCompromiso)}</td>`}
-    <td style="text-align:right;font-family:var(--mono)" class="${totDifClass}">${totDiferencia>=0?"+":"-"}${fmt(Math.abs(totDiferencia))}</td>
-    <td></td>
+    <td style="text-align:right;font-family:var(--mono)" class="${totResta>0?'egr':'ing'}">${fmt(Math.abs(totResta))}</td>
   </tr>`;
 
-  const cuotasHeader = isMobile ? "" : `<th style="text-align:right">Cuotas pagadas</th>`;
-  const compromisoHeader = isMobile ? "" : `<th style="text-align:right">Compromiso anual</th>`;
-  const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Vista reducida — cambiá a Cards para ver cuotas y compromiso</p>` : "";
+  const cuotaHeader = showMeses ? `<th style="text-align:right">Cuota mensual</th>` : "";
+  const prometidoHeader = showMeses ? `<th style="text-align:right">Prometido</th>` : "";
+  const mesHeaders = mesCols.map(mk => `<th style="text-align:right">${mesCortoHeader(mk)}</th>`).join("");
+  const footnote = isMobile
+    ? `<p class="note" style="margin-top:6px;font-size:11px">* Vista reducida — cambiá a Cards para ver el detalle mes a mes</p>`
+    : (hayMultiPago ? `<p class="note" style="margin-top:6px;font-size:11px">* Mes con más de un pago — tocá la fila para ver el detalle</p>` : "");
 
   return `
     <div class="reint-table-wrap">
       <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}">
         <thead><tr>
           <th class="jugador-col">Adherente</th>
-          ${cuotasHeader}
-          <th style="text-align:right">Total aportado</th>
-          ${compromisoHeader}
-          <th style="text-align:right">Diferencia</th>
-          <th>Estado</th>
+          ${cuotaHeader}
+          ${mesHeaders}
+          ${prometidoHeader}
+          <th style="text-align:right">Acumulado</th>
+          <th style="text-align:right">Resta</th>
         </tr></thead>
         <tbody>${bodyRows}${totRow}</tbody>
       </table>
@@ -2642,11 +2713,11 @@ function renderAdherenteCard(r) {
         <div class="val ${r.diferencia>=0?'ing':'egr'}">${r.diferencia>=0?"+":"-"}${fmt(Math.abs(r.diferencia))}</div>
       </div>
     </div>
-    <p class="note" style="text-align:center;margin-top:6px">${r.mesesPagados} de ${r.cuotasAnuales} cuotas con pagos registrados</p>` : `
+    <p class="note" style="text-align:center;margin-top:6px">${r.pagosCount} pago${r.pagosCount!==1?"s":""} registrado${r.pagosCount!==1?"s":""}</p>` : `
     <div style="text-align:center">
       <label style="display:block;font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Total aportado</label>
       <div class="val ing" style="font-size:16px;font-family:var(--mono);font-weight:600">${fmt(r.totalAportado)}</div>
-      <p class="note" style="margin-top:4px">${r.mesesPagados} mes${r.mesesPagados!==1?"es":""} con pagos</p>
+      <p class="note" style="margin-top:4px">${r.pagosCount} pago${r.pagosCount!==1?"s":""} registrado${r.pagosCount!==1?"s":""}</p>
     </div>`;
 
   return `
@@ -2709,7 +2780,7 @@ function renderAdherenteDetalle(r) {
         const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
         return `
         <div class="reint-detalle-montos" style="padding:3px 0 3px 10px">
-          <span style="color:var(--text3)">${fechaD} · ${esc(m.concepto)||"Adhesion"}</span>
+          <span style="color:var(--text3)">${fechaD} · ${adhConcepto(m)}</span>
           <span class="ing">${fmt(m.ingreso)}</span>
         </div>`;
       }).join("");

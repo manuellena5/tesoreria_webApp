@@ -678,9 +678,9 @@ const RUBROS = [
   {cod:"62",  nombre:"PEÑA-OTROS INGRESOS",                  cat:"Peñas y Eventos"},
 ];
 
-// Versión visible en Config (pestaña ⚙️) para saber de un vistazo qué build está corriendo.
-// Subir junto con SW_VERSION (sw.js) cada vez que se publiquen cambios.
-const APP_VERSION = "1.8";
+// Versión visible en Config (pestaña ⚙️). No se hardcodea acá: se lee directamente de
+// SW_VERSION en sw.js (ver loadAppVersion), así solo hay que tocar un número por cambio.
+let appVersionActual = null;
 
 const MESES_LABELS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                        "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -5276,7 +5276,7 @@ function renderConfig() {
     <!-- Actualización de la app -->
     <div class="cfg-card">
       <div class="cfg-title">⬆️ Versión de la app</div>
-      <p class="cfg-note" style="margin-bottom:8px">Versión actual: <span class="badge" style="font-family:var(--mono)">v${APP_VERSION}</span></p>
+      <p class="cfg-note" style="margin-bottom:8px">Versión actual: <span class="badge" style="font-family:var(--mono)">v${appVersionActual || "…"}</span></p>
       <button class="btn-secondary" id="btn-buscar-update" onclick="checkAppUpdate()">🔎 Buscar actualizaciones</button>
       <p class="cfg-note" style="margin-top:8px">Comprueba si hay una versión nueva publicada y la aplica al instante (la app se recarga sola).</p>
     </div>
@@ -5544,6 +5544,20 @@ function showImportWarningsModal(sinRubro, sinJugador, sinAdherente) {
 // PWA — registro del service worker + aviso de nueva versión
 // ══════════════════════════════════════════════════════════════
 
+// Lee SW_VERSION directamente del archivo sw.js (una sola fuente de verdad para el número
+// de versión) y lo deja en appVersionActual para que Config lo muestre.
+async function loadAppVersion() {
+  try {
+    const resp = await fetch("sw.js", { cache: "no-store" });
+    const text = await resp.text();
+    const m = text.match(/SW_VERSION\s*=\s*["']([^"']+)["']/);
+    appVersionActual = m ? m[1] : "?";
+  } catch (e) {
+    appVersionActual = "?";
+  }
+  if (currentTab === "config") renderConfig();
+}
+
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   navigator.serviceWorker.register("sw.js").then((reg) => {
@@ -5675,6 +5689,7 @@ document.addEventListener("keydown", (e) => {
 
 document.addEventListener("DOMContentLoaded", () => {
   registerServiceWorker();
+  loadAppVersion();
   initApp();
 });
 </script>

@@ -5535,9 +5535,23 @@ async function testConnection() {
   }
 }
 
-function addCuenta()  { cuentas.push(""); renderConfig(); setTimeout(()=>{ const ins=document.querySelectorAll(".cfg-item .inp"); ins[ins.length-1]?.focus(); },50); }
+function addCuenta() {
+  const inp = document.getElementById("new-cuenta-inp");
+  const val = (inp?.value || "").trim();
+  if (!val) { toast("Ingresá un nombre de cuenta", "err"); inp?.focus(); return; }
+  if (cuentas.some(c => normStr(c) === normStr(val))) { toast("Ya existe una cuenta con ese nombre", "err"); return; }
+  cuentas.push(val);
+  renderConfig();
+}
 function removeCuenta(i) { cuentas.splice(i,1); renderConfig(); }
-function addMetodo()  { metodos.push(""); renderConfig(); }
+function addMetodo() {
+  const inp = document.getElementById("new-metodo-inp");
+  const val = (inp?.value || "").trim();
+  if (!val) { toast("Ingresá un nombre de método", "err"); inp?.focus(); return; }
+  if (metodos.some(m => normStr(m) === normStr(val))) { toast("Ya existe un método con ese nombre", "err"); return; }
+  metodos.push(val);
+  renderConfig();
+}
 function removeMetodo(i) { metodos.splice(i,1); renderConfig(); }
 
 async function saveCuentas() {

@@ -301,16 +301,23 @@ textarea.inp { resize:none; }
 .reint-detalle-montos .ing { color:var(--green); }
 .reint-detalle-montos .egr { color:var(--red); }
 
-/* ── Detalle de movimientos por Jugador (tabla embebida compacta) ── */
+/* ── Detalle de movimientos (tabla embebida compacta, reutilizada en Jugadores/Adherentes/Eventos) ── */
 .jug-detalle-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; background:var(--bg3); border-radius:var(--rs); margin:4px 0 10px; }
 .jug-detalle-table { width:100%; border-collapse:collapse; font-size:11.5px; }
 .jug-detalle-table th { text-align:left; color:var(--text3); font-size:9px; text-transform:uppercase; letter-spacing:.04em; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; font-weight:600; }
+.jug-detalle-table th.dt-sortable { cursor:pointer; user-select:none; }
+.jug-detalle-table th.dt-sortable:hover { color:var(--text); }
+.jug-detalle-table th .dt-arrow { color:var(--accent); margin-left:2px; }
 .jug-detalle-table td { padding:6px 8px; border-bottom:1px solid var(--border); color:var(--text2); white-space:nowrap; vertical-align:top; }
 .jug-detalle-table tr:last-child td { border-bottom:none; }
 .jug-detalle-table td.jd-concepto { white-space:normal; max-width:150px; word-break:break-word; color:var(--text); }
 .jug-detalle-table td.jd-extra { white-space:normal; max-width:130px; word-break:break-word; font-size:10px; color:var(--text3); }
 .jug-detalle-table td.ing { color:var(--green); font-family:var(--mono); text-align:right; font-weight:600; }
 .jug-detalle-table td.egr { color:var(--red); font-family:var(--mono); text-align:right; font-weight:600; }
+.jug-detalle-table tr.dt-row-gap td { color:var(--text3); font-style:italic; }
+.dt-filterbar { padding:6px 8px 0; }
+.dt-filterbar .inp { font-size:11.5px; padding:5px 8px; height:auto; }
+.dt-empty { padding:10px 8px; color:var(--text3); font-size:12px; }
 
 /* ── Reintegro: grupos vinculados en dos columnas (Egresos | Ingresos) ── */
 .reint-grupo { border-radius:var(--rs); margin-bottom:8px; overflow:hidden; border-left:4px solid var(--border); background:var(--bg2); }
@@ -3659,6 +3666,98 @@ function renderAdherentesCards(rows) {
 
 // Detalle expandible: pagos agrupados por mes, marcando huecos sin pago
 // (solo entre el primer y el último mes con pago, sin proyectar meses futuros)
+// ── Tabla de detalle de movimientos reutilizable (Jugadores / Adherentes / Eventos) ──
+// Cada item: { fechaRaw, fechaD, mesRaw, mesTxt, concepto, monto (número o null), rubro, categoria, entidad, extra, gap (bool) }
+const DT_COLS = [
+  { key:"fecha",     label:"Fecha",       sortable:true },
+  { key:"mes",       label:"Mes",         sortable:true },
+  { key:"concepto",  label:"Movimiento",  sortable:true, cls:"jd-concepto" },
+  { key:"monto",     label:"Monto",       sortable:true },
+  { key:"rubro",     label:"Rubro",       sortable:true },
+  { key:"categoria", label:"Categoría",   sortable:true },
+  { key:"entidad",   label:"Entidad",     sortable:true },
+  { key:"extra",     label:"Detalle",     sortable:false, cls:"jd-extra" },
+];
+let detTablaState = {};
+let detTablaCache = {};
+
+function detTablaGetState(key) {
+  if (!detTablaState[key]) detTablaState[key] = { sortCol:null, sortDir:1, filtro:"" };
+  return detTablaState[key];
+}
+
+function detTablaSetFiltro(key, val) {
+  detTablaGetState(key).filtro = val;
+  const el = document.getElementById(`dt-inner-${key}`);
+  if (el) el.innerHTML = detTablaRenderInner(key);
+}
+
+function detTablaSort(key, col) {
+  const st = detTablaGetState(key);
+  if (st.sortCol === col) st.sortDir *= -1;
+  else { st.sortCol = col; st.sortDir = 1; }
+  const el = document.getElementById(`dt-inner-${key}`);
+  if (el) el.innerHTML = detTablaRenderInner(key);
+}
+
+function detTablaRenderInner(key) {
+  const st = detTablaGetState(key);
+  const items = detTablaCache[key] || [];
+  const q = normStr(st.filtro);
+  let filtrados = !q ? items : items.filter(it =>
+    normStr([it.fechaD, it.mesTxt, it.concepto, it.rubro, it.categoria, it.entidad, it.extra].join(" ")).includes(q)
+  );
+  if (st.sortCol) {
+    const dir = st.sortDir;
+    filtrados = [...filtrados].sort((a,b) => {
+      let av, bv;
+      if (st.sortCol === "fecha") { av = a.fechaRaw||""; bv = b.fechaRaw||""; }
+      else if (st.sortCol === "mes") { av = a.mesRaw||""; bv = b.mesRaw||""; }
+      else if (st.sortCol === "monto") { av = a.monto||0; bv = b.monto||0; return (av-bv)*dir; }
+      else { av = normStr(a[st.sortCol]); bv = normStr(b[st.sortCol]); }
+      return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
+    });
+  }
+  const thead = DT_COLS.map(c => {
+    if (!c.sortable) return `<th>${c.label}</th>`;
+    const active = st.sortCol === c.key;
+    const arrow = active ? `<span class="dt-arrow">${st.sortDir===1?"▲":"▼"}</span>` : "";
+    return `<th class="dt-sortable" onclick="detTablaSort('${key}','${c.key}')">${c.label}${arrow}</th>`;
+  }).join("");
+  if (!filtrados.length) {
+    return `<table class="jug-detalle-table"><thead><tr>${thead}</tr></thead></table><p class="dt-empty">Sin resultados${st.filtro?" para ese filtro":""}</p>`;
+  }
+  const rows = filtrados.map(it => {
+    const montoCell = it.monto === null
+      ? `<td>—</td>`
+      : `<td class="${it.monto<0?'egr':'ing'}">${it.monto<0?"-":"+"}${fmt(Math.abs(it.monto))}</td>`;
+    return `
+    <tr${it.gap ? ' class="dt-row-gap"' : ""}>
+      <td>${esc(it.fechaD)||"—"}</td>
+      <td>${esc(it.mesTxt)||"—"}</td>
+      <td class="jd-concepto">${esc(it.concepto)||"—"}</td>
+      ${montoCell}
+      <td>${esc(it.rubro)||"—"}</td>
+      <td>${esc(it.categoria)||"—"}</td>
+      <td>${esc(it.entidad)||"—"}</td>
+      <td class="jd-extra">${esc(it.extra)||""}</td>
+    </tr>`;
+  }).join("");
+  return `<table class="jug-detalle-table"><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderDetTabla(tableKey, items) {
+  detTablaCache[tableKey] = items;
+  const st = detTablaGetState(tableKey);
+  return `
+    <div class="jug-detalle-wrap">
+      <div class="dt-filterbar">
+        <input class="inp" type="search" placeholder="Filtrar…" value="${esc(st.filtro)}" oninput="detTablaSetFiltro('${tableKey}', this.value)">
+      </div>
+      <div id="dt-inner-${tableKey}">${detTablaRenderInner(tableKey)}</div>
+    </div>`;
+}
+
 function renderAdherenteDetalle(r) {
   if (!r.movs.length) {
     return `<div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
@@ -3676,41 +3775,30 @@ function renderAdherenteDetalle(r) {
   const ultimoMes = mesesConPago[mesesConPago.length-1];
   const mostrarHuecos = r.compromisoAnual > 0;
 
-  const bloques = [];
+  const items = [];
   let k = primerMes;
   while (mesToNum(k) <= mesToNum(ultimoMes)) {
     const movsMes = porMes[k];
     if (movsMes && movsMes.length) {
-      const total = movsMes.reduce((s,m) => s + m.ingreso, 0);
       const sorted = [...movsMes].sort((a,b) => a.fecha.localeCompare(b.fecha));
-      const pagosHtml = sorted.map(m => {
-        const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
-        return `
-        <div class="reint-detalle-montos" style="padding:3px 0 3px 10px">
-          <span style="color:var(--text3)">${fechaD} · ${adhConcepto(m)}</span>
-          <span class="ing">${fmt(m.ingreso)}</span>
-        </div>`;
-      }).join("");
-      bloques.push(`
-        <div class="reint-detalle-row">
-          <div class="reint-detalle-montos" style="font-size:13px;font-weight:600">
-            <span style="color:var(--text)">${mesLabel(k)}</span>
-            <span class="ing">${fmt(total)}</span>
-          </div>
-          ${pagosHtml}
-        </div>`);
+      for (const m of sorted) {
+        const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
+        const concepto = m.codRubro === "42" ? "Aporte combustible" : (m.concepto || "Adhesion");
+        items.push({
+          fechaRaw: m.fecha||"", fechaD, mesRaw: k, mesTxt: mesLabel(k),
+          concepto, monto: m.ingreso, rubro: m.rubro||"", categoria: m.categoria||"",
+          entidad: m.cuenta||"", extra: "",
+        });
+      }
     } else if (mostrarHuecos) {
-      bloques.push(`
-        <div class="reint-detalle-row">
-          <div class="reint-detalle-montos" style="font-size:13px">
-            <span style="color:var(--text3)">${mesLabel(k)}</span>
-            <span style="color:var(--red);font-weight:600">Sin pago</span>
-          </div>
-        </div>`);
+      items.push({
+        fechaRaw: "", fechaD: "—", mesRaw: k, mesTxt: mesLabel(k),
+        concepto: "Sin pago", monto: null, rubro: "", categoria: "", entidad: "", extra: "", gap: true,
+      });
     }
     k = nextMes(k);
   }
-  return `<div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">${bloques.join("")}</div>`;
+  return renderDetTabla(`adh_${escJs(r.adherente)}`, items);
 }
 
 // ── Jugadores — gastos/recuperos netos por jugador o grupo ──────
@@ -4011,34 +4099,20 @@ const JUGADOR_RES_CAT_LABEL = { sueldos:"Sueldo", movilidad:"Movilidad", viandas
 
 function renderJugadorResDetalle(r) {
   const sorted = [...r.movimientos].sort((a,b) => a.fecha.localeCompare(b.fecha));
-  const rows = sorted.map(m => {
+  const items = sorted.map(m => {
     const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
-    const mesTxt = mesLabel(mesFromRecord(m));
+    const mesRaw = mesFromRecord(m);
     const cat = JUGADOR_RES_CAT_LABEL[jugadorResCategoria(m.codRubro)] || "Otros";
     const extra = m.prorrateado
-      ? `👥 ${esc(m.grupoOriginal)} · orig. ${fmt(Math.abs(m.montoOriginal))} ÷ ${m.miembrosCount}`
+      ? `👥 ${m.grupoOriginal} · orig. ${fmt(Math.abs(m.montoOriginal))} ÷ ${m.miembrosCount}`
       : "";
-    return `
-    <tr>
-      <td>${fechaD}</td>
-      <td>${esc(mesTxt)}</td>
-      <td class="jd-concepto">${esc(m.concepto)||"—"}</td>
-      <td class="${m.montoAplicado<0?'egr':'ing'}">${m.montoAplicado<0?"-":"+"}${fmt(Math.abs(m.montoAplicado))}</td>
-      <td>${esc(m.rubro)||"—"}</td>
-      <td>${esc(cat)}</td>
-      <td>${esc(m.cuenta)||"—"}</td>
-      <td class="jd-extra">${extra}</td>
-    </tr>`;
-  }).join("");
-  return `
-    <div class="jug-detalle-wrap">
-      <table class="jug-detalle-table">
-        <thead><tr>
-          <th>Fecha</th><th>Mes</th><th>Movimiento</th><th>Monto</th><th>Rubro</th><th>Categoría</th><th>Entidad</th><th>Detalle</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
+    return {
+      fechaRaw: m.fecha||"", fechaD, mesRaw, mesTxt: mesLabel(mesRaw),
+      concepto: m.concepto||"", monto: m.montoAplicado, rubro: m.rubro||"", categoria: cat,
+      entidad: m.cuenta||"", extra,
+    };
+  });
+  return renderDetTabla(`jug_${escJs(r.nombre)}`, items);
 }
 
 // ── Eventos — resumen de Peñas por evento ───────────────────────
@@ -4299,26 +4373,17 @@ const EVENTO_RES_CAT_LABEL = { buffet:"Buffet", gastosBuffet:"Gastos Buffet", ta
 
 function renderEventoResDetalle(r) {
   const sorted = [...r.movimientos].sort((a,b) => a.fecha.localeCompare(b.fecha));
-  const rows = sorted.map(m => {
-    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
-    const mesTxt = mesLabel(mesFromRecord(m));
+  const items = sorted.map(m => {
+    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
+    const mesRaw = mesFromRecord(m);
     const cat = EVENTO_RES_CAT_LABEL[eventoResCategoria(m.codRubro)] || "";
-    return `
-    <div class="reint-detalle-row">
-      <div class="reint-detalle-top">
-        <span class="reint-detalle-fecha">${fechaD} · ${mesTxt}</span>
-      </div>
-      <div class="reint-detalle-concepto">${esc(m.concepto)||"—"}</div>
-      <div class="reint-detalle-montos">
-        <span class="${m.montoAplicado<0?'egr':'ing'}">${m.montoAplicado<0?"-":"+"}${fmt(Math.abs(m.montoAplicado))}</span>
-        <span style="color:var(--text3)">[${cat}]</span>
-      </div>
-    </div>`;
-  }).join("");
-  return `
-    <div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
-      ${rows}
-    </div>`;
+    return {
+      fechaRaw: m.fecha||"", fechaD, mesRaw, mesTxt: mesLabel(mesRaw),
+      concepto: m.concepto||"", monto: m.montoAplicado, rubro: m.rubro||"", categoria: cat,
+      entidad: m.cuenta||"", extra: "",
+    };
+  });
+  return renderDetTabla(`evt_${escJs(r.eventoId)}`, items);
 }
 
 // ══════════════════════════════════════════════════════════════

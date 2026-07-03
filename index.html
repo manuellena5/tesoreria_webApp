@@ -322,6 +322,8 @@ textarea.inp { resize:none; }
 .reint-grupo.estado-favor      .reint-grupo-header { color:var(--blue); }
 .reint-grupo.estado-sinasignar { border-left-color:var(--warn); }
 .reint-grupo.estado-sinasignar .reint-grupo-header { color:var(--warn); }
+.reint-grupo.estado-neutral { border-left-color:var(--border); }
+.reint-grupo.estado-neutral .reint-grupo-header { color:var(--text3); background:var(--bg2); }
 @media (min-width:768px) {
   .reint-grupo-cols { grid-template-columns:1fr 1fr; }
   .reint-grupo-cols > .reint-grupo-col + .reint-grupo-col { border-left:1px solid var(--border); }
@@ -2849,9 +2851,25 @@ function renderReintegroDetalle(r) {
   const { porEgreso } = buildVinculosIndex();
   const grupos = buildGruposVinculo(r);
   const gruposHtml = grupos.map(g => renderGrupoVinculo(g, porEgreso)).join("");
+
+  // Gastos médicos que nunca se marcaron con reintegro de seguro (checkbox "Tiene reintegro
+  // del seguro" destildado) — no participan de los vínculos, así que van aparte, en una sola
+  // columna, sin la parte de "ingreso asociado" porque no corresponde que la tengan.
+  const sinReintegro = r.movs
+    .filter(m => m.tipo === "EGRESO" && !m.seguroReintegro)
+    .sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const sinReintegroHtml = sinReintegro.length ? `
+    <div class="reint-grupo estado-neutral">
+      <div class="reint-grupo-header">Gastos médicos sin reintegro esperado</div>
+      <div class="reint-grupo-col">
+        ${sinReintegro.map(e => renderMovGrupoRow(e, "EGRESO", false)).join("")}
+      </div>
+    </div>` : "";
+
   return `
     <div style="padding:2px 0 4px">
       ${gruposHtml}
+      ${sinReintegroHtml}
       <button class="btn-sm accent" style="margin-top:4px" onclick="event.stopPropagation(); openVincularReintegros('${esc(escJs(r.jugador))}')">🔗 Vincular movimientos de ${esc(r.jugador)}</button>
     </div>`;
 }
@@ -2898,8 +2916,8 @@ function renderVinculosMovimientoModal() {
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--text3)">Monto vinculado</label>
         <input class="inp" type="number" style="width:130px" id="vinc-edit-${i}" value="${p.monto}">
-        <button class="btn-sm accent" onclick="guardarEdicionVinculo('${p.ingresoId}','${p.egresoId}', document.getElementById('vinc-edit-${i}').value)">Guardar</button>
-        <button class="btn-sm danger" onclick="desvincularDesdeModal('${p.ingresoId}','${p.egresoId}')">Desvincular</button>
+        <button class="btn-sm accent" onclick="guardarEdicionVinculo(this, '${p.ingresoId}','${p.egresoId}', document.getElementById('vinc-edit-${i}').value)">Guardar</button>
+        <button class="btn-sm danger" onclick="desvincularDesdeModal(this, '${p.ingresoId}','${p.egresoId}')">Desvincular</button>
       </div>
     </div>`).join("");
 
@@ -2942,21 +2960,31 @@ async function actualizarVinculoEntry(ingresoId, egresoId, nuevoMonto) {
   }
 }
 
-async function guardarEdicionVinculo(ingresoId, egresoId, nuevoMonto) {
+async function guardarEdicionVinculo(btn, ingresoId, egresoId, nuevoMonto) {
+  if (btn.disabled) return; // evita doble envío
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = "Guardando…";
   const ok = await actualizarVinculoEntry(ingresoId, egresoId, Number(nuevoMonto));
   if (ok) {
     toast("Vínculo actualizado ✓", "ok");
-    renderVinculosMovimientoModal();
+    renderVinculosMovimientoModal(); // re-renderiza el modal entero con botones nuevos, ya habilitados
     if (currentTab === "resumen") renderResumen();
+  } else {
+    btn.disabled = false; btn.textContent = original;
   }
 }
 
-async function desvincularDesdeModal(ingresoId, egresoId) {
+async function desvincularDesdeModal(btn, ingresoId, egresoId) {
+  if (btn.disabled) return; // evita doble envío
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = "Desvinculando…";
   const ok = await actualizarVinculoEntry(ingresoId, egresoId, null);
   if (ok) {
     toast("Movimiento desvinculado", "ok");
     renderVinculosMovimientoModal();
     if (currentTab === "resumen") renderResumen();
+  } else {
+    btn.disabled = false; btn.textContent = original;
   }
 }
 

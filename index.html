@@ -2727,9 +2727,11 @@ function renderReintegroDetalle(r) {
     const montoVal = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
 
     let estadoBadge = "";
+    let tieneVinculo = false;
     if (m.tipo === "EGRESO" && m.seguroReintegro) {
       const vinculado = porEgreso[m.id] || 0;
       const pend = m.egreso - vinculado;
+      tieneVinculo = vinculado > TOL;
       estadoBadge = Math.abs(pend) <= TOL
         ? `<span class="reint-detalle-badge" style="color:var(--green);background:var(--green-bg)">✓ vinculado</span>`
         : pend < 0
@@ -2742,10 +2744,13 @@ function renderReintegroDetalle(r) {
     } else if (m.tipo === "INGRESO") {
       const asignado   = porIngreso[m.id] || 0;
       const disponible = m.ingreso - asignado;
+      tieneVinculo = asignado > TOL;
       estadoBadge = disponible > TOL
         ? `<span class="reint-detalle-badge" style="color:var(--warn);background:var(--warn-bg)">${fmt(disponible)} sin asignar</span>`
         : `<span class="reint-detalle-badge" style="color:var(--green);background:var(--green-bg)">✓ asignado</span>`;
     }
+    const verBtn = tieneVinculo
+      ? `<button class="btn-sm" style="margin-left:auto" onclick="event.stopPropagation(); verVinculosMovimiento('${m.id}')">Ver / cambiar vínculo</button>` : "";
 
     return `
     <div class="reint-detalle-row">
@@ -2754,8 +2759,9 @@ function renderReintegroDetalle(r) {
         ${estadoBadge}
       </div>
       <div class="reint-detalle-concepto">${esc(m.concepto)||"—"}</div>
-      <div class="reint-detalle-montos">
+      <div class="reint-detalle-montos" style="align-items:center">
         <span class="${montoCls}">${montoLbl}: ${fmt(montoVal)}</span>
+        ${verBtn}
       </div>
     </div>`;
   }).join("");
@@ -2764,6 +2770,110 @@ function renderReintegroDetalle(r) {
       ${rows}
       <button class="btn-sm accent" style="margin-top:6px" onclick="event.stopPropagation(); openVincularReintegros('${esc(escJs(r.jugador))}')">🔗 Vincular movimientos de ${esc(r.jugador)}</button>
     </div>`;
+}
+
+// ── Ver / cambiar / desvincular el o los vínculos de un movimiento puntual ────
+// Los vínculos siempre se guardan en el array `vinculos` del INGRESO (aunque se esté
+// mirando desde un EGRESO), así que hay que buscar en ambos sentidos.
+let vincDetalleMovId = null;
+
+function verVinculosMovimiento(movId) {
+  vincDetalleMovId = movId;
+  renderVinculosMovimientoModal();
+}
+
+function paresVinculadosDe(movId) {
+  const mov = movimientos.find(m => m.id === movId);
+  if (!mov) return [];
+  const pares = [];
+  if (mov.tipo === "EGRESO") {
+    for (const i of movimientos) {
+      if (i.tipo !== "INGRESO" || !i.vinculos) continue;
+      for (const v of i.vinculos) {
+        if (v.egresoId === mov.id) pares.push({ ingresoId: i.id, ingreso: i, egresoId: mov.id, egreso: mov, monto: Number(v.monto)||0 });
+      }
+    }
+  } else if (mov.tipo === "INGRESO") {
+    for (const v of (mov.vinculos||[])) {
+      pares.push({ ingresoId: mov.id, ingreso: mov, egresoId: v.egresoId, egreso: movimientos.find(m => m.id === v.egresoId), monto: Number(v.monto)||0 });
+    }
+  }
+  return pares.sort((a,b) => (a.egreso?a.egreso.fecha:"").localeCompare(b.egreso?b.egreso.fecha:""));
+}
+
+function renderVinculosMovimientoModal() {
+  const mov = movimientos.find(m => m.id === vincDetalleMovId);
+  if (!mov) { closeModal(); return; }
+  const pares = paresVinculadosDe(vincDetalleMovId);
+  const rows = pares.map((p,i) => `
+    <div class="entity-item" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div>
+        <div class="entity-sub">Egreso: ${p.egreso ? fechaCorta(p.egreso.fecha)+" · "+esc(p.egreso.concepto||"—")+" (total "+fmt(p.egreso.egreso)+")" : "⚠️ no encontrado"}</div>
+        <div class="entity-sub">Ingreso: ${fechaCorta(p.ingreso.fecha)} · ${esc(p.ingreso.concepto||"—")} (total ${fmt(p.ingreso.ingreso)})</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--text3)">Monto vinculado</label>
+        <input class="inp" type="number" style="width:130px" id="vinc-edit-${i}" value="${p.monto}">
+        <button class="btn-sm accent" onclick="guardarEdicionVinculo('${p.ingresoId}','${p.egresoId}', document.getElementById('vinc-edit-${i}').value)">Guardar</button>
+        <button class="btn-sm danger" onclick="desvincularDesdeModal('${p.ingresoId}','${p.egresoId}')">Desvincular</button>
+      </div>
+    </div>`).join("");
+
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()" style="max-width:640px">
+        <div class="modal-handle"></div>
+        <div class="modal-title">🔗 Vínculos de este movimiento</div>
+        <p class="cfg-note" style="margin-bottom:10px">${esc(mov.jugadorCT||"Sin jugador")} · ${fechaCorta(mov.fecha)} · ${esc(mov.concepto)||"—"}</p>
+        ${pares.length ? rows : '<p class="note">Este movimiento no tiene vínculos.</p>'}
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cerrar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// Actualiza (o si nuevoMonto es null/0, elimina) la entrada de vinculo egresoId↔ingresoId.
+// El array vinculos vive siempre en el movimiento de tipo INGRESO.
+async function actualizarVinculoEntry(ingresoId, egresoId, nuevoMonto) {
+  const ing = movimientos.find(m => m.id === ingresoId);
+  if (!ing) return false;
+  let vinculos = [...(ing.vinculos||[])];
+  if (nuevoMonto == null || Number(nuevoMonto) <= TOL) {
+    vinculos = vinculos.filter(v => v.egresoId !== egresoId);
+  } else {
+    const idx = vinculos.findIndex(v => v.egresoId === egresoId);
+    if (idx >= 0) vinculos[idx] = { egresoId, monto: Number(nuevoMonto) };
+    else vinculos.push({ egresoId, monto: Number(nuevoMonto) });
+  }
+  try {
+    const r = await Storage.setVinculos(ingresoId, vinculos);
+    if (!r.ok) throw new Error(r.error || "Error");
+    ing.vinculos = vinculos;
+    saveSnapshotToCache();
+    return true;
+  } catch(e) {
+    toast(isNetworkError(e) ? "Sin conexión — no se pudo actualizar, probá de nuevo" : "Error: " + e.message, "err");
+    return false;
+  }
+}
+
+async function guardarEdicionVinculo(ingresoId, egresoId, nuevoMonto) {
+  const ok = await actualizarVinculoEntry(ingresoId, egresoId, Number(nuevoMonto));
+  if (ok) {
+    toast("Vínculo actualizado ✓", "ok");
+    renderVinculosMovimientoModal();
+    if (currentTab === "resumen") renderResumen();
+  }
+}
+
+async function desvincularDesdeModal(ingresoId, egresoId) {
+  const ok = await actualizarVinculoEntry(ingresoId, egresoId, null);
+  if (ok) {
+    toast("Movimiento desvinculado", "ok");
+    renderVinculosMovimientoModal();
+    if (currentTab === "resumen") renderResumen();
+  }
 }
 
 // ── Vincular reintegros (ingresos) con sus egresos ────────────────
@@ -2830,7 +2940,7 @@ function renderVincularModal() {
 
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
-      <div class="modal-card" onclick="event.stopPropagation()" style="max-width:640px">
+      <div class="modal-card" onclick="event.stopPropagation()" style="max-width:900px">
         <div class="modal-handle"></div>
         <div class="modal-title">🔗 Vincular reintegros</div>
         <div class="field" style="margin-bottom:10px">
@@ -2838,6 +2948,7 @@ function renderVincularModal() {
           <select class="inp" onchange="vincJugadorFiltro=this.value; vincExpandedIngresoId=null; vincAsignaciones={}; renderVincularModal()">${filtroOptions}</select>
         </div>
         <button class="btn-secondary" style="margin-bottom:12px" onclick="sugerirVinculosAutomaticos()">✨ Sugerir vínculos automáticos</button>
+        <p class="cfg-note" style="margin-bottom:10px">Los montos de las listas de abajo son los reales (lo que falta cobrar de cada egreso, lo que falta asignar de cada ingreso). Al abrir un ingreso para vincularlo, el monto que aparece junto a cada egreso candidato es una <b>propuesta editable</b> — no se guarda nada hasta que tocás "Confirmar vínculo".</p>
         <div class="sec-hdr"><span class="sec-title">Ingresos sin vincular (${ingresos.length})</span></div>
         ${ingresosHtml}
         <div class="divider"></div>
@@ -2865,17 +2976,17 @@ function renderVincIngresoRow(ing) {
         <div class="grupo-jug-item" style="justify-content:space-between" onclick="event.stopPropagation()">
           <label style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;cursor:pointer">
             <input type="checkbox" ${checked?"checked":""} onchange="toggleVincAsignacion('${e.id}', ${e.pendiente})">
-            <span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${fechaCorta(e.fecha)} · ${esc(e.concepto)||"—"} (pendiente ${fmt(e.pendiente)})</span>
+            <span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${fechaCorta(e.fecha)} · ${esc(e.concepto)||"—"} (pendiente real ${fmt(e.pendiente)})</span>
           </label>
-          ${checked ? `<input class="inp" type="number" style="width:110px" value="${monto}" oninput="vincAsignaciones['${e.id}']=Number(this.value)||0">` : ""}
+          ${checked ? `<input class="inp" type="number" style="width:110px" title="Monto propuesto, editable" value="${monto}" oninput="vincAsignaciones['${e.id}']=Number(this.value)||0">` : ""}
         </div>`;
       }).join("");
       const totalAsignado = Object.values(vincAsignaciones).reduce((s,v) => s + (Number(v)||0), 0);
       expandedHtml = `
         <div style="background:var(--bg3);border-radius:var(--rs);padding:10px;margin-top:6px" onclick="event.stopPropagation()">
           ${rows}
-          <div style="margin-top:8px;font-size:12px;color:var(--text2)">Asignado: ${fmt(totalAsignado)} de ${fmt(ing.disponible)}</div>
-          <button class="btn-main" style="margin-top:8px" onclick="confirmarVinculo('${ing.id}')">Confirmar vínculo</button>
+          <div style="margin-top:8px;font-size:12px;color:var(--text2)">A aplicar (propuesto, editable arriba): ${fmt(totalAsignado)} de ${fmt(ing.disponible)} disponibles</div>
+          <button class="btn-main" style="margin-top:8px" id="btn-confirmar-vinculo" onclick="confirmarVinculo('${ing.id}')">Confirmar vínculo</button>
         </div>`;
     }
   }
@@ -2922,6 +3033,8 @@ function toggleVincAsignacion(egresoId, pendienteDefault) {
 }
 
 async function confirmarVinculo(ingresoId) {
+  const btnId = "btn-confirmar-vinculo";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const ing = movimientos.find(m => m.id === ingresoId);
   if (!ing) return;
   const nuevas = Object.entries(vincAsignaciones)
@@ -2933,6 +3046,7 @@ async function confirmarVinculo(ingresoId) {
   const totalNuevo = nuevas.reduce((s,v) => s+v.monto, 0);
   if (totalNuevo > disponible + TOL) { toast("El total asignado supera el disponible del ingreso", "err"); return; }
   const vinculosFinal = [...(ing.vinculos||[]), ...nuevas];
+  setBtnState(btnId, "saving");
   try {
     const r = await Storage.setVinculos(ingresoId, vinculosFinal);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -2944,7 +3058,7 @@ async function confirmarVinculo(ingresoId) {
     renderVincularModal();
     if (currentTab === "resumen") renderResumen();
   } catch(e) {
-    toast(isNetworkError(e) ? "Sin conexión — no se pudo vincular, probá de nuevo" : "Error: " + e.message, "err");
+    handleSaveError(btnId, e);
   }
 }
 
@@ -3004,14 +3118,14 @@ function renderSugerenciasModal() {
     </div>`).join("");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
-      <div class="modal-card asoc-modal" onclick="event.stopPropagation()">
+      <div class="modal-card asoc-modal" onclick="event.stopPropagation()" style="max-width:900px">
         <div class="modal-handle"></div>
         <div class="modal-title asoc-header">✨ Vínculos sugeridos (${vincSugerenciasPendientes.length})</div>
-        <p class="cfg-note asoc-header" style="margin-bottom:8px">Emparejados por jugador, del más viejo al más nuevo. Destildá los que no correspondan antes de confirmar.</p>
+        <p class="cfg-note asoc-header" style="margin-bottom:8px">Emparejados por jugador, del más viejo al más nuevo. Los montos son propuestas editables recién al confirmar. Destildá los que no correspondan antes de confirmar.</p>
         <div class="asoc-list">${rows || '<p class="note">No se encontraron coincidencias para sugerir.</p>'}</div>
         <div class="asoc-footer modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="openVincularReintegros(vincJugadorFiltro)">Cancelar</button>
-          <button class="btn-main" style="flex:1" onclick="confirmarSugerenciasSeleccionadas()">Confirmar seleccionadas</button>
+          <button class="btn-main" style="flex:1" id="btn-confirmar-sugerencias" onclick="confirmarSugerenciasSeleccionadas()">Confirmar seleccionadas</button>
         </div>
       </div>
     </div>`;
@@ -3023,13 +3137,15 @@ function toggleSugerencia(i) {
 }
 
 async function confirmarSugerenciasSeleccionadas() {
+  const btnId = "btn-confirmar-sugerencias";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
   const seleccionadas = vincSugerenciasPendientes.filter(s => s.selected);
   if (!seleccionadas.length) { toast("No hay ninguna seleccionada", "err"); return; }
   const porIngresoNuevo = {};
   for (const s of seleccionadas) {
     (porIngresoNuevo[s.ingresoId] = porIngresoNuevo[s.ingresoId] || []).push({ egresoId: s.egresoId, monto: s.monto });
   }
-  showOverlay("Vinculando…");
+  setBtnState(btnId, "saving");
   try {
     for (const ingresoId of Object.keys(porIngresoNuevo)) {
       const ing = movimientos.find(m => m.id === ingresoId);
@@ -3040,13 +3156,11 @@ async function confirmarSugerenciasSeleccionadas() {
       ing.vinculos = vinculosFinal;
     }
     saveSnapshotToCache();
-    hideOverlay();
     toast(seleccionadas.length + " vínculo(s) aplicado(s) ✓", "ok");
     openVincularReintegros(vincJugadorFiltro);
     if (currentTab === "resumen") renderResumen();
   } catch(e) {
-    hideOverlay();
-    toast(isNetworkError(e) ? "Sin conexión — no se pudo vincular, probá de nuevo" : "Error: " + e.message, "err");
+    handleSaveError(btnId, e);
   }
 }
 

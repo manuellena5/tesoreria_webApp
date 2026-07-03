@@ -6,7 +6,7 @@
 // se instala, borra el caché viejo y la app avisa "Nueva versión
 // disponible" para que el usuario actualice con un toque.
 // ══════════════════════════════════════════════════════════════
-const SW_VERSION = "5";
+const SW_VERSION = "6";
 const CACHE_NAME = "tesoreria-cache-v" + SW_VERSION;
 
 const APP_SHELL = [

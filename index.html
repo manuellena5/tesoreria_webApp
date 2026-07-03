@@ -678,6 +678,10 @@ const RUBROS = [
   {cod:"62",  nombre:"PEÑA-OTROS INGRESOS",                  cat:"Peñas y Eventos"},
 ];
 
+// Versión visible en Config (pestaña ⚙️) para saber de un vistazo qué build está corriendo.
+// Subir junto con SW_VERSION (sw.js) cada vez que se publiquen cambios.
+const APP_VERSION = "1.8";
+
 const MESES_LABELS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                        "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
@@ -5272,6 +5276,7 @@ function renderConfig() {
     <!-- Actualización de la app -->
     <div class="cfg-card">
       <div class="cfg-title">⬆️ Versión de la app</div>
+      <p class="cfg-note" style="margin-bottom:8px">Versión actual: <span class="badge" style="font-family:var(--mono)">v${APP_VERSION}</span></p>
       <button class="btn-secondary" id="btn-buscar-update" onclick="checkAppUpdate()">🔎 Buscar actualizaciones</button>
       <p class="cfg-note" style="margin-top:8px">Comprueba si hay una versión nueva publicada y la aplica al instante (la app se recarga sola).</p>
     </div>

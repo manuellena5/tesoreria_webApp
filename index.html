@@ -2593,7 +2593,9 @@ function calcReintegrosPorJugador(anio) {
       ? (r.reintegrado > 0 ? "PARCIAL" : "SIN")
       : (r.diferencia > TOL || r.sinVincular > TOL ? "DIF" : "OK");
     return { ...r, pendiente, estado };
-  }).sort((a,b) => (b.pendiente + b.sinVincular) - (a.pendiente + a.sinVincular));
+  // Pendiente más grande primero. Los que ya están en $0 quedan al final (aunque tengan
+  // saldo a favor o ingresos sin vincular, eso se ve aparte, no hace subir el orden).
+  }).sort((a,b) => b.pendiente - a.pendiente || (b.sinVincular||0) - (a.sinVincular||0));
 }
 
 function renderReintegrosMedicos() {
@@ -2620,7 +2622,8 @@ function renderReintegrosMedicos() {
 
   return `
     <div class="reint-section">
-      <button class="btn-secondary" style="margin-bottom:12px" onclick="openVincularReintegros('')">🔗 Vincular reintegros con sus egresos</button>
+      <button class="btn-secondary" style="margin-bottom:8px" onclick="openVincularReintegros('')">🔗 Vincular reintegros con sus egresos</button>
+      <button class="btn-export" style="margin-bottom:12px" onclick="exportarPendientesReintegro()">📥 Exportar pendientes de reintegro</button>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
           <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
@@ -2655,7 +2658,7 @@ function renderReintegrosTabla(rows) {
     totSinReintegro += r.sinReintegro;
     const isExp = reintegroExpandido.has(r.jugador);
     const detalle = isExp ? renderReintegroDetalle(r) : "";
-    const rowClass = r.estado === "OK" ? "reint-row row-ok" : "reint-row";
+    const rowClass = r.pendiente <= 0 ? "reint-row row-ok" : "reint-row";
     const reintegradoCell = isMobile ? "" : `<td style="text-align:right;font-family:var(--mono)">${fmt(r.reintegrado)}</td>`;
     return `
     <tr class="${rowClass}" onclick="toggleReintegroDetalle('${esc(escJs(r.jugador))}')">
@@ -2733,19 +2736,20 @@ function renderReintegroCard(r) {
 }
 
 function renderReintegrosCards(rows) {
-  const sinReintegro = rows.filter(r => r.estado === "SIN").sort((a,b) => b.pendiente - a.pendiente);
-  const parcialYDif  = rows.filter(r => r.estado === "PARCIAL" || r.estado === "DIF").sort((a,b) => b.pendiente - a.pendiente);
-  const alDia        = rows.filter(r => r.estado === "OK");
+  // Con pendiente > 0 primero, de mayor a menor. Los que ya están en $0 (aunque tengan
+  // saldo a favor o ingresos sin vincular) quedan colapsados abajo y más apagados.
+  const conPendiente = rows.filter(r => r.pendiente > 0).sort((a,b) => b.pendiente - a.pendiente);
+  const sinPendiente  = rows.filter(r => r.pendiente <= 0);
 
-  const cardsHtml = [...sinReintegro, ...parcialYDif].map(renderReintegroCard).join("");
+  const cardsHtml = conPendiente.map(renderReintegroCard).join("");
 
   const alDiaKey  = "__aldia__";
   const alDiaOpen = reintegroExpandido.has(alDiaKey);
-  const alDiaHtml = alDia.length ? `
+  const alDiaHtml = sinPendiente.length ? `
     <button class="reint-aldia-toggle" onclick="toggleReintegroDetalle('${alDiaKey}')">
-      Ver jugadores al día (${alDia.length}) ${alDiaOpen ? "▲" : "▼"}
+      Ver jugadores sin pendiente (${sinPendiente.length}) ${alDiaOpen ? "▲" : "▼"}
     </button>
-    ${alDiaOpen ? alDia.map(renderReintegroCard).join("") : ""}` : "";
+    ${alDiaOpen ? `<div style="opacity:.55">${sinPendiente.map(renderReintegroCard).join("")}</div>` : ""}` : "";
 
   return `${cardsHtml}${alDiaHtml}`;
 }
@@ -2925,7 +2929,7 @@ function renderVinculosMovimientoModal() {
       </div>
     </div>`).join("");
 
-  document.getElementById("modal-root").innerHTML = `
+  setModalHtml(`
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()" style="max-width:640px">
         <div class="modal-handle"></div>
@@ -2936,7 +2940,7 @@ function renderVinculosMovimientoModal() {
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cerrar</button>
         </div>
       </div>
-    </div>`;
+    </div>`);
 }
 
 // Actualiza (o si nuevoMonto es null/0, elimina) la entrada de vinculo egresoId↔ingresoId.
@@ -3005,6 +3009,20 @@ function closeVincularModal() {
   document.getElementById("modal-root").innerHTML = "";
 }
 
+// Reemplaza el contenido de #modal-root preservando el scroll del modal actual —
+// sin esto, cada vez que se re-renderiza (ej. al tildar un checkbox) el modal saltaba
+// arriba del todo y había que volver a bajar. El elemento que scrollea puede ser el
+// modal-card entero o, en los modales tipo "asociar" (asoc-list), un hijo interno.
+const MODAL_SCROLL_SELECTOR = ".asoc-list, .modal-card";
+function setModalHtml(html) {
+  const root = document.getElementById("modal-root");
+  const prevEl = root.querySelector(MODAL_SCROLL_SELECTOR);
+  const prevScroll = prevEl?.scrollTop || 0;
+  root.innerHTML = html;
+  const nextEl = root.querySelector(MODAL_SCROLL_SELECTOR);
+  if (nextEl) nextEl.scrollTop = prevScroll;
+}
+
 // Egresos con reintegro aún no cubierto e ingresos de reintegro aún no asignados a ningún
 // egreso, opcionalmente filtrados a un jugador. Se recalcula siempre contra buildVinculosIndex()
 // (todo el historial), no contra un año en particular.
@@ -3054,7 +3072,7 @@ function renderVincularModal() {
       </div>`).join("")
     : `<p class="note" style="padding:8px 0">Sin egresos pendientes de reintegro${vincJugadorFiltro?` para ${esc(vincJugadorFiltro)}`:""}.</p>`;
 
-  document.getElementById("modal-root").innerHTML = `
+  setModalHtml(`
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()" style="max-width:900px">
         <div class="modal-handle"></div>
@@ -3074,7 +3092,7 @@ function renderVincularModal() {
           <button class="btn-secondary" style="flex:1" onclick="closeVincularModal()">Cerrar</button>
         </div>
       </div>
-    </div>`;
+    </div>`);
 }
 
 function renderVincIngresoRow(ing) {
@@ -3232,7 +3250,7 @@ function renderSugerenciasModal() {
         <div class="asoc-concepto">← reintegro ${fechaCorta(s.ingresoFecha)} ${esc(s.ingresoConcepto)||""}</div>
       </div>
     </div>`).join("");
-  document.getElementById("modal-root").innerHTML = `
+  setModalHtml(`
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card asoc-modal" onclick="event.stopPropagation()" style="max-width:900px">
         <div class="modal-handle"></div>
@@ -3244,7 +3262,7 @@ function renderSugerenciasModal() {
           <button class="btn-main" style="flex:1" id="btn-confirmar-sugerencias" onclick="confirmarSugerenciasSeleccionadas()">Confirmar seleccionadas</button>
         </div>
       </div>
-    </div>`;
+    </div>`);
 }
 
 function toggleSugerencia(i) {
@@ -5423,6 +5441,48 @@ function exportExcel(mes) {
   XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
   const fname = mes ? `tesoreria_${mes.replace("-","")}.xlsx` : "tesoreria_todos.xlsx";
   XLSX.writeFile(wb, fname);
+  toast("Excel exportado ✓", "ok");
+}
+
+// ── Exportar pendientes de reintegro (rubro médico) ──────────────
+// Para cada jugador que HOY tiene algo pendiente (todos los años, sin importar el año
+// seleccionado en pantalla), vuelca todo su historial de rubro 21 — no solo lo pendiente —
+// para que sirva de comprobante completo al reclamar. Los egresos que deberían tener
+// reintegro y todavía no lo tienen se remarcan con "⚠ SIN REINTEGRO" en el concepto
+// (SheetJS gratuito no permite colorear celdas al escribir el .xlsx).
+function exportarPendientesReintegro() {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+  const conPendiente = calcReintegrosPorJugador("").filter(r => r.pendiente > 0);
+  if (!conPendiente.length) { toast("No hay jugadores con reintegros pendientes", "ok"); return; }
+  const { porEgreso } = buildVinculosIndex();
+
+  const headers = ["Jugador","Fecha","Movimiento","Monto","Abonado","Reintegrado"];
+  const rows = [];
+  for (const r of conPendiente) {
+    const movsJugador = movimientos
+      .filter(m => m.codRubro === "21" && (m.jugadorCT || "Sin jugador") === r.jugador && (m.tipo === "EGRESO" || m.tipo === "INGRESO"))
+      .sort((a,b) => a.fecha.localeCompare(b.fecha));
+    for (const m of movsJugador) {
+      if (m.tipo === "EGRESO") {
+        const vinculado  = porEgreso[m.id] || 0;
+        const pendMov    = m.egreso - vinculado;
+        const marcado    = m.seguroReintegro && pendMov > TOL;
+        rows.push([
+          r.jugador, m.fecha,
+          (marcado ? "⚠ SIN REINTEGRO — " : "") + (m.concepto || ""),
+          m.egreso, m.egreso, m.seguroReintegro ? vinculado : ""
+        ]);
+      } else {
+        rows.push([r.jugador, m.fecha, m.concepto || "", m.ingreso, "", m.ingreso]);
+      }
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws["!cols"] = [22,12,42,12,12,12].map(w => ({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, "Pendientes reintegro");
+  XLSX.writeFile(wb, "reintegros_pendientes_" + today() + ".xlsx");
   toast("Excel exportado ✓", "ok");
 }
 

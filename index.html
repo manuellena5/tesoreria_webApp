@@ -5352,9 +5352,31 @@ function showUpdateBanner(reg) {
     </div>`;
   window._pendingSwReg = reg;
 }
-function applyUpdate() {
-  const reg = window._pendingSwReg;
-  if (reg && reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+async function applyUpdate() {
+  const btn = document.querySelector(".update-banner button");
+  if (btn?.disabled) return; // evita doble toque
+  if (btn) { btn.disabled = true; btn.textContent = "Actualizando…"; }
+  showOverlay("Actualizando la app…");
+  try {
+    // La referencia guardada puede haber quedado vieja: pedimos el registration actual
+    let reg = window._pendingSwReg;
+    if (!reg?.waiting) reg = await navigator.serviceWorker.getRegistration() || reg;
+    if (!reg?.waiting) { try { await reg?.update(); } catch (e) { /* sin red: recargamos igual */ } }
+    if (reg?.waiting) {
+      reg.waiting.postMessage({ type: "SKIP_WAITING" });
+      // El controllerchange de arriba recarga la app; si en 3s no pasó (SW trabado,
+      // navegador viejo), recargamos a mano — index.html se sirve network-first,
+      // así que la recarga trae la versión nueva igual.
+      setTimeout(() => window.location.reload(), 3000);
+    } else {
+      // No hay SW esperando (ya se activó o el registration se perdió): recarga directa
+      window.location.reload();
+    }
+  } catch (e) {
+    hideOverlay();
+    if (btn) { btn.disabled = false; btn.textContent = "Actualizar"; }
+    toast("No se pudo actualizar: " + e.message, "err");
+  }
 }
 
 // Chequeo manual desde ⚙️ Config: fuerza reg.update() y, si hay una versión nueva

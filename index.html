@@ -2537,7 +2537,9 @@ function calcReintegrosPorJugador(anio) {
       if (Math.abs(pendienteRaw) <= TOL) { estado = "OK"; }
       else if (pendienteRaw < 0) { estado = "SALDO_FAVOR"; b.diferencia += Math.abs(pendienteRaw); }
       else { estado = vinculado > 0 ? "PARCIAL" : "SIN"; b.pendiente += pendienteRaw; }
-      b.reintegrado += Math.min(vinculado, m.egreso);
+      // Reintegrado = toda la plata que efectivamente volvió (incluye el excedente cuando el
+      // reintegro fue mayor a lo abonado) — no se limita al monto del egreso.
+      b.reintegrado += vinculado;
       b.egresosDetalle.push({ ...m, vinculado, pendiente: Math.max(pendienteRaw,0), estadoVinculo: estado });
     } else if (m.tipo === "INGRESO") {
       // Los ingresos entran en el balance del jugador aunque hayan sido cargados en otro año,
@@ -2646,7 +2648,7 @@ function renderReintegrosTabla(rows) {
   </tr>`;
 
   const reintegradoHeader = isMobile ? "" : `<th style="text-align:right">Reintegrado</th>`;
-  const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Reintegrado = Abonado − Pendiente</p>` : "";
+  const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Reintegrado puede superar lo Abonado si algún reintegro vino de más (saldo a favor) — ver detalle de cada jugador.</p>` : "";
 
   return `
     <div class="reint-table-wrap">

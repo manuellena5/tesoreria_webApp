@@ -301,6 +301,32 @@ textarea.inp { resize:none; }
 .reint-detalle-montos .ing { color:var(--green); }
 .reint-detalle-montos .egr { color:var(--red); }
 
+/* ── Reintegro: grupos vinculados en dos columnas (Egresos | Ingresos) ── */
+.reint-grupo { border-radius:var(--rs); margin-bottom:8px; overflow:hidden; border-left:4px solid var(--border); background:var(--bg2); }
+.reint-grupo-header { padding:6px 10px; font-size:11px; font-weight:600; color:var(--text2); background:var(--bg3); }
+.reint-grupo-cols { display:grid; grid-template-columns:1fr; }
+.reint-grupo-col { padding:8px 10px; display:flex; flex-direction:column; gap:8px; min-height:34px; }
+.reint-grupo-col-empty { color:var(--text3); font-size:12px; font-style:italic; display:flex; align-items:center; }
+.reint-grupo-mov { font-size:12px; padding-bottom:6px; border-bottom:1px dashed var(--border); }
+.reint-grupo-mov:last-child { border-bottom:none; padding-bottom:0; }
+.reint-grupo-mov .top { display:flex; justify-content:space-between; gap:6px; font-family:var(--mono); font-weight:600; }
+.reint-grupo-mov .top .ing { color:var(--green); }
+.reint-grupo-mov .top .egr { color:var(--red); }
+.reint-grupo.estado-ok         { border-left-color:var(--green); }
+.reint-grupo.estado-ok         .reint-grupo-header { color:var(--green); }
+.reint-grupo.estado-parcial    { border-left-color:var(--warn); }
+.reint-grupo.estado-parcial    .reint-grupo-header { color:var(--warn); }
+.reint-grupo.estado-sin        { border-left-color:var(--red); }
+.reint-grupo.estado-sin        .reint-grupo-header { color:var(--red); }
+.reint-grupo.estado-favor      { border-left-color:var(--blue); }
+.reint-grupo.estado-favor      .reint-grupo-header { color:var(--blue); }
+.reint-grupo.estado-sinasignar { border-left-color:var(--warn); }
+.reint-grupo.estado-sinasignar .reint-grupo-header { color:var(--warn); }
+@media (min-width:768px) {
+  .reint-grupo-cols { grid-template-columns:1fr 1fr; }
+  .reint-grupo-cols > .reint-grupo-col + .reint-grupo-col { border-left:1px solid var(--border); }
+}
+
 @media (max-width:599px) {
   .reint-card-nombre { white-space:normal; overflow:visible; text-overflow:unset; }
 }
@@ -2718,59 +2744,115 @@ function renderReintegrosCards(rows) {
   return `${cardsHtml}${alDiaHtml}`;
 }
 
-function renderReintegroDetalle(r) {
-  const { porEgreso, porIngreso } = buildVinculosIndex();
-  const sorted = [...r.movs].sort((a,b) => a.fecha.localeCompare(b.fecha));
-  const rows = sorted.map(m => {
-    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
-    const mesTxt = mesLabel(mesFromRecord(m));
-    const montoLbl = m.tipo === "INGRESO" ? "Ingreso" : "Egreso";
-    const montoCls = m.tipo === "INGRESO" ? "ing" : "egr";
-    const montoVal = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
+// Agrupa los movimientos de un jugador en "grupos vinculados": cada grupo es un conjunto
+// de egresos + ingresos conectados entre sí por vinculos (unión de componentes conexas).
+// Un egreso o ingreso sin ningún vínculo queda solo en su propio grupo — eso es justamente
+// lo que se ve vacío del otro lado en la vista de dos columnas.
+function buildGruposVinculo(r) {
+  const egresosBase = r.movs.filter(m => m.tipo === "EGRESO" && m.seguroReintegro);
+  const ingresos    = r.movs.filter(m => m.tipo === "INGRESO");
+  const egresosMap  = {}; // id -> movimiento (incluye egresos "externos" traídos por un vínculo, ej. de otro año)
+  for (const e of egresosBase) egresosMap[e.id] = e;
 
-    let estadoBadge = "";
-    let tieneVinculo = false;
-    if (m.tipo === "EGRESO" && m.seguroReintegro) {
-      const vinculado = porEgreso[m.id] || 0;
-      const pend = m.egreso - vinculado;
-      tieneVinculo = vinculado > TOL;
-      estadoBadge = Math.abs(pend) <= TOL
-        ? `<span class="reint-detalle-badge" style="color:var(--green);background:var(--green-bg)">✓ vinculado</span>`
-        : pend < 0
-          ? `<span class="reint-detalle-badge" style="color:var(--blue);background:var(--blue-bg)">saldo a favor ${fmt(-pend)}</span>`
-          : vinculado > 0
-            ? `<span class="reint-detalle-badge">parcial — falta ${fmt(pend)}</span>`
-            : `<span class="reint-detalle-badge" style="color:var(--red);background:var(--red-bg)">sin vincular</span>`;
-    } else if (m.tipo === "EGRESO") {
-      estadoBadge = "";
-    } else if (m.tipo === "INGRESO") {
-      const asignado   = porIngreso[m.id] || 0;
-      const disponible = m.ingreso - asignado;
-      tieneVinculo = asignado > TOL;
-      estadoBadge = disponible > TOL
-        ? `<span class="reint-detalle-badge" style="color:var(--warn);background:var(--warn-bg)">${fmt(disponible)} sin asignar</span>`
-        : `<span class="reint-detalle-badge" style="color:var(--green);background:var(--green-bg)">✓ asignado</span>`;
+  const parent = {};
+  const find = id => { while (parent[id] !== id) id = parent[id]; return id; };
+  const union = (a,b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  for (const e of egresosBase) parent[e.id] = e.id;
+  for (const i of ingresos) {
+    parent[i.id] = i.id;
+    for (const v of (i.vinculos||[])) {
+      if (!(v.egresoId in parent)) {
+        const ext = movimientos.find(m => m.id === v.egresoId);
+        if (ext) { parent[v.egresoId] = v.egresoId; egresosMap[v.egresoId] = ext; }
+      }
+      if (v.egresoId in parent) union(i.id, v.egresoId);
     }
-    const verBtn = tieneVinculo
-      ? `<button class="btn-sm" style="margin-left:auto" onclick="event.stopPropagation(); verVinculosMovimiento('${m.id}')">Ver / cambiar vínculo</button>` : "";
+  }
 
-    return `
-    <div class="reint-detalle-row">
-      <div class="reint-detalle-top">
-        <span class="reint-detalle-fecha">${fechaD} · ${mesTxt}</span>
-        ${estadoBadge}
-      </div>
-      <div class="reint-detalle-concepto">${esc(m.concepto)||"—"}</div>
-      <div class="reint-detalle-montos" style="align-items:center">
-        <span class="${montoCls}">${montoLbl}: ${fmt(montoVal)}</span>
-        ${verBtn}
+  const grupos = {};
+  for (const id of Object.keys(egresosMap)) {
+    const root = find(id);
+    (grupos[root] = grupos[root] || { egresos: [], ingresos: [] }).egresos.push(egresosMap[id]);
+  }
+  for (const i of ingresos) {
+    const root = find(i.id);
+    (grupos[root] = grupos[root] || { egresos: [], ingresos: [] }).ingresos.push(i);
+  }
+
+  return Object.values(grupos).map(g => {
+    const abonado   = g.egresos.reduce((s,e) => s + e.egreso, 0);
+    const vinculado = g.ingresos.reduce((s,i) => s + (i.vinculos||[]).reduce((s2,v) => s2 + (Number(v.monto)||0), 0), 0);
+    const diff = vinculado - abonado;
+    let estado;
+    if (!g.egresos.length)        estado = "SINASIGNAR"; // ingreso(s) sin ningún egreso vinculado
+    else if (!g.ingresos.length)  estado = "SIN";          // egreso sin ningún reintegro
+    else if (Math.abs(diff) <= TOL) estado = "OK";
+    else if (diff < 0)            estado = "PARCIAL";
+    else                          estado = "FAVOR";
+    const fechaOrden = [...g.egresos, ...g.ingresos].map(m => m.fecha).sort()[0] || "";
+    return { ...g, abonado, vinculado, diff, estado, fechaOrden };
+  }).sort((a,b) => a.fechaOrden.localeCompare(b.fechaOrden));
+}
+
+function renderMovGrupoRow(m, tipo, tieneVinculo) {
+  const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
+  const montoVal = tipo === "INGRESO" ? m.ingreso : m.egreso;
+  const montoCls = tipo === "INGRESO" ? "ing" : "egr";
+  let nota = "";
+  if (tipo === "INGRESO") {
+    const asignado    = (m.vinculos||[]).reduce((s,v) => s + (Number(v.monto)||0), 0);
+    const disponible  = m.ingreso - asignado;
+    if (disponible > TOL) nota = `<div style="font-size:11px;color:var(--warn)">+ ${fmt(disponible)} sin asignar</div>`;
+  }
+  const btn = tieneVinculo
+    ? `<button class="btn-sm" style="align-self:flex-start;margin-top:2px" onclick="verVinculosMovimiento('${m.id}')">Ver / cambiar vínculo</button>` : "";
+  return `
+    <div class="reint-grupo-mov">
+      <div class="top"><span style="color:var(--text3)">${fechaD}</span><span class="${montoCls}">${fmt(montoVal)}</span></div>
+      <div>${esc(m.concepto)||"—"}</div>
+      ${nota}
+      ${btn}
+    </div>`;
+}
+
+function renderGrupoVinculo(g, porEgreso) {
+  const claseEstado = {
+    OK: "estado-ok", PARCIAL: "estado-parcial", SIN: "estado-sin",
+    FAVOR: "estado-favor", SINASIGNAR: "estado-sinasignar"
+  }[g.estado];
+
+  const resumen = g.egresos.length && g.ingresos.length
+    ? `Abonado ${fmt(g.abonado)} · Reintegrado ${fmt(g.vinculado)}` +
+      (g.estado === "FAVOR" ? ` · saldo a favor ${fmt(g.diff)}` : g.estado === "PARCIAL" ? ` · falta ${fmt(-g.diff)}` : "")
+    : g.egresos.length
+      ? `Abonado ${fmt(g.abonado)} · sin reintegro`
+      : `Reintegro ${fmt(g.ingresos.reduce((s,i) => s+i.ingreso, 0))} · sin egreso vinculado`;
+
+  const egresosHtml = g.egresos.length
+    ? g.egresos.map(e => renderMovGrupoRow(e, "EGRESO", (porEgreso[e.id]||0) > TOL)).join("")
+    : `<div class="reint-grupo-col-empty">— sin egreso asociado —</div>`;
+  const ingresosHtml = g.ingresos.length
+    ? g.ingresos.map(i => renderMovGrupoRow(i, "INGRESO", (i.vinculos||[]).length > 0)).join("")
+    : `<div class="reint-grupo-col-empty">— sin ingreso asociado —</div>`;
+
+  return `
+    <div class="reint-grupo ${claseEstado}">
+      <div class="reint-grupo-header">${resumen}</div>
+      <div class="reint-grupo-cols">
+        <div class="reint-grupo-col">${egresosHtml}</div>
+        <div class="reint-grupo-col">${ingresosHtml}</div>
       </div>
     </div>`;
-  }).join("");
+}
+
+function renderReintegroDetalle(r) {
+  const { porEgreso } = buildVinculosIndex();
+  const grupos = buildGruposVinculo(r);
+  const gruposHtml = grupos.map(g => renderGrupoVinculo(g, porEgreso)).join("");
   return `
-    <div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
-      ${rows}
-      <button class="btn-sm accent" style="margin-top:6px" onclick="event.stopPropagation(); openVincularReintegros('${esc(escJs(r.jugador))}')">🔗 Vincular movimientos de ${esc(r.jugador)}</button>
+    <div style="padding:2px 0 4px">
+      ${gruposHtml}
+      <button class="btn-sm accent" style="margin-top:4px" onclick="event.stopPropagation(); openVincularReintegros('${esc(escJs(r.jugador))}')">🔗 Vincular movimientos de ${esc(r.jugador)}</button>
     </div>`;
 }
 

@@ -162,15 +162,15 @@ textarea.inp { resize:none; }
 .mes-sel-label { font-size:15px; font-weight:600; }
 
 /* ── Summary cards ── */
-.sum-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px; }
-.sum-grid.three { grid-template-columns:1fr 1fr 1fr; }
-.stat-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:13px 12px; }
-.stat-label { font-size:10px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.07em; margin-bottom:5px; }
-.stat-val   { font-size:18px; font-weight:600; font-family:var(--mono); line-height:1.2; }
+.sum-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(0,1fr)); gap:6px; margin-bottom:12px; }
+.sum-grid.three { grid-template-columns:repeat(auto-fit, minmax(0,1fr)); }
+.stat-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:7px 8px; min-width:0; }
+.stat-label { font-size:8.5px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.04em; margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.stat-val   { font-size:14px; font-weight:600; font-family:var(--mono); line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .stat-val.ing { color:var(--green); }
 .stat-val.egr { color:var(--red); }
 .stat-val.acc { color:var(--accent); }
-.stat-sub   { font-size:11px; color:var(--text3); margin-top:3px; }
+.stat-sub   { font-size:9.5px; color:var(--text3); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
 /* ── Filters ── */
 .filter-row { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; margin-bottom:10px; padding-bottom:2px; }
@@ -300,6 +300,17 @@ textarea.inp { resize:none; }
 .reint-detalle-montos { display:flex; justify-content:space-between; gap:8px; font-size:12px; font-family:var(--mono); font-weight:600; flex-wrap:wrap; }
 .reint-detalle-montos .ing { color:var(--green); }
 .reint-detalle-montos .egr { color:var(--red); }
+
+/* ── Detalle de movimientos por Jugador (tabla embebida compacta) ── */
+.jug-detalle-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; background:var(--bg3); border-radius:var(--rs); margin:4px 0 10px; }
+.jug-detalle-table { width:100%; border-collapse:collapse; font-size:11.5px; }
+.jug-detalle-table th { text-align:left; color:var(--text3); font-size:9px; text-transform:uppercase; letter-spacing:.04em; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; font-weight:600; }
+.jug-detalle-table td { padding:6px 8px; border-bottom:1px solid var(--border); color:var(--text2); white-space:nowrap; vertical-align:top; }
+.jug-detalle-table tr:last-child td { border-bottom:none; }
+.jug-detalle-table td.jd-concepto { white-space:normal; max-width:150px; word-break:break-word; color:var(--text); }
+.jug-detalle-table td.jd-extra { white-space:normal; max-width:130px; word-break:break-word; font-size:10px; color:var(--text3); }
+.jug-detalle-table td.ing { color:var(--green); font-family:var(--mono); text-align:right; font-weight:600; }
+.jug-detalle-table td.egr { color:var(--red); font-family:var(--mono); text-align:right; font-weight:600; }
 
 /* ── Reintegro: grupos vinculados en dos columnas (Egresos | Ingresos) ── */
 .reint-grupo { border-radius:var(--rs); margin-bottom:8px; overflow:hidden; border-left:4px solid var(--border); background:var(--bg2); }
@@ -4001,29 +4012,32 @@ const JUGADOR_RES_CAT_LABEL = { sueldos:"Sueldo", movilidad:"Movilidad", viandas
 function renderJugadorResDetalle(r) {
   const sorted = [...r.movimientos].sort((a,b) => a.fecha.localeCompare(b.fecha));
   const rows = sorted.map(m => {
-    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
+    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
     const mesTxt = mesLabel(mesFromRecord(m));
     const cat = JUGADOR_RES_CAT_LABEL[jugadorResCategoria(m.codRubro)] || "Otros";
-    const grupoBadge = m.prorrateado ? `<span class="reint-detalle-badge">👥 ${esc(m.grupoOriginal)}</span>` : "";
-    const prorrateoNota = m.prorrateado
-      ? ` · Original: ${fmt(Math.abs(m.montoOriginal))} ÷ ${m.miembrosCount}`
+    const extra = m.prorrateado
+      ? `👥 ${esc(m.grupoOriginal)} · orig. ${fmt(Math.abs(m.montoOriginal))} ÷ ${m.miembrosCount}`
       : "";
     return `
-    <div class="reint-detalle-row">
-      <div class="reint-detalle-top">
-        <span class="reint-detalle-fecha">${fechaD} · ${mesTxt}</span>
-        ${grupoBadge}
-      </div>
-      <div class="reint-detalle-concepto">${esc(m.concepto)||"—"}</div>
-      <div class="reint-detalle-montos">
-        <span class="${m.montoAplicado<0?'egr':'ing'}">${m.montoAplicado<0?"-":"+"}${fmt(Math.abs(m.montoAplicado))}</span>
-        <span style="color:var(--text3)">[${cat}]${prorrateoNota}</span>
-      </div>
-    </div>`;
+    <tr>
+      <td>${fechaD}</td>
+      <td>${esc(mesTxt)}</td>
+      <td class="jd-concepto">${esc(m.concepto)||"—"}</td>
+      <td class="${m.montoAplicado<0?'egr':'ing'}">${m.montoAplicado<0?"-":"+"}${fmt(Math.abs(m.montoAplicado))}</td>
+      <td>${esc(m.rubro)||"—"}</td>
+      <td>${esc(cat)}</td>
+      <td>${esc(m.cuenta)||"—"}</td>
+      <td class="jd-extra">${extra}</td>
+    </tr>`;
   }).join("");
   return `
-    <div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
-      ${rows}
+    <div class="jug-detalle-wrap">
+      <table class="jug-detalle-table">
+        <thead><tr>
+          <th>Fecha</th><th>Mes</th><th>Movimiento</th><th>Monto</th><th>Rubro</th><th>Categoría</th><th>Entidad</th><th>Detalle</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>`;
 }
 

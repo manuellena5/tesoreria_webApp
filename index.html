@@ -1712,11 +1712,33 @@ function handleDeleteError(btnId, e) {
 // TAB 2 — MOVIMIENTOS DEL MES
 // ══════════════════════════════════════════════════════════════
 
+// Saldo acumulado del año en curso (Enero → mes seleccionado), respetando el filtro de cuenta activo.
+// Mismo criterio que el saldo del mes: INGRESO/EGRESO suman siempre; los INTERNO sólo impactan
+// cuando hay una cuenta puntual filtrada (transferencia real hacia/desde esa cuenta).
+function calcSaldoAcumuladoAnio(cuentaFiltro) {
+  const anioSel = sharedMes.slice(0,4);
+  const mesNumSel = mesToNum(sharedMes);
+  const movAcc = movimientos
+    .filter(m => m.fecha && m.fecha.slice(0,4) === anioSel && mesToNum(mesFromRecord(m)) <= mesNumSel)
+    .filter(m => !cuentaFiltro || m.cuenta === cuentaFiltro || m.cuentaDestino === cuentaFiltro);
+  let ingAcc = movAcc.filter(m => m.tipo === "INGRESO").reduce((s,m) => s + m.ingreso, 0);
+  let egrAcc = movAcc.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s + m.egreso,  0);
+  if (cuentaFiltro) {
+    for (const m of movAcc) {
+      if (m.tipo !== "INTERNO") continue;
+      if (m.cuenta === cuentaFiltro)        egrAcc += m.montoFinal;
+      if (m.cuentaDestino === cuentaFiltro) ingAcc += m.montoFinal;
+    }
+  }
+  return ingAcc - egrAcc;
+}
+
 function renderMovimientos() {
   const movMes = movimientos.filter(m => mesFromRecord(m) === sharedMes);
   const ingTotal = movMes.filter(m => m.tipo === "INGRESO").reduce((s,m) => s + m.ingreso, 0);
   const egrTotal = movMes.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s + m.egreso,  0);
   const saldo    = ingTotal - egrTotal;
+  const saldoAcc = calcSaldoAcumuladoAnio(listFiltros.cuenta);
 
   // Build unique lists for filter dropdowns
   const cats        = [...new Set(movimientos.map(m => m.categoria).filter(Boolean))].sort();
@@ -1739,7 +1761,7 @@ function renderMovimientos() {
     </div>
     <button class="btn-export" style="margin-bottom:14px" onclick="exportExcel(sharedMes)">📥 Exportar ${mesLabel(sharedMes)} a Excel</button>
 
-    <div class="sum-grid three">
+    <div class="sum-grid">
       <div class="stat-card">
         <div class="stat-label">Ingresos</div>
         <div class="stat-val ing" id="kpi-ing">${fmt(ingTotal)}</div>
@@ -1749,8 +1771,12 @@ function renderMovimientos() {
         <div class="stat-val egr" id="kpi-egr">${fmt(egrTotal)}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Saldo</div>
+        <div class="stat-label">Saldo mes</div>
         <div class="stat-val ${saldo>=0?"ing":"egr"}" id="kpi-saldo">${saldo<0?"-":""}${fmt(saldo)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Saldo acum. ${sharedMes.slice(0,4)}</div>
+        <div class="stat-val ${saldoAcc>=0?"ing":"egr"}" id="kpi-saldo-acc">${saldoAcc<0?"-":""}${fmt(saldoAcc)}</div>
       </div>
     </div>
     <div id="kpi-filter-note" class="note" style="margin:-8px 0 14px"></div>
@@ -1888,6 +1914,14 @@ function renderMovList() {
   if (kpiSaldo) {
     kpiSaldo.textContent = (saldo<0?"-":"") + fmt(saldo);
     kpiSaldo.className = "stat-val " + (saldo>=0?"ing":"egr");
+  }
+  const kpiSaldoAcc = document.getElementById("kpi-saldo-acc");
+  if (kpiSaldoAcc) {
+    const saldoAcc = calcSaldoAcumuladoAnio(cuentaFiltro);
+    kpiSaldoAcc.textContent = (saldoAcc<0?"-":"") + fmt(saldoAcc);
+    kpiSaldoAcc.className = "stat-val " + (saldoAcc>=0?"ing":"egr");
+    const lblAcc = kpiSaldoAcc.previousElementSibling;
+    if (lblAcc) lblAcc.textContent = `Saldo acum. ${sharedMes.slice(0,4)}`;
   }
   const filtersActive = !!(listFiltros.rubro || listFiltros.cat || listFiltros.cuenta || listFiltros.tipo ||
     listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.search);
@@ -5880,3 +5914,10 @@ document.addEventListener("DOMContentLoaded", () => {
 </script>
 </body>
 </html>
+adAppVersion();
+  initApp();
+});
+</script>
+</body>
+</html>
+

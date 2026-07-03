@@ -710,6 +710,10 @@ let resumenSubTab     = "mensual";
 let reintegroAnio     = String(new Date().getFullYear());
 let reintegroExpandido = new Set();
 let reintegroVista     = getDefaultVista("reintegros_vista");
+let vincJugadorFiltro       = "";
+let vincExpandedIngresoId   = null;
+let vincAsignaciones        = {};
+let vincSugerenciasPendientes = [];
 let adherenteAnio       = String(new Date().getFullYear());
 let adherenteExpandido  = new Set();
 let adherenteVista      = getDefaultVista("adherentes_vista");
@@ -896,6 +900,7 @@ const Storage = {
   async previewMigracion()   { return this._post({ action:"previewMigracion"          }); },
   async ejecutarMigracion()  { return this._post({ action:"ejecutarMigracion"         }); },
   async revertMigracion(batchId) { return this._post({ action:"revertMigracion", batchId }); },
+  async setVinculos(id, vinculos) { return this._post({ action:"setVinculos", id, vinculos }); },
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -1542,6 +1547,7 @@ async function saveMovimiento() {
       tipo: F.tipo,
       partidoId: F.partidoId || "",
       eventoId: F.eventoId || "",
+      vinculos: [],
     };
   }
 
@@ -2486,34 +2492,74 @@ function toggleReintegroDetalle(jugador) {
   renderResumen();
 }
 
-// anio: string "YYYY" para filtrar, o "" para todos los años
-function calcReintegrosPorJugador(anio) {
-  const movs21 = movimientos.filter(m =>
-    m.codRubro === "21" &&
-    (m.tipo === "EGRESO" || m.tipo === "INGRESO") &&
-    (!anio || m.fecha.slice(0,4) === anio)
-  );
-  const map = {};
-  for (const m of movs21) {
-    const key = m.jugadorCT || "Sin jugador";
-    if (!map[key]) map[key] = { jugador: key, abonado: 0, abonadoConReintegro: 0, sinReintegro: 0, reintegrado: 0, movs: [] };
-    if (m.tipo === "EGRESO") {
-      map[key].abonado += m.egreso;
-      if (m.seguroReintegro) map[key].abonadoConReintegro += m.egreso;
-      else map[key].sinReintegro += m.egreso;
-    } else {
-      map[key].reintegrado += m.ingreso;
+// Recorre TODOS los ingresos de rubro médico (sin filtrar por año — un reintegro puede
+// llegar en un año distinto al del gasto) y arma cuánto quedó vinculado a cada egreso,
+// y cuánto de cada ingreso todavía no se asignó a ningún egreso.
+function buildVinculosIndex() {
+  const porEgreso  = {}; // egresoId -> monto total vinculado desde ingresos
+  const porIngreso = {}; // ingresoId -> monto total ya asignado a egresos
+  for (const m of movimientos) {
+    if (m.codRubro !== "21" || m.tipo !== "INGRESO" || !m.vinculos || !m.vinculos.length) continue;
+    let asignado = 0;
+    for (const v of m.vinculos) {
+      const monto = Number(v.monto) || 0;
+      asignado += monto;
+      porEgreso[v.egresoId] = (porEgreso[v.egresoId] || 0) + monto;
     }
-    map[key].movs.push(m);
+    porIngreso[m.id] = asignado;
+  }
+  return { porEgreso, porIngreso };
+}
+
+const TOL = 1; // tolerancia de redondeo en pesos
+
+// anio: string "YYYY" para filtrar los EGRESOS mostrados, o "" para todos los años.
+// Los vínculos se calculan siempre contra el historial completo (buildVinculosIndex),
+// porque un reintegro puede llegar meses después y en otro año que el gasto original.
+function calcReintegrosPorJugador(anio) {
+  const { porEgreso, porIngreso } = buildVinculosIndex();
+  const movs21 = movimientos.filter(m => m.codRubro === "21" && (m.tipo === "EGRESO" || m.tipo === "INGRESO"));
+  const map = {};
+  const getBucket = (key) => {
+    if (!map[key]) map[key] = { jugador: key, abonado: 0, sinReintegro: 0, reintegrado: 0, diferencia: 0, pendiente: 0, sinVincular: 0, movs: [], egresosDetalle: [], ingresosSinVincular: [] };
+    return map[key];
+  };
+  for (const m of movs21) {
+    if (m.tipo === "EGRESO" && (!anio || m.fecha.slice(0,4) === anio)) {
+      const key = m.jugadorCT || "Sin jugador";
+      const b = getBucket(key);
+      b.abonado += m.egreso;
+      b.movs.push(m);
+      if (!m.seguroReintegro) { b.sinReintegro += m.egreso; continue; }
+      const vinculado = porEgreso[m.id] || 0;
+      const pendienteRaw = m.egreso - vinculado;
+      let estado;
+      if (Math.abs(pendienteRaw) <= TOL) { estado = "OK"; }
+      else if (pendienteRaw < 0) { estado = "SALDO_FAVOR"; b.diferencia += Math.abs(pendienteRaw); }
+      else { estado = vinculado > 0 ? "PARCIAL" : "SIN"; b.pendiente += pendienteRaw; }
+      b.reintegrado += Math.min(vinculado, m.egreso);
+      b.egresosDetalle.push({ ...m, vinculado, pendiente: Math.max(pendienteRaw,0), estadoVinculo: estado });
+    } else if (m.tipo === "INGRESO") {
+      // Los ingresos entran en el balance del jugador aunque hayan sido cargados en otro año,
+      // así el jugador no "pierde" el reintegro solo porque cambió el año en pantalla.
+      const key = m.jugadorCT || "Sin jugador";
+      const b = getBucket(key);
+      b.movs.push(m);
+      const asignado   = porIngreso[m.id] || 0;
+      const disponible = m.ingreso - asignado;
+      if (disponible > TOL) {
+        b.sinVincular += disponible;
+        b.ingresosSinVincular.push({ ...m, disponible });
+      }
+    }
   }
   return Object.values(map).map(r => {
-    // Pendiente solo considera egresos marcados con reintegro de seguro (seguroReintegro=1)
-    const pendienteRaw = r.abonadoConReintegro - r.reintegrado;
-    const pendiente = Math.round(pendienteRaw) === 0 ? 0 : pendienteRaw;
-    const diferencia = pendiente < 0 ? Math.abs(pendiente) : 0;
-    const estado = pendiente < 0 ? "DIF" : pendiente === 0 ? "OK" : (r.reintegrado > 0 ? "PARCIAL" : "SIN");
-    return { ...r, pendiente, diferencia, estado };
-  }).sort((a,b) => b.pendiente - a.pendiente);
+    const pendiente = Math.round(r.pendiente) === 0 ? 0 : r.pendiente;
+    const estado = pendiente > 0
+      ? (r.reintegrado > 0 ? "PARCIAL" : "SIN")
+      : (r.diferencia > TOL || r.sinVincular > TOL ? "DIF" : "OK");
+    return { ...r, pendiente, estado };
+  }).sort((a,b) => (b.pendiente + b.sinVincular) - (a.pendiente + a.sinVincular));
 }
 
 function renderReintegrosMedicos() {
@@ -2540,6 +2586,7 @@ function renderReintegrosMedicos() {
 
   return `
     <div class="reint-section">
+      <button class="btn-secondary" style="margin-bottom:12px" onclick="openVincularReintegros('')">🔗 Vincular reintegros con sus egresos</button>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
           <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
@@ -2551,9 +2598,14 @@ function renderReintegrosMedicos() {
     </div>`;
 }
 
-function estadoCorto(estado, diferencia) {
+function estadoCorto(estado, diferencia, sinVincular) {
+  if (estado === "DIF") {
+    const partes = [];
+    if (diferencia > TOL)   partes.push("saldo a favor " + fmt(diferencia));
+    if (sinVincular > TOL)  partes.push(fmt(sinVincular) + " sin vincular");
+    return "🔵 " + (partes.join(" · ") || "Diferencia");
+  }
   return estado==="OK"      ? "✅ OK"
-    : estado==="DIF"     ? `🔵 Diferencia (${fmt(diferencia)})`
     : estado==="PARCIAL" ? "⚠️ Parcial"
     : "🔴 Pendiente";
 }
@@ -2578,7 +2630,7 @@ function renderReintegrosTabla(rows) {
       ${reintegradoCell}
       <td style="text-align:right;font-family:var(--mono)" class="${r.pendiente>0?'egr':'ing'}">${fmt(Math.max(r.pendiente,0))}</td>
       <td style="text-align:right;font-family:var(--mono)">${fmt(r.sinReintegro)}</td>
-      <td>${estadoCorto(r.estado, r.diferencia)}</td>
+      <td>${estadoCorto(r.estado, r.diferencia, r.sinVincular)}</td>
     </tr>${isExp ? `
     <tr><td colspan="${isMobile?5:6}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
   }).join("");
@@ -2617,9 +2669,7 @@ function renderReintegroCard(r) {
   const isExp = reintegroExpandido.has(r.jugador);
   const badgeClass = r.estado==="OK" ? "reint-badge-ok" : r.estado==="DIF" ? "reint-badge-dif"
     : r.estado==="PARCIAL" ? "reint-badge-parcial" : "reint-badge-sin";
-  const badgeTxt = r.estado==="OK"      ? "✅ OK"
-    : r.estado==="DIF"     ? `~ DIFERENCIAS (${fmt(r.diferencia)})`
-    : r.estado==="PARCIAL" ? "⚠️ Parcial" : "🔴 Sin reintegro";
+  const badgeTxt = estadoCorto(r.estado, r.diferencia, r.sinVincular);
   return `
   <div class="reint-card" onclick="toggleReintegroDetalle('${esc(escJs(r.jugador))}')">
     <div class="reint-card-hdr">
@@ -2667,35 +2717,337 @@ function renderReintegrosCards(rows) {
 }
 
 function renderReintegroDetalle(r) {
+  const { porEgreso, porIngreso } = buildVinculosIndex();
   const sorted = [...r.movs].sort((a,b) => a.fecha.localeCompare(b.fecha));
-  let saldo = 0;
   const rows = sorted.map(m => {
-    saldo += (m.tipo === "INGRESO" ? m.ingreso : -m.egreso);
     const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7) : "";
     const mesTxt = mesLabel(mesFromRecord(m));
-    const reintBadge = (m.tipo==="EGRESO" && m.seguroReintegro) ? `<span class="reint-detalle-badge">tiene reintegro</span>` : "";
     const montoLbl = m.tipo === "INGRESO" ? "Ingreso" : "Egreso";
     const montoCls = m.tipo === "INGRESO" ? "ing" : "egr";
     const montoVal = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
-    const saldoCls  = saldo < 0 ? "egr" : "ing";
-    const saldoSign = saldo < 0 ? "-" : "";
+
+    let estadoBadge = "";
+    if (m.tipo === "EGRESO" && m.seguroReintegro) {
+      const vinculado = porEgreso[m.id] || 0;
+      const pend = m.egreso - vinculado;
+      estadoBadge = Math.abs(pend) <= TOL
+        ? `<span class="reint-detalle-badge" style="color:var(--green);background:var(--green-bg)">✓ vinculado</span>`
+        : pend < 0
+          ? `<span class="reint-detalle-badge" style="color:var(--blue);background:var(--blue-bg)">saldo a favor ${fmt(-pend)}</span>`
+          : vinculado > 0
+            ? `<span class="reint-detalle-badge">parcial — falta ${fmt(pend)}</span>`
+            : `<span class="reint-detalle-badge" style="color:var(--red);background:var(--red-bg)">sin vincular</span>`;
+    } else if (m.tipo === "EGRESO") {
+      estadoBadge = "";
+    } else if (m.tipo === "INGRESO") {
+      const asignado   = porIngreso[m.id] || 0;
+      const disponible = m.ingreso - asignado;
+      estadoBadge = disponible > TOL
+        ? `<span class="reint-detalle-badge" style="color:var(--warn);background:var(--warn-bg)">${fmt(disponible)} sin asignar</span>`
+        : `<span class="reint-detalle-badge" style="color:var(--green);background:var(--green-bg)">✓ asignado</span>`;
+    }
+
     return `
     <div class="reint-detalle-row">
       <div class="reint-detalle-top">
         <span class="reint-detalle-fecha">${fechaD} · ${mesTxt}</span>
-        ${reintBadge}
+        ${estadoBadge}
       </div>
       <div class="reint-detalle-concepto">${esc(m.concepto)||"—"}</div>
       <div class="reint-detalle-montos">
         <span class="${montoCls}">${montoLbl}: ${fmt(montoVal)}</span>
-        <span class="${saldoCls}">Saldo: ${saldoSign}${fmt(saldo)}</span>
       </div>
     </div>`;
   }).join("");
   return `
     <div style="background:var(--bg3);padding:6px 10px;border-radius:var(--rs);margin:4px 0 10px">
       ${rows}
+      <button class="btn-sm accent" style="margin-top:6px" onclick="event.stopPropagation(); openVincularReintegros('${esc(escJs(r.jugador))}')">🔗 Vincular movimientos de ${esc(r.jugador)}</button>
     </div>`;
+}
+
+// ── Vincular reintegros (ingresos) con sus egresos ────────────────
+// jugadorFiltro: "" = todos los jugadores con movimientos de rubro médico.
+function openVincularReintegros(jugadorFiltro) {
+  vincJugadorFiltro = jugadorFiltro || "";
+  vincExpandedIngresoId = null;
+  vincAsignaciones = {};
+  renderVincularModal();
+}
+
+function closeVincularModal() {
+  document.getElementById("modal-root").innerHTML = "";
+}
+
+// Egresos con reintegro aún no cubierto e ingresos de reintegro aún no asignados a ningún
+// egreso, opcionalmente filtrados a un jugador. Se recalcula siempre contra buildVinculosIndex()
+// (todo el historial), no contra un año en particular.
+function getPendientesYSinVincular(jugadorFiltro) {
+  const { porEgreso, porIngreso } = buildVinculosIndex();
+  const egresos = movimientos
+    .filter(m => m.codRubro === "21" && m.tipo === "EGRESO" && m.seguroReintegro && (!jugadorFiltro || m.jugadorCT === jugadorFiltro))
+    .map(m => ({ ...m, vinculado: porEgreso[m.id] || 0, pendiente: m.egreso - (porEgreso[m.id] || 0) }))
+    .filter(m => m.pendiente > TOL)
+    .sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const ingresos = movimientos
+    .filter(m => m.codRubro === "21" && m.tipo === "INGRESO" && (!jugadorFiltro || m.jugadorCT === jugadorFiltro))
+    .map(m => ({ ...m, asignado: porIngreso[m.id] || 0, disponible: m.ingreso - (porIngreso[m.id] || 0) }))
+    .filter(m => m.disponible > TOL)
+    .sort((a,b) => a.fecha.localeCompare(b.fecha));
+  return { egresos, ingresos };
+}
+
+// Egresos pendientes del MISMO jugador que un ingreso dado (match exacto de jugadorCT,
+// incluso si está vacío) — son los candidatos que se ofrecen al vincular ese ingreso.
+function candidatosParaIngreso(ing) {
+  const { porEgreso } = buildVinculosIndex();
+  return movimientos
+    .filter(m => m.codRubro === "21" && m.tipo === "EGRESO" && m.seguroReintegro && m.jugadorCT === ing.jugadorCT)
+    .map(m => ({ ...m, vinculado: porEgreso[m.id] || 0, pendiente: m.egreso - (porEgreso[m.id] || 0) }))
+    .filter(m => m.pendiente > TOL)
+    .sort((a,b) => a.fecha.localeCompare(b.fecha));
+}
+
+function renderVincularModal() {
+  const { egresos, ingresos } = getPendientesYSinVincular(vincJugadorFiltro);
+  const jugadoresConMovs = [...new Set(movimientos.filter(m => m.codRubro === "21").map(m => m.jugadorCT || "Sin jugador"))].sort();
+  const filtroOptions = `<option value="">Todos los jugadores</option>` +
+    jugadoresConMovs.map(j => `<option value="${esc(j)}" ${vincJugadorFiltro===j?"selected":""}>${esc(j)}</option>`).join("");
+
+  const ingresosHtml = ingresos.length
+    ? ingresos.map(renderVincIngresoRow).join("")
+    : `<p class="note" style="padding:8px 0">No hay ingresos de reintegro sin vincular${vincJugadorFiltro?` para ${esc(vincJugadorFiltro)}`:""}.</p>`;
+
+  const egresosHtml = egresos.length
+    ? egresos.map(e => `
+      <div class="entity-item">
+        <div style="flex:1;min-width:0">
+          <span class="entity-name">${fechaCorta(e.fecha)} · ${esc(e.jugadorCT||"Sin jugador")}</span>
+          <div class="entity-sub">${esc(e.concepto)||"—"} · Pendiente: ${fmt(e.pendiente)} de ${fmt(e.egreso)}</div>
+        </div>
+      </div>`).join("")
+    : `<p class="note" style="padding:8px 0">Sin egresos pendientes de reintegro${vincJugadorFiltro?` para ${esc(vincJugadorFiltro)}`:""}.</p>`;
+
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()" style="max-width:640px">
+        <div class="modal-handle"></div>
+        <div class="modal-title">🔗 Vincular reintegros</div>
+        <div class="field" style="margin-bottom:10px">
+          <label>Jugador</label>
+          <select class="inp" onchange="vincJugadorFiltro=this.value; vincExpandedIngresoId=null; vincAsignaciones={}; renderVincularModal()">${filtroOptions}</select>
+        </div>
+        <button class="btn-secondary" style="margin-bottom:12px" onclick="sugerirVinculosAutomaticos()">✨ Sugerir vínculos automáticos</button>
+        <div class="sec-hdr"><span class="sec-title">Ingresos sin vincular (${ingresos.length})</span></div>
+        ${ingresosHtml}
+        <div class="divider"></div>
+        <div class="sec-hdr"><span class="sec-title">Egresos pendientes de reintegro (${egresos.length})</span></div>
+        ${egresosHtml}
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeVincularModal()">Cerrar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderVincIngresoRow(ing) {
+  const isExp = vincExpandedIngresoId === ing.id;
+  let expandedHtml = "";
+  if (isExp) {
+    const candidatos = candidatosParaIngreso(ing);
+    if (!candidatos.length) {
+      expandedHtml = `<p class="note" style="padding:8px 0">No hay egresos pendientes de reintegro para ${esc(ing.jugadorCT||"Sin jugador")}.</p>`;
+    } else {
+      const rows = candidatos.map(e => {
+        const checked = vincAsignaciones[e.id] != null;
+        const monto = checked ? vincAsignaciones[e.id] : "";
+        return `
+        <div class="grupo-jug-item" style="justify-content:space-between" onclick="event.stopPropagation()">
+          <label style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;cursor:pointer">
+            <input type="checkbox" ${checked?"checked":""} onchange="toggleVincAsignacion('${e.id}', ${e.pendiente})">
+            <span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${fechaCorta(e.fecha)} · ${esc(e.concepto)||"—"} (pendiente ${fmt(e.pendiente)})</span>
+          </label>
+          ${checked ? `<input class="inp" type="number" style="width:110px" value="${monto}" oninput="vincAsignaciones['${e.id}']=Number(this.value)||0">` : ""}
+        </div>`;
+      }).join("");
+      const totalAsignado = Object.values(vincAsignaciones).reduce((s,v) => s + (Number(v)||0), 0);
+      expandedHtml = `
+        <div style="background:var(--bg3);border-radius:var(--rs);padding:10px;margin-top:6px" onclick="event.stopPropagation()">
+          ${rows}
+          <div style="margin-top:8px;font-size:12px;color:var(--text2)">Asignado: ${fmt(totalAsignado)} de ${fmt(ing.disponible)}</div>
+          <button class="btn-main" style="margin-top:8px" onclick="confirmarVinculo('${ing.id}')">Confirmar vínculo</button>
+        </div>`;
+    }
+  }
+  const yaAsignado = ing.ingreso - ing.disponible;
+  return `
+    <div class="entity-item" style="flex-direction:column;align-items:stretch;gap:4px;cursor:pointer" onclick="toggleVincIngreso('${ing.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span class="entity-name">${fechaCorta(ing.fecha)} · ${esc(ing.jugadorCT||"Sin jugador")}</span>
+        <span class="monto ing">${fmt(ing.disponible)}</span>
+      </div>
+      <div class="entity-sub">${esc(ing.concepto)||"—"}${yaAsignado > TOL ? ` · ya asignado ${fmt(yaAsignado)}` : ""}</div>
+      ${expandedHtml}
+    </div>`;
+}
+
+function toggleVincIngreso(ingresoId) {
+  if (vincExpandedIngresoId === ingresoId) {
+    vincExpandedIngresoId = null;
+    vincAsignaciones = {};
+  } else {
+    vincExpandedIngresoId = ingresoId;
+    vincAsignaciones = {};
+    const ing = movimientos.find(m => m.id === ingresoId);
+    if (ing) {
+      const { porIngreso } = buildVinculosIndex();
+      let restante = ing.ingreso - (porIngreso[ing.id] || 0);
+      // Autocompleta del egreso pendiente más viejo al más nuevo hasta agotar el disponible;
+      // el usuario puede destildar o ajustar el monto de cada uno antes de confirmar.
+      for (const e of candidatosParaIngreso(ing)) {
+        if (restante <= TOL) break;
+        const monto = Math.min(e.pendiente, restante);
+        vincAsignaciones[e.id] = monto;
+        restante -= monto;
+      }
+    }
+  }
+  renderVincularModal();
+}
+
+function toggleVincAsignacion(egresoId, pendienteDefault) {
+  if (vincAsignaciones[egresoId] != null) delete vincAsignaciones[egresoId];
+  else vincAsignaciones[egresoId] = pendienteDefault;
+  renderVincularModal();
+}
+
+async function confirmarVinculo(ingresoId) {
+  const ing = movimientos.find(m => m.id === ingresoId);
+  if (!ing) return;
+  const nuevas = Object.entries(vincAsignaciones)
+    .filter(([,monto]) => Number(monto) > TOL)
+    .map(([egresoId,monto]) => ({ egresoId, monto: Number(monto) }));
+  if (!nuevas.length) { toast("Seleccioná al menos un egreso y un monto", "err"); return; }
+  const { porIngreso } = buildVinculosIndex();
+  const disponible = ing.ingreso - (porIngreso[ing.id] || 0);
+  const totalNuevo = nuevas.reduce((s,v) => s+v.monto, 0);
+  if (totalNuevo > disponible + TOL) { toast("El total asignado supera el disponible del ingreso", "err"); return; }
+  const vinculosFinal = [...(ing.vinculos||[]), ...nuevas];
+  try {
+    const r = await Storage.setVinculos(ingresoId, vinculosFinal);
+    if (!r.ok) throw new Error(r.error || "Error");
+    ing.vinculos = vinculosFinal;
+    saveSnapshotToCache();
+    toast("Vínculo guardado ✓", "ok");
+    vincExpandedIngresoId = null;
+    vincAsignaciones = {};
+    renderVincularModal();
+    if (currentTab === "resumen") renderResumen();
+  } catch(e) {
+    toast(isNetworkError(e) ? "Sin conexión — no se pudo vincular, probá de nuevo" : "Error: " + e.message, "err");
+  }
+}
+
+// ── Sugerencias automáticas de vínculo (para poner al día el historial) ──────
+// Empareja por jugador, del egreso/ingreso más viejo al más nuevo (FIFO). No aplica nada
+// solo: junta las propuestas para que el usuario las revise y confirme en bloque.
+function calcularSugerenciasAutomaticas(jugadorFiltro) {
+  const { egresos, ingresos } = getPendientesYSinVincular(jugadorFiltro);
+  const porJugador = {};
+  for (const e of egresos) {
+    const k = e.jugadorCT || "Sin jugador";
+    (porJugador[k] = porJugador[k] || { egresos: [], ingresos: [] }).egresos.push({ ...e });
+  }
+  for (const i of ingresos) {
+    const k = i.jugadorCT || "Sin jugador";
+    (porJugador[k] = porJugador[k] || { egresos: [], ingresos: [] }).ingresos.push({ ...i });
+  }
+  const sugerencias = [];
+  for (const k of Object.keys(porJugador)) {
+    const { egresos: egs, ingresos: ings } = porJugador[k];
+    let egIdx = 0;
+    for (const ing of ings) {
+      let restante = ing.disponible;
+      while (restante > TOL && egIdx < egs.length) {
+        const e = egs[egIdx];
+        if (e.pendiente <= TOL) { egIdx++; continue; }
+        const monto = Math.min(e.pendiente, restante);
+        sugerencias.push({
+          jugador: k, ingresoId: ing.id, ingresoFecha: ing.fecha, ingresoConcepto: ing.concepto,
+          egresoId: e.id, egresoFecha: e.fecha, egresoConcepto: e.concepto, monto
+        });
+        e.pendiente -= monto; restante -= monto;
+        if (e.pendiente <= TOL) egIdx++;
+      }
+    }
+  }
+  return sugerencias;
+}
+
+function sugerirVinculosAutomaticos() {
+  vincSugerenciasPendientes = calcularSugerenciasAutomaticas(vincJugadorFiltro).map(s => ({ ...s, selected: true }));
+  renderSugerenciasModal();
+}
+
+function renderSugerenciasModal() {
+  const rows = vincSugerenciasPendientes.map((s,i) => `
+    <div class="asoc-row" onclick="toggleSugerencia(${i})">
+      <input type="checkbox" ${s.selected?"checked":""} onclick="event.stopPropagation()" onchange="toggleSugerencia(${i})">
+      <div class="asoc-info">
+        <div class="asoc-main">
+          <span class="asoc-fecha">${fechaCorta(s.egresoFecha)}</span>
+          <span class="asoc-rubro">${esc(s.jugador)} — ${esc(s.egresoConcepto)||"egreso"}</span>
+          <span class="asoc-monto ing">${fmt(s.monto)}</span>
+        </div>
+        <div class="asoc-concepto">← reintegro ${fechaCorta(s.ingresoFecha)} ${esc(s.ingresoConcepto)||""}</div>
+      </div>
+    </div>`).join("");
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card asoc-modal" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title asoc-header">✨ Vínculos sugeridos (${vincSugerenciasPendientes.length})</div>
+        <p class="cfg-note asoc-header" style="margin-bottom:8px">Emparejados por jugador, del más viejo al más nuevo. Destildá los que no correspondan antes de confirmar.</p>
+        <div class="asoc-list">${rows || '<p class="note">No se encontraron coincidencias para sugerir.</p>'}</div>
+        <div class="asoc-footer modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="openVincularReintegros(vincJugadorFiltro)">Cancelar</button>
+          <button class="btn-main" style="flex:1" onclick="confirmarSugerenciasSeleccionadas()">Confirmar seleccionadas</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function toggleSugerencia(i) {
+  vincSugerenciasPendientes[i].selected = !vincSugerenciasPendientes[i].selected;
+  renderSugerenciasModal();
+}
+
+async function confirmarSugerenciasSeleccionadas() {
+  const seleccionadas = vincSugerenciasPendientes.filter(s => s.selected);
+  if (!seleccionadas.length) { toast("No hay ninguna seleccionada", "err"); return; }
+  const porIngresoNuevo = {};
+  for (const s of seleccionadas) {
+    (porIngresoNuevo[s.ingresoId] = porIngresoNuevo[s.ingresoId] || []).push({ egresoId: s.egresoId, monto: s.monto });
+  }
+  showOverlay("Vinculando…");
+  try {
+    for (const ingresoId of Object.keys(porIngresoNuevo)) {
+      const ing = movimientos.find(m => m.id === ingresoId);
+      if (!ing) continue;
+      const vinculosFinal = [...(ing.vinculos||[]), ...porIngresoNuevo[ingresoId]];
+      const r = await Storage.setVinculos(ingresoId, vinculosFinal);
+      if (!r.ok) throw new Error(r.error || "Error");
+      ing.vinculos = vinculosFinal;
+    }
+    saveSnapshotToCache();
+    hideOverlay();
+    toast(seleccionadas.length + " vínculo(s) aplicado(s) ✓", "ok");
+    openVincularReintegros(vincJugadorFiltro);
+    if (currentTab === "resumen") renderResumen();
+  } catch(e) {
+    hideOverlay();
+    toast(isNetworkError(e) ? "Sin conexión — no se pudo vincular, probá de nuevo" : "Error: " + e.message, "err");
+  }
 }
 
 // ── Adherentes — aportes vs. compromiso (rubro 6) ────────────────

@@ -35,7 +35,8 @@ const EVE_COLS  = ["ID","Nombre","Fecha","Activo"];
 const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
-  "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID"
+  "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
+  "Vinculos"
 ];
 const ADH_COLS = ["ID","Nombre","Activo","CuotaMensual","CuotasAnuales"];
 const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","MovimientoID","timestamp"];
@@ -174,6 +175,7 @@ function handleAction(data) {
         timestamp:     String(r[19] || ""),
         partidoId:     String(r[20]||""),
         eventoId:      String(r[21]||""),
+        vinculos:      parseVinculosJson(r[22]),
       }));
       return { ok: true, movimientos };
     }
@@ -193,7 +195,7 @@ function handleAction(data) {
         m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
         m.jugadorCT||"", m.adherente||"",
         m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts,
-        m.partidoId||"", m.eventoId||""
+        m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos)
       ]);
       if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -213,7 +215,7 @@ function handleAction(data) {
             m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
             m.jugadorCT||"", m.adherente||"",
             m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", new Date().toISOString(),
-            m.partidoId||"", m.eventoId||""
+            m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos)
           ]]);
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -222,6 +224,20 @@ function handleAction(data) {
         }
       }
       return { ok: false, error: "Movimiento no encontrado: " + m.id };
+    }
+
+    // Actualiza solo la columna Vinculos de un movimiento (ingreso de reintegro),
+    // sin tocar el resto de sus campos — evita pisar datos con un estado de cliente viejo.
+    case "setVinculos": {
+      const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(data.id)) {
+          sh.getRange(i + 1, MOV_COLS.length).setValue(stringifyVinculos(data.vinculos));
+          return { ok: true };
+        }
+      }
+      return { ok: false, error: "Movimiento no encontrado: " + data.id };
     }
 
     case "saveBatch": {
@@ -235,7 +251,7 @@ function handleAction(data) {
           m.cuenta, m.cuentaDestino || "", m.modoPago,
           m.jugadorCT || "", m.adherente || "", m.observacion || "",
           m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo, m.timestamp,
-          m.partidoId||"", m.eventoId||""
+          m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos)
         ]);
         if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
           autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -760,6 +776,20 @@ function idExisteEnMov(sh, id) {
  * - Si Tipo viene vacío, lo infiere de Ingreso/Egreso.
  * - Recalcula MontoFinal para que sea coherente con Tipo/Egreso/Ingreso.
  */
+// Los vínculos de reintegro se guardan en una sola celda como JSON:
+// [{ "egresoId": "...", "monto": 12345 }, ...] — un ingreso puede cubrir varios egresos.
+function parseVinculosJson(raw) {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+function stringifyVinculos(vinculos) {
+  if (!vinculos || !Array.isArray(vinculos) || !vinculos.length) return "";
+  return JSON.stringify(vinculos);
+}
+
 function normalizeMovFields(m) {
   const out = Object.assign({}, m);
   const cat = RUBROS_MAP[String(out.codRubro || "")];
@@ -971,6 +1001,15 @@ function getOrCreateSheet(name, cols) {
       sh.setColumnWidth(1, 150); // ID
       sh.setColumnWidth(7, 220); // Concepto
     }
+  } else if (sh.getLastColumn() < cols.length) {
+    // La hoja ya existía de antes de agregar columnas nuevas (ej. "Vinculos") — completa
+    // los headers que faltan al final, sin tocar las columnas ni los datos existentes.
+    const faltantes = cols.slice(sh.getLastColumn());
+    const header = sh.getRange(1, sh.getLastColumn() + 1, 1, faltantes.length);
+    header.setValues([faltantes]);
+    header.setBackground("#1a1a2e");
+    header.setFontColor("#ffffff");
+    header.setFontWeight("bold");
   }
   return sh;
 }

@@ -3358,6 +3358,41 @@ function calcAdherentesPorAnio(anio) {
     });
 }
 
+// Independiente del filtro de año de la pantalla: cuánto aportó (o le falta aportar) cada
+// adherente en el mes EN CURSO, para el KPI y el marcado en rojo de "pendiente este mes".
+function calcPendientesMesActual() {
+  const mesActual = nowMes();
+  const aportadoPorNombre = {};
+  for (const m of movimientos) {
+    if (!ADH_RUBROS.includes(m.codRubro) || m.tipo !== "INGRESO") continue;
+    if (mesFromRecord(m) !== mesActual) continue;
+    const key = m.adherente || (m.codRubro === "42" ? "⛽ Combustible" : "Sin adherente");
+    aportadoPorNombre[key] = (aportadoPorNombre[key] || 0) + m.ingreso;
+  }
+  let totalPendiente = 0;
+  const pendientePorNombre = {};
+  for (const a of adherentes) {
+    const aportado = aportadoPorNombre[a.nombre] || 0;
+    const cuota = a.cuotaMensual || 0;
+    if (cuota > 0) {
+      const pend = Math.max(cuota - aportado, 0);
+      pendientePorNombre[a.nombre] = pend > TOL;
+      totalPendiente += pend;
+    } else {
+      // Sin cuota mensual definida: no hay un monto concreto que reclamar, pero igual
+      // sirve marcarlo si no aportó nada este mes.
+      pendientePorNombre[a.nombre] = aportado <= TOL;
+    }
+  }
+  return { mesActual, pendientePorNombre, totalPendiente };
+}
+
+let adhResumenSoloPendientesMes = false;
+function toggleAdhResumenSoloPendientesMes() {
+  adhResumenSoloPendientesMes = !adhResumenSoloPendientesMes;
+  renderResumen();
+}
+
 function renderAdherentesResumen() {
   const movs6All = movimientos.filter(m => ADH_RUBROS.includes(m.codRubro) && m.tipo === "INGRESO");
   const anios = [...new Set(movs6All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
@@ -3365,7 +3400,10 @@ function renderAdherentesResumen() {
     adherenteAnio = anios[0];
   }
 
-  const rows = calcAdherentesPorAnio(adherenteAnio);
+  const pendMes = calcPendientesMesActual();
+  let rows = calcAdherentesPorAnio(adherenteAnio)
+    .map(r => ({ ...r, pendienteEsteMes: !!pendMes.pendientePorNombre[r.adherente] }));
+  if (adhResumenSoloPendientesMes) rows = rows.filter(r => r.pendienteEsteMes);
 
   // Meses a mostrar como columnas: unión de todos los adherentes del año seleccionado,
   // solo los que tengan al menos un pago (sin meses futuros vacíos)
@@ -3389,10 +3427,14 @@ function renderAdherentesResumen() {
   // Resta por cobrar contra el compromiso anual (totDiferencia con signo invertido, como absoluto)
   const restaPorCobrar = totCompromiso - totAportado;
   const statCards = `
-    <div class="sum-grid ${hayCompromiso?"three":""}" style="margin-bottom:12px">
+    <div class="sum-grid three" style="margin-bottom:12px">
       <div class="stat-card">
         <div class="stat-label">Acumulado</div>
         <div class="stat-val ing">${fmt(totAportado)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Pendiente cobrar ${esc(mesLabel(pendMes.mesActual))}</div>
+        <div class="stat-val egr">${fmt(pendMes.totalPendiente)}</div>
       </div>
       ${hayCompromiso ? `
       <div class="stat-card">
@@ -3408,7 +3450,7 @@ function renderAdherentesResumen() {
   const totalesLine = `${rows.length} adherente${rows.length!==1?"s":""} con aportes o compromiso registrado`;
 
   const body = !rows.length
-    ? `<p class="note" style="text-align:center;padding:16px 0">Sin aportes de adherentes registrados</p>`
+    ? `<p class="note" style="text-align:center;padding:16px 0">${adhResumenSoloPendientesMes ? "Nadie pendiente este mes 🎉" : "Sin aportes de adherentes registrados"}</p>`
     : adherenteVista === "cards" ? renderAdherentesCards(rows) : renderAdherentesTabla(rows, meses);
 
   return `
@@ -3420,7 +3462,10 @@ function renderAdherentesResumen() {
         </div>
         ${viewToggle}
       </div>
-      ${rows.length ? statCards : ""}
+      <button class="pill sm ${adhResumenSoloPendientesMes?"active":""}" style="margin-bottom:10px" onclick="toggleAdhResumenSoloPendientesMes()">
+        🔴 Solo pendientes de ${esc(mesLabel(pendMes.mesActual))}
+      </button>
+      ${statCards}
       <p class="note" style="margin-bottom:12px">${totalesLine}</p>
       ${body}
     </div>`;
@@ -3494,7 +3539,7 @@ function renderAdherentesTabla(rows, meses) {
     const colspan = 3 + mesCols.length + (showMeses ? 2 : 0);
     return `
     <tr class="${rowClass}" onclick="toggleAdherenteDetalle('${esc(escJs(r.adherente))}')">
-      <td class="jugador-col" title="${esc(r.adherente)}">${esc(r.adherente)}</td>
+      <td class="jugador-col" title="${esc(r.adherente)}" style="${r.pendienteEsteMes?'color:var(--red);font-weight:600':''}">${esc(r.adherente)}${r.pendienteEsteMes?' <span style="font-size:9px">●</span>':''}</td>
       ${cuotaCell}
       ${mesCells}
       ${prometidoCell}
@@ -3573,7 +3618,8 @@ function renderAdherenteCard(r) {
   return `
   <div class="reint-card" onclick="toggleAdherenteDetalle('${esc(escJs(r.adherente))}')">
     <div class="reint-card-hdr">
-      <span class="reint-card-nombre" title="${esc(r.adherente)}">${esc(r.adherente)}</span>
+      <span class="reint-card-nombre" title="${esc(r.adherente)}" style="${r.pendienteEsteMes?'color:var(--red)':''}">${esc(r.adherente)}</span>
+      ${r.pendienteEsteMes ? `<span class="tag" style="color:var(--red);background:var(--red-bg)">pendiente este mes</span>` : ""}
       ${badge}
     </div>
     ${body}
@@ -5029,32 +5075,16 @@ async function deleteGrupo(id) {
 // ── Adherentes ────────────────────────────────────────────────
 let adhSearch = "";
 let adhShowHistorial = false;
-let adhSoloPendientesMes = false;
-
-// Mismo criterio que usa el dashboard de Resumen (pago registrado en Pagos_Adh, con
-// fallback a buscar un ingreso de rubro adherente ese mes), pero para un mes cualquiera.
-function estadoAdherenteMes(adh, mesYYYYMM) {
-  const mesCod = mesYYYYMM.replace("-", "");
-  const pago = pagos.find(p => p.adherenteId === adh.id && p.mes === mesCod);
-  if (pago) return pago.estado;
-  const movPago = movimientos.find(m =>
-    mesFromRecord(m) === mesYYYYMM && ADH_RUBROS.includes(m.codRubro) && m.tipo === "INGRESO" &&
-    m.adherente && m.adherente.toLowerCase().trim() === adh.nombre.toLowerCase().trim()
-  );
-  return movPago ? "PAGADO" : "PENDIENTE";
-}
 
 function renderAdherenteItem(a) {
   const compromisoAnual = (a.cuotaMensual||0) * (a.cuotasAnuales||0);
   const sub = compromisoAnual > 0
     ? `<div class="entity-sub">Compromiso anual: ${fmt(compromisoAnual)} (${a.cuotasAnuales} × ${fmt(a.cuotaMensual)})</div>`
     : "";
-  const pendienteMes = estadoAdherenteMes(a, nowMes()) === "PENDIENTE";
   return `
     <div class="entity-item" id="adh-${a.id}">
       <div style="flex:1;min-width:0">
-        <span class="entity-name" style="${pendienteMes ? "color:var(--red);font-weight:600" : ""}">${esc(a.nombre)}</span>
-        ${pendienteMes ? `<span class="tag" style="color:var(--red);background:var(--red-bg);margin-left:6px">pendiente este mes</span>` : ""}
+        <span class="entity-name">${esc(a.nombre)}</span>
         ${sub}
       </div>
       <button class="btn-sm accent" onclick="openAdherenteModal('${a.id}')">✏️</button>
@@ -5062,23 +5092,11 @@ function renderAdherenteItem(a) {
     </div>`;
 }
 
-function filtrarAdherentesParaLista() {
-  return [...adherentes]
-    .filter(a => !adhSearch || a.nombre.toLowerCase().includes(adhSearch.toLowerCase()))
-    .filter(a => !adhSoloPendientesMes || estadoAdherenteMes(a, nowMes()) === "PENDIENTE")
-    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
-}
-
-function toggleAdhSoloPendientesMes() {
-  adhSoloPendientesMes = !adhSoloPendientesMes;
-  document.getElementById("adh-list").innerHTML = renderAdherentes_listOnly();
-  const btn = document.getElementById("btn-adh-filtro-pendientes");
-  if (btn) btn.classList.toggle("active", adhSoloPendientesMes);
-}
-
 function renderAdherentes() {
-  const list = filtrarAdherentesParaLista().map(renderAdherenteItem).join("");
-  const mesTxt = mesLabel(nowMes());
+  const filtered = [...adherentes]
+    .filter(a => !adhSearch || a.nombre.toLowerCase().includes(adhSearch.toLowerCase()))
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const list = filtered.map(renderAdherenteItem).join("");
 
   return `
     <button class="btn-secondary" onclick="openAdherenteModal(null)" style="margin-bottom:12px">+ Agregar Adherente</button>
@@ -5087,9 +5105,6 @@ function renderAdherentes() {
       <input class="inp" type="search" placeholder="Buscar adherente…" value="${esc(adhSearch)}"
              oninput="adhSearch=this.value; document.getElementById('adh-list').innerHTML=renderAdherentes_listOnly()">
     </div>
-    <button class="pill sm ${adhSoloPendientesMes?"active":""}" id="btn-adh-filtro-pendientes" style="margin-bottom:10px" onclick="toggleAdhSoloPendientesMes()">
-      🔴 Solo pendientes de ${esc(mesTxt)}
-    </button>
     <div id="adh-list">${list || '<p class="note">Sin adherentes registrados</p>'}</div>
     <div class="divider"></div>
     <div class="sec-hdr">
@@ -5100,8 +5115,10 @@ function renderAdherentes() {
 }
 
 function renderAdherentes_listOnly() {
-  const list = filtrarAdherentesParaLista().map(renderAdherenteItem).join("");
-  return list || '<p class="note">Sin adherentes' + (adhSoloPendientesMes ? " pendientes este mes" : "") + '</p>';
+  const filtered = [...adherentes]
+    .filter(a => !adhSearch || a.nombre.toLowerCase().includes(adhSearch.toLowerCase()))
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  return filtered.map(renderAdherenteItem).join("") || '<p class="note">Sin adherentes</p>';
 }
 
 function openAdherenteModal(adherenteId) {

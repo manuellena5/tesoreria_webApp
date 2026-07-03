@@ -1645,6 +1645,13 @@ function handleSaveError(btnId, e) {
   toast(isNetworkError(e) ? "Sin conexión — no se pudo guardar, probá de nuevo" : "Error: " + e.message, "err");
 }
 
+// Mismo criterio que handleSaveError, pero para botones de eliminar (vuelven a mostrar "✕").
+function handleDeleteError(btnId, e) {
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = false; btn.textContent = "✕"; delete btn.dataset.confirm; }
+  toast(isNetworkError(e) ? "Sin conexión — no se pudo eliminar, probá de nuevo" : "Error: " + e.message, "err");
+}
+
 // ══════════════════════════════════════════════════════════════
 // TAB 2 — MOVIMIENTOS DEL MES
 // ══════════════════════════════════════════════════════════════
@@ -3954,22 +3961,25 @@ async function guardarAsociaciones(partidoId) {
 
 function confirmDeletePartido(id) {
   const btn = document.getElementById("pdel-"+id);
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   if (btn.dataset.confirm) { deletePartido(id); }
   else {
     btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
-    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+    setTimeout(() => { if(btn && !btn.disabled){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
   }
 }
 
 async function deletePartido(id) {
+  const btnId = "pdel-" + id;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = "Eliminando…"; }
   try {
     const r = await Storage.deletePartido(id);
     if (!r.ok) throw new Error(r.error || "Error");
     partidos = partidos.filter(p => p.id !== id);
     toast("Partido eliminado", "ok");
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleDeleteError(btnId, e); }
 }
 
 // ── Eventos (Peñas y similares) ───────────────────────────────
@@ -4044,22 +4054,25 @@ async function saveEvento(eventoId) {
 
 function confirmDeleteEvento(id) {
   const btn = document.getElementById("edel-"+id);
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   if (btn.dataset.confirm) { deleteEvento(id); }
   else {
     btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
-    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+    setTimeout(() => { if(btn && !btn.disabled){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
   }
 }
 
 async function deleteEvento(id) {
+  const btnId = "edel-" + id;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = "Eliminando…"; }
   try {
     const r = await Storage.deleteEvento(id);
     if (!r.ok) throw new Error(r.error || "Error");
     eventos = eventos.filter(ev => ev.id !== id);
     toast("Evento eliminado", "ok");
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleDeleteError(btnId, e); }
 }
 
 // ── Reserva de Granos ────────────────────────────────────────────
@@ -4292,22 +4305,25 @@ async function addJugador() {
 
 function confirmDeleteJugador(id) {
   const btn = document.getElementById("jdel-"+id);
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   if (btn.dataset.confirm) { deleteJugador(id); }
   else {
     btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
-    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+    setTimeout(() => { if(btn && !btn.disabled){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
   }
 }
 
 async function deleteJugador(id) {
+  const btnId = "jdel-" + id;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = "Eliminando…"; }
   try {
     const r = await Storage.deleteJugador(id);
     if (!r.ok) throw new Error(r.error || "Error");
     jugadores = jugadores.filter(j => j.id !== id);
     toast("Jugador eliminado", "ok");
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleDeleteError(btnId, e); }
 }
 
 // ── Grupos ────────────────────────────────────────────────────
@@ -4390,21 +4406,24 @@ async function saveGrupo(grupoId) {
 
 function confirmDeleteGrupo(id) {
   const btn = document.getElementById("gdel-"+id);
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   if (btn.dataset.confirm) { deleteGrupo(id); }
   else {
     btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
-    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+    setTimeout(() => { if(btn && !btn.disabled){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
   }
 }
 async function deleteGrupo(id) {
+  const btnId = "gdel-" + id;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = "Eliminando…"; }
   try {
     const r = await Storage.deleteGrupo(id);
     if (!r.ok) throw new Error(r.error || "Error");
     grupos = grupos.filter(g => g.id !== id);
     toast("Grupo eliminado", "ok");
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleDeleteError(btnId, e); }
 }
 
 // ── Adherentes ────────────────────────────────────────────────
@@ -4531,21 +4550,24 @@ async function saveAdherenteModal(adherenteId) {
 
 function confirmDeleteAdherente(id) {
   const btn = document.getElementById("adel-"+id);
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   if (btn.dataset.confirm) { deleteAdherente(id); }
   else {
     btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
-    setTimeout(() => { if(btn){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+    setTimeout(() => { if(btn && !btn.disabled){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
   }
 }
 async function deleteAdherente(id) {
+  const btnId = "adel-" + id;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = "Eliminando…"; }
   try {
     const r = await Storage.deleteAdherente(id);
     if (!r.ok) throw new Error(r.error || "Error");
     adherentes = adherentes.filter(a => a.id !== id);
     toast("Adherente eliminado", "ok");
     renderEntidades();
-  } catch(e) { toast("Error: " + e.message, "err"); }
+  } catch(e) { handleDeleteError(btnId, e); }
 }
 
 function renderAdhHistorial() {
@@ -4684,12 +4706,12 @@ function renderConfig() {
       <div id="audit-result" style="margin-top:10px"></div>
     </div>
 
-    <!-- Migración de rubros históricos -->
+    <!-- Atajos de teclado -->
     <div class="cfg-card">
-      <div class="cfg-title">🧮 Migración de rubros (cod 16 / cod 37 / grafías)</div>
-      <p class="cfg-note" style="margin-bottom:10px">Reclasifica movimientos históricos a los rubros nuevos. Primero mostrá la vista previa (no escribe nada), revisá los conteos, y recién después confirmá.</p>
-      <button class="btn-secondary" onclick="runPreviewMigracion()">Vista previa</button>
-      <div id="migracion-result" style="margin-top:10px"></div>
+      <div class="cfg-title">⌨️ Atajos de teclado (PC)</div>
+      <div class="modal-detail-row"><span class="modal-detail-lbl">Ctrl + Enter</span><span class="modal-detail-val">Guardar movimiento (en la pestaña Nuevo)</span></div>
+      <div class="modal-detail-row"><span class="modal-detail-lbl">Escape</span><span class="modal-detail-val">Cerrar un modal abierto</span></div>
+      <div class="modal-detail-row"><span class="modal-detail-lbl">Ctrl + Alt + 1…5</span><span class="modal-detail-val">Ir a Nuevo / Movim. / Resumen / Entidades / Config</span></div>
     </div>
   `);
 }
@@ -4729,51 +4751,6 @@ function runAudit() {
       </div>`).join("")}
     ${problemas.length > 100 ? `<p class="note">…y ${problemas.length-100} más</p>` : ""}
   `;
-}
-
-// ── Migración de rubros históricos (Tareas 2 y 4) ────────────────
-function renderMigracionResult(data, ejecutada) {
-  const el = document.getElementById("migracion-result");
-  if (!el) return;
-  const countsHtml = Object.entries(data.counts||{}).map(([k,v]) =>
-    `<div class="cuenta-item"><span class="cuenta-nombre">${esc(k)}</span><span class="cuenta-saldo pos">${v}</span></div>`
-  ).join("") || '<p class="note">Sin cambios detectados</p>';
-  const flaggedHtml = (data.flagged||[]).slice(0,50).map(f =>
-    `<div class="note">${esc(f.fecha)} — ${esc(f.concepto)||"—"} (${esc(f.tipo)}, ${fmt(f.monto)}) · <b>${esc(f.motivo)}</b></div>`
-  ).join("");
-  el.innerHTML = `
-    <p class="cfg-note">Conteo por rubro nuevo / corrección:</p>
-    ${countsHtml}
-    ${data.flagged && data.flagged.length ? `
-      <p class="cfg-note" style="margin-top:8px"><b>${data.flagged.length}</b> para revisión manual:</p>
-      ${flaggedHtml}` : ""}
-    ${ejecutada
-      ? `<p class="cfg-note" style="margin-top:8px;color:var(--green)">✓ Aplicado (lote ${esc(data.batchId)}, ${data.aplicados} cambios). Podés revertirlo desde el editor de Apps Script con revertMigracion("${esc(data.batchId)}").</p>`
-      : `<button class="btn-main" style="margin-top:10px" onclick="runEjecutarMigracion()">Confirmar y aplicar</button>`}
-  `;
-}
-
-async function runPreviewMigracion() {
-  showOverlay("Calculando vista previa…");
-  try {
-    const r = await Storage.previewMigracion();
-    if (!r.ok) throw new Error(r.error || "Error");
-    renderMigracionResult(r, false);
-  } catch(e) { toast("Error: " + e.message, "err"); }
-  finally { hideOverlay(); }
-}
-
-async function runEjecutarMigracion() {
-  showOverlay("Aplicando migración…");
-  try {
-    const r = await Storage.ejecutarMigracion();
-    if (!r.ok) throw new Error(r.error || "Error");
-    renderMigracionResult(r, true);
-    toast("Migración aplicada ✓", "ok");
-    const rMov = await Storage.listMov();
-    if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
-  } catch(e) { toast("Error: " + e.message, "err"); }
-  finally { hideOverlay(); }
 }
 
 function saveUrl() {
@@ -5079,8 +5056,9 @@ document.addEventListener("keydown", (e) => {
     const modalRoot = document.getElementById("modal-root");
     if (modalRoot && modalRoot.innerHTML.trim()) { modalRoot.innerHTML = ""; return; }
   }
-  // Navegación rápida entre pestañas con Alt+número (no interfiere con tipeo normal)
-  if (e.altKey && !typing) {
+  // Navegación rápida entre pestañas con Ctrl+Alt+número. Se usa Ctrl+Alt (en vez de solo
+  // Alt) para no chocar con atajos propios del navegador/sistema operativo que sí usan Alt+número.
+  if ((e.ctrlKey || e.metaKey) && e.altKey && !typing) {
     const map = { "1":"nuevo", "2":"movimientos", "3":"resumen", "4":"entidades", "5":"config" };
     if (map[e.key]) { e.preventDefault(); goTab(map[e.key]); }
   }

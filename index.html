@@ -777,6 +777,7 @@ let eventoResMes        = "";
 let eventoResExpandido  = new Set();
 let eventoResVista      = getDefaultVista("eventos_vista");
 let movOrden = localStorage.getItem("clubfm_orden_mov") || "fecha_desc";
+let movVista = getDefaultVista("movimientos_vista");
 
 // "cards" en mobile (<600px), "tabla" en desktop; el usuario puede override y se persiste
 function getDefaultVista(storageKey) {
@@ -1759,7 +1760,7 @@ function renderMovimientos() {
       <span class="mes-sel-label">${mesLabel(sharedMes)}</span>
       <button class="mes-sel-btn" onclick="changeMes(1)">▶</button>
     </div>
-    <button class="btn-export" style="margin-bottom:14px" onclick="exportExcel(sharedMes)">📥 Exportar ${mesLabel(sharedMes)} a Excel</button>
+    <button class="btn-export" id="mov-export-btn" style="margin-bottom:14px" onclick="exportExcelFiltrado()">📥 Exportar ${mesLabel(sharedMes)}${listFiltrosActive() ? ' (filtrado)' : ''} a Excel</button>
 
     <div class="sum-grid">
       <div class="stat-card">
@@ -1856,6 +1857,10 @@ function renderMovimientos() {
             <option value="monto_asc"  ${movOrden==='monto_asc' ?'selected':''}>Menor monto primero</option>
           </select>
         </div>
+        <div class="reint-view-toggle">
+          <button class="reint-view-btn ${movVista==='tabla'?'active':''}" onclick="setMovVista('tabla')">⊞ Tabla</button>
+          <button class="reint-view-btn ${movVista==='cards'?'active':''}" onclick="setMovVista('cards')">▤ Cards</button>
+        </div>
       </div>
       <button class="btn-sm accent" onclick="refreshData()">↻ Actualizar</button>
     </div>
@@ -1871,8 +1876,50 @@ function setMovOrden(v) {
   renderMovList();
 }
 
-function renderMovList() {
-  const movMes = movimientos
+function setMovVista(v) {
+  movVista = v;
+  localStorage.setItem("movimientos_vista", v);
+  renderMovList();
+}
+
+// Columnas de la vista tabla de Movimientos (variante propia de DT_COLS: sin "Mes"
+// porque la pantalla ya muestra un solo mes a la vez, y con Cuenta/Partido propios)
+const MOV_TABLE_COLS = [
+  { key:"fecha",     label:"Fecha",             sortable:true },
+  { key:"concepto",  label:"Concepto",          sortable:true, cls:"jd-concepto" },
+  { key:"monto",     label:"Monto",             sortable:true },
+  { key:"rubro",     label:"Rubro",             sortable:true },
+  { key:"categoria", label:"Categoría",         sortable:true },
+  { key:"cuenta",    label:"Cuenta",            sortable:true },
+  { key:"entidad",   label:"Jugador/Adherente", sortable:true },
+  { key:"partido",   label:"Partido",           sortable:true },
+];
+
+function renderMovTabla(movMes) {
+  const items = movMes.map(m => {
+    const monto = m.tipo==="INGRESO" ? m.ingreso
+                : m.tipo==="EGRESO"  ? -m.egreso
+                : m.tipo==="AJUSTE"  ? m.montoFinal
+                : -m.montoFinal; // INTERNO: sale de la cuenta de origen
+    return {
+      fechaRaw: m.fecha || "",
+      fechaD: m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "",
+      concepto: m.concepto || "",
+      monto,
+      rubro: m.rubro || "",
+      categoria: m.categoria || "",
+      cuenta: m.tipo==="INTERNO" ? `${m.cuenta||""} → ${m.cuentaDestino||""}` : (m.cuenta||""),
+      entidad: m.jugadorCT || m.adherente || "",
+      partido: m.partidoId ? partidoLabel(m.partidoId) : "",
+    };
+  });
+  return renderDetTabla("movlist", items, MOV_TABLE_COLS);
+}
+
+// Movimientos del mes seleccionado con todos los filtros de listFiltros aplicados
+// (usado tanto por renderMovList como por exportExcelFiltrado, para no duplicar la lógica)
+function getMovimientosFiltrados() {
+  return movimientos
     .filter(m => mesFromRecord(m) === sharedMes)
     .filter(m => !listFiltros.rubro  || normStr(m.rubro).includes(normStr(listFiltros.rubro)))
     .filter(m => !listFiltros.cat    || normStr(m.categoria).includes(normStr(listFiltros.cat)))
@@ -1889,6 +1936,15 @@ function renderMovList() {
       const q = normStr(listFiltros.search);
       return !q || normStr(m.concepto).includes(q) || normStr(m.observacion).includes(q);
     });
+}
+
+function listFiltrosActive() {
+  return !!(listFiltros.rubro || listFiltros.cat || listFiltros.cuenta || listFiltros.tipo ||
+    listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.search);
+}
+
+function renderMovList() {
+  const movMes = getMovimientosFiltrados();
 
   // KPIs sobre el subtotal filtrado (igual al total del mes cuando no hay filtros extra)
   // Nota: las transferencias INTERNAS no suman al total general del club (no
@@ -1923,8 +1979,7 @@ function renderMovList() {
     const lblAcc = kpiSaldoAcc.previousElementSibling;
     if (lblAcc) lblAcc.textContent = `Saldo acum. ${sharedMes.slice(0,4)}`;
   }
-  const filtersActive = !!(listFiltros.rubro || listFiltros.cat || listFiltros.cuenta || listFiltros.tipo ||
-    listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.search);
+  const filtersActive = listFiltrosActive();
   const noteEl = document.getElementById("kpi-filter-note");
   if (noteEl) {
     const notaCuenta = cuentaFiltro
@@ -1934,6 +1989,8 @@ function renderMovList() {
       ? `Mostrando subtotal filtrado${notaCuenta} · <a href="#" onclick="clearListFilters();return false;" style="color:var(--accent)">Ver mes completo</a>`
       : "";
   }
+  const exportBtn = document.getElementById("mov-export-btn");
+  if (exportBtn) exportBtn.innerHTML = `📥 Exportar ${mesLabel(sharedMes)}${filtersActive ? ' (filtrado)' : ''} a Excel`;
 
   // Orden, aplicado después de filtrar
   movMes.sort((a,b) => {
@@ -1950,6 +2007,11 @@ function renderMovList() {
   if (!el) return;
   if (!movMes.length) {
     el.innerHTML = `<div class="empty"><div class="ico">📋</div><p>Sin movimientos${listFiltros.search ? " para esa búsqueda" : " en este mes"}</p></div>`;
+    return;
+  }
+
+  if (movVista === "tabla") {
+    el.innerHTML = renderMovTabla(movMes);
     return;
   }
 
@@ -3714,6 +3776,7 @@ const DT_COLS = [
 ];
 let detTablaState = {};
 let detTablaCache = {};
+let detTablaCols  = {};
 
 function detTablaGetState(key) {
   if (!detTablaState[key]) detTablaState[key] = { sortCol:null, sortDir:1, filtro:"" };
@@ -3734,12 +3797,18 @@ function detTablaSort(key, col) {
   if (el) el.innerHTML = detTablaRenderInner(key);
 }
 
+// col.key "fecha"/"mes" leen fechaD/mesTxt del item para mostrar, pero fechaRaw/mesRaw para ordenar
+function dtFieldFor(col) {
+  return col.key === "fecha" ? "fechaD" : col.key === "mes" ? "mesTxt" : col.key;
+}
+
 function detTablaRenderInner(key) {
   const st = detTablaGetState(key);
   const items = detTablaCache[key] || [];
+  const cols = detTablaCols[key] || DT_COLS;
   const q = normStr(st.filtro);
   let filtrados = !q ? items : items.filter(it =>
-    normStr([it.fechaD, it.mesTxt, it.concepto, it.rubro, it.categoria, it.entidad, it.extra].join(" ")).includes(q)
+    normStr(cols.filter(c => c.key !== "monto").map(c => it[dtFieldFor(c)]).join(" ")).includes(q)
   );
   if (st.sortCol) {
     const dir = st.sortDir;
@@ -3752,7 +3821,7 @@ function detTablaRenderInner(key) {
       return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
     });
   }
-  const thead = DT_COLS.map(c => {
+  const thead = cols.map(c => {
     if (!c.sortable) return `<th>${c.label}</th>`;
     const active = st.sortCol === c.key;
     const arrow = active ? `<span class="dt-arrow">${st.sortDir===1?"▲":"▼"}</span>` : "";
@@ -3762,26 +3831,23 @@ function detTablaRenderInner(key) {
     return `<table class="jug-detalle-table"><thead><tr>${thead}</tr></thead></table><p class="dt-empty">Sin resultados${st.filtro?" para ese filtro":""}</p>`;
   }
   const rows = filtrados.map(it => {
-    const montoCell = it.monto === null
-      ? `<td>—</td>`
-      : `<td class="${it.monto<0?'egr':'ing'}">${it.monto<0?"-":"+"}${fmt(Math.abs(it.monto))}</td>`;
-    return `
-    <tr${it.gap ? ' class="dt-row-gap"' : ""}>
-      <td>${esc(it.fechaD)||"—"}</td>
-      <td>${esc(it.mesTxt)||"—"}</td>
-      <td class="jd-concepto">${esc(it.concepto)||"—"}</td>
-      ${montoCell}
-      <td>${esc(it.rubro)||"—"}</td>
-      <td>${esc(it.categoria)||"—"}</td>
-      <td>${esc(it.entidad)||"—"}</td>
-      <td class="jd-extra">${esc(it.extra)||""}</td>
-    </tr>`;
+    const tds = cols.map(c => {
+      if (c.key === "monto") {
+        return it.monto === null
+          ? `<td>—</td>`
+          : `<td class="${it.monto<0?'egr':'ing'}">${it.monto<0?"-":"+"}${fmt(Math.abs(it.monto))}</td>`;
+      }
+      const cls = c.cls ? ` class="${c.cls}"` : "";
+      return `<td${cls}>${esc(it[dtFieldFor(c)])||"—"}</td>`;
+    }).join("");
+    return `<tr${it.gap ? ' class="dt-row-gap"' : ""}>${tds}</tr>`;
   }).join("");
   return `<table class="jug-detalle-table"><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function renderDetTabla(tableKey, items) {
+function renderDetTabla(tableKey, items, cols) {
   detTablaCache[tableKey] = items;
+  detTablaCols[tableKey] = cols || DT_COLS;
   const st = detTablaGetState(tableKey);
   return `
     <div class="jug-detalle-wrap">
@@ -5582,14 +5648,9 @@ async function saveMetodos() {
 }
 
 // ── Excel Export ──────────────────────────────────────────────
-// mes: "YYYY-MM" para exportar solo ese mes, o null/"" para exportar todo el histórico
-function exportExcel(mes) {
-  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
-  let data = mes
-    ? movimientos.filter(m => getMes(m.fecha) === mes)
-    : [...movimientos];
-  data = data.sort((a,b) => a.fecha.localeCompare(b.fecha));
-
+// Arma headers + filas para un array de movimientos, en el formato común
+// usado por exportExcel() y exportExcelFiltrado()
+function movimientosToExcelRows(data) {
   const headers = ["MES","Fecha","Cód. Rubro","Rubro","CONCEPTO",
                    "# EGRESOS","# INGRESOS","# MONTO FINAL","SALDO",
                    "CUENTA","CUENTA DESTINO","MODO PAGO","Jug/Ct","Adherente","Partido","Observacion","Comprobante"];
@@ -5599,20 +5660,50 @@ function exportExcel(mes) {
     const egr = m.tipo==="EGRESO"  ? m.egreso  : 0;
     if (m.tipo !== "INTERNO") saldo += ing - egr;
     const p = m.partidoId ? partidos.find(x => x.id === m.partidoId) : null;
-    const partidoLabel = p ? `${p.numeroFecha} — ${p.rival}` : "";
+    const partidoLbl = p ? `${p.numeroFecha} — ${p.rival}` : "";
     return [
       m.mes, m.fecha, m.codRubro, m.rubro, m.concepto,
       egr||"", ing||"", m.montoFinal||"", saldo,
       m.cuenta, m.tipo==="INTERNO" ? (m.cuentaDestino||"") : "", m.modoPago, m.jugadorCT||"", m.adherente||"",
-      partidoLabel, m.observacion||"", m.comprobante||""
+      partidoLbl, m.observacion||"", m.comprobante||""
     ];
   });
+  return { headers, rows };
+}
+
+// mes: "YYYY-MM" para exportar solo ese mes, o null/"" para exportar todo el histórico
+function exportExcel(mes) {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+  let data = mes
+    ? movimientos.filter(m => getMes(m.fecha) === mes)
+    : [...movimientos];
+  data = data.sort((a,b) => a.fecha.localeCompare(b.fecha));
+
+  const { headers, rows } = movimientosToExcelRows(data);
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
   ws["!cols"] = [8,12,8,30,30,12,12,12,12,12,14,14,20,20,24,20,14].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
   const fname = mes ? `tesoreria_${mes.replace("-","")}.xlsx` : "tesoreria_todos.xlsx";
+  XLSX.writeFile(wb, fname);
+  toast("Excel exportado ✓", "ok");
+}
+
+// Exporta exactamente lo que se ve en pantalla en Movimientos: mes + todos los
+// filtros activos de listFiltros (a diferencia de exportExcel(), que solo filtra por mes)
+function exportExcelFiltrado() {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+  const data = getMovimientosFiltrados().sort((a,b) => a.fecha.localeCompare(b.fecha));
+  if (!data.length) { toast("No hay movimientos para exportar con estos filtros", "err"); return; }
+
+  const { headers, rows } = movimientosToExcelRows(data);
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws["!cols"] = [8,12,8,30,30,12,12,12,12,12,14,14,20,20,24,20,14].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, "Movimientos");
+  const fname = listFiltrosActive() ? `tesoreria_${sharedMes}_filtrado.xlsx` : `tesoreria_${sharedMes}.xlsx`;
   XLSX.writeFile(wb, fname);
   toast("Excel exportado ✓", "ok");
 }

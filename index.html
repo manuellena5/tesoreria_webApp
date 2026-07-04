@@ -304,10 +304,13 @@ textarea.inp { resize:none; }
 /* ── Detalle de movimientos (tabla embebida compacta, reutilizada en Jugadores/Adherentes/Eventos) ── */
 .jug-detalle-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; background:var(--bg3); border-radius:var(--rs); margin:4px 0 10px; }
 .jug-detalle-table { width:100%; border-collapse:collapse; font-size:11.5px; }
-.jug-detalle-table th { text-align:left; color:var(--text3); font-size:9px; text-transform:uppercase; letter-spacing:.04em; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; font-weight:600; }
+.jug-detalle-table th { position:relative; text-align:left; color:var(--text3); font-size:9px; text-transform:uppercase; letter-spacing:.04em; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; font-weight:600; }
 .jug-detalle-table th.dt-sortable { cursor:pointer; user-select:none; }
 .jug-detalle-table th.dt-sortable:hover { color:var(--text); }
 .jug-detalle-table th .dt-arrow { color:var(--accent); margin-left:2px; }
+.jug-detalle-table.dt-fixed { table-layout:fixed; }
+.dt-resizer { position:absolute; top:0; right:-4px; width:8px; height:100%; cursor:col-resize; user-select:none; z-index:1; }
+.dt-resizer:hover, .dt-resizer.dt-resizing { background:var(--accent); opacity:.4; }
 .jug-detalle-table td { padding:6px 8px; border-bottom:1px solid var(--border); color:var(--text2); white-space:nowrap; vertical-align:top; }
 .jug-detalle-table tr:last-child td { border-bottom:none; }
 .jug-detalle-table td.jd-concepto { white-space:normal; max-width:150px; word-break:break-word; color:var(--text); }
@@ -580,7 +583,7 @@ textarea.inp { resize:none; }
 /* ── Desktop ancho (PC): solo la pantalla Resumen se ensancha, para que sus tablas
    entren sin recortarse. Las demás pantallas siguen centradas en 940px. ── */
 @media (min-width: 1200px) {
-  #app.tab-resumen { max-width: 1600px; }
+  #app.tab-resumen, #app.tab-movimientos { max-width: 1600px; }
 }
 </style>
 </head>
@@ -1199,6 +1202,7 @@ function updateBadge() {
 function goTab(tab) {
   currentTab = tab;
   document.getElementById("app").classList.toggle("tab-resumen", tab === "resumen");
+  document.getElementById("app").classList.toggle("tab-movimientos", tab === "movimientos");
   document.querySelectorAll(".bnav-btn").forEach(b => b.classList.remove("active"));
   const btn = document.getElementById("nav-" + tab);
   if (btn) btn.classList.add("active");
@@ -3777,6 +3781,39 @@ const DT_COLS = [
 let detTablaState = {};
 let detTablaCache = {};
 let detTablaCols  = {};
+let detTablaColWidths = {}; // key -> array de anchos en px (por índice de columna), solo una vez que el usuario arrastra un resizer
+
+// Arrastre manual del ancho de columna (mousedown en el "handle" a la derecha del <th>).
+// Al primer arrastre de una tabla se "congelan" los anchos actuales de todas sus columnas
+// (medidos en pantalla) y se pasa la tabla a table-layout:fixed para que respeten ese ancho.
+function dtColResizeStart(ev, key, idx) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const th = ev.target.parentElement;
+  const table = th.closest("table");
+  if (!detTablaColWidths[key]) {
+    const allTh = [...table.querySelectorAll("thead th")];
+    detTablaColWidths[key] = allTh.map(t => Math.round(t.getBoundingClientRect().width));
+    table.classList.add("dt-fixed");
+    allTh.forEach((t,i) => { t.style.width = detTablaColWidths[key][i] + "px"; });
+  }
+  const startX = ev.clientX;
+  const startWidth = detTablaColWidths[key][idx];
+  const resizer = ev.target;
+  resizer.classList.add("dt-resizing");
+  function onMove(e) {
+    const newWidth = Math.max(40, startWidth + (e.clientX - startX));
+    detTablaColWidths[key][idx] = newWidth;
+    th.style.width = newWidth + "px";
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    resizer.classList.remove("dt-resizing");
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
 
 function detTablaGetState(key) {
   if (!detTablaState[key]) detTablaState[key] = { sortCol:null, sortDir:1, filtro:"" };
@@ -3806,6 +3843,8 @@ function detTablaRenderInner(key) {
   const st = detTablaGetState(key);
   const items = detTablaCache[key] || [];
   const cols = detTablaCols[key] || DT_COLS;
+  const widths = detTablaColWidths[key];
+  const tableCls = "jug-detalle-table" + (widths ? " dt-fixed" : "");
   const q = normStr(st.filtro);
   let filtrados = !q ? items : items.filter(it =>
     normStr(cols.filter(c => c.key !== "monto").map(c => it[dtFieldFor(c)]).join(" ")).includes(q)
@@ -3821,14 +3860,16 @@ function detTablaRenderInner(key) {
       return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
     });
   }
-  const thead = cols.map(c => {
-    if (!c.sortable) return `<th>${c.label}</th>`;
+  const thead = cols.map((c,i) => {
+    const wStyle = widths ? ` style="width:${widths[i]}px"` : "";
+    const resizer = `<span class="dt-resizer" onmousedown="dtColResizeStart(event,'${key}',${i})" onclick="event.stopPropagation()"></span>`;
+    if (!c.sortable) return `<th${wStyle}>${c.label}${resizer}</th>`;
     const active = st.sortCol === c.key;
     const arrow = active ? `<span class="dt-arrow">${st.sortDir===1?"▲":"▼"}</span>` : "";
-    return `<th class="dt-sortable" onclick="detTablaSort('${key}','${c.key}')">${c.label}${arrow}</th>`;
+    return `<th class="dt-sortable"${wStyle} onclick="detTablaSort('${key}','${c.key}')">${c.label}${arrow}${resizer}</th>`;
   }).join("");
   if (!filtrados.length) {
-    return `<table class="jug-detalle-table"><thead><tr>${thead}</tr></thead></table><p class="dt-empty">Sin resultados${st.filtro?" para ese filtro":""}</p>`;
+    return `<table class="${tableCls}"><thead><tr>${thead}</tr></thead></table><p class="dt-empty">Sin resultados${st.filtro?" para ese filtro":""}</p>`;
   }
   const rows = filtrados.map(it => {
     const tds = cols.map(c => {
@@ -3842,7 +3883,7 @@ function detTablaRenderInner(key) {
     }).join("");
     return `<tr${it.gap ? ' class="dt-row-gap"' : ""}>${tds}</tr>`;
   }).join("");
-  return `<table class="jug-detalle-table"><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="${tableCls}"><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderDetTabla(tableKey, items, cols) {

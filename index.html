@@ -586,7 +586,18 @@ textarea.inp { resize:none; }
 /* ── Desktop ancho (PC): solo la pantalla Resumen se ensancha, para que sus tablas
    entren sin recortarse. Las demás pantallas siguen centradas en 940px. ── */
 @media (min-width: 1200px) {
-  #app.tab-resumen, #app.tab-movimientos { max-width: 1600px; }
+  #app.tab-resumen { max-width: 1600px; }
+
+  /* Movimientos: la parte de arriba (mes, exportar, KPIs, filtros) se mantiene
+     centrada en el ancho normal de #app; solo la tabla de la vista Tabla se
+     "escapa" del contenedor angosto y se re-centra en un ancho mayor, para que
+     sus columnas entren sin necesitar scroll horizontal. */
+  .mov-table-breakout {
+    width: 100vw;
+    max-width: 1600px;
+    margin-left: 50%;
+    transform: translateX(-50%);
+  }
 }
 </style>
 </head>
@@ -1205,7 +1216,6 @@ function updateBadge() {
 function goTab(tab) {
   currentTab = tab;
   document.getElementById("app").classList.toggle("tab-resumen", tab === "resumen");
-  document.getElementById("app").classList.toggle("tab-movimientos", tab === "movimientos");
   document.querySelectorAll(".bnav-btn").forEach(b => b.classList.remove("active"));
   const btn = document.getElementById("nav-" + tab);
   if (btn) btn.classList.add("active");
@@ -1906,11 +1916,15 @@ const MOV_TABLE_COLS = [
 ];
 
 function renderMovTabla(movMes) {
+  const cuentaFiltro = listFiltros.cuenta;
   const items = movMes.map(m => {
+    // INTERNO: sin filtro de cuenta (o filtrando por la cuenta de origen) se ve como
+    // egreso (sale de esa cuenta); si se filtra justo por la cuenta DESTINO, es un
+    // ingreso real para esa cuenta y debe verse en verde, no en rojo.
     const monto = m.tipo==="INGRESO" ? m.ingreso
                 : m.tipo==="EGRESO"  ? -m.egreso
                 : m.tipo==="AJUSTE"  ? m.montoFinal
-                : -m.montoFinal; // INTERNO: sale de la cuenta de origen
+                : (cuentaFiltro && m.cuentaDestino === cuentaFiltro) ? m.montoFinal : -m.montoFinal;
     return {
       id: m.id,
       fechaRaw: m.fecha || "",
@@ -2022,7 +2036,7 @@ function renderMovList() {
   }
 
   if (movVista === "tabla") {
-    el.innerHTML = renderMovTabla(movMes);
+    el.innerHTML = `<div class="mov-table-breakout">${renderMovTabla(movMes)}</div>`;
     return;
   }
 

@@ -318,8 +318,11 @@ textarea.inp { resize:none; }
 .jug-detalle-table td.ing { color:var(--green); font-family:var(--mono); text-align:right; font-weight:600; }
 .jug-detalle-table td.egr { color:var(--red); font-family:var(--mono); text-align:right; font-weight:600; }
 .jug-detalle-table tr.dt-row-gap td { color:var(--text3); font-style:italic; }
+.dt-edit-btn { padding:3px 7px; font-size:12px; line-height:1; }
 .dt-filterbar { padding:6px 8px 0; }
 .dt-filterbar .inp { font-size:11.5px; padding:5px 8px; height:auto; }
+.dt-colbar { display:flex; flex-wrap:wrap; gap:5px; padding:6px 8px 0; }
+.dt-colbar .pill.sm { padding:3px 8px; font-size:11px; }
 .dt-empty { padding:10px 8px; color:var(--text3); font-size:12px; }
 
 /* ── Reintegro: grupos vinculados en dos columnas (Egresos | Ingresos) ── */
@@ -1887,8 +1890,11 @@ function setMovVista(v) {
 }
 
 // Columnas de la vista tabla de Movimientos (variante propia de DT_COLS: sin "Mes"
-// porque la pantalla ya muestra un solo mes a la vez, y con Cuenta/Partido propios)
+// porque la pantalla ya muestra un solo mes a la vez, y con Cuenta/Partido propios).
+// "acciones" es "pinned": no se puede ocultar desde el selector de columnas.
 const MOV_TABLE_COLS = [
+  { key:"acciones",  label:"",                  sortable:false, pinned:true,
+    render: it => `<button class="btn-sm accent dt-edit-btn" onclick="openMovModal('${escJs(it.id)}')">✏️</button>` },
   { key:"fecha",     label:"Fecha",             sortable:true },
   { key:"concepto",  label:"Concepto",          sortable:true, cls:"jd-concepto" },
   { key:"monto",     label:"Monto",             sortable:true },
@@ -1906,6 +1912,7 @@ function renderMovTabla(movMes) {
                 : m.tipo==="AJUSTE"  ? m.montoFinal
                 : -m.montoFinal; // INTERNO: sale de la cuenta de origen
     return {
+      id: m.id,
       fechaRaw: m.fecha || "",
       fechaD: m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "",
       concepto: m.concepto || "",
@@ -3778,32 +3785,36 @@ const DT_COLS = [
   { key:"entidad",   label:"Entidad",     sortable:true },
   { key:"extra",     label:"Detalle",     sortable:false, cls:"jd-extra" },
 ];
-let detTablaState = {};
-let detTablaCache = {};
-let detTablaCols  = {};
-let detTablaColWidths = {}; // key -> array de anchos en px (por índice de columna), solo una vez que el usuario arrastra un resizer
+let detTablaState  = {};
+let detTablaCache  = {};
+let detTablaCols   = {};
+let detTablaColWidths = {}; // key -> { colKey: anchoPx }, solo una vez que el usuario arrastra un resizer
+let detTablaHidden  = {};   // key -> Set(colKey) de columnas ocultadas manualmente por el usuario
 
 // Arrastre manual del ancho de columna (mousedown en el "handle" a la derecha del <th>).
-// Al primer arrastre de una tabla se "congelan" los anchos actuales de todas sus columnas
-// (medidos en pantalla) y se pasa la tabla a table-layout:fixed para que respeten ese ancho.
-function dtColResizeStart(ev, key, idx) {
+// Al primer arrastre de una tabla se "congelan" los anchos actuales de sus columnas visibles
+// (medidos en pantalla, indexados por colKey para no romperse si se ocultan/muestran columnas)
+// y se pasa la tabla a table-layout:fixed para que respeten ese ancho.
+function dtColResizeStart(ev, key, colKey) {
   ev.preventDefault();
   ev.stopPropagation();
   const th = ev.target.parentElement;
   const table = th.closest("table");
   if (!detTablaColWidths[key]) {
     const allTh = [...table.querySelectorAll("thead th")];
-    detTablaColWidths[key] = allTh.map(t => Math.round(t.getBoundingClientRect().width));
+    const widths = {};
+    allTh.forEach(t => { widths[t.dataset.col] = Math.round(t.getBoundingClientRect().width); });
+    detTablaColWidths[key] = widths;
     table.classList.add("dt-fixed");
-    allTh.forEach((t,i) => { t.style.width = detTablaColWidths[key][i] + "px"; });
+    allTh.forEach(t => { t.style.width = widths[t.dataset.col] + "px"; });
   }
   const startX = ev.clientX;
-  const startWidth = detTablaColWidths[key][idx];
+  const startWidth = detTablaColWidths[key][colKey];
   const resizer = ev.target;
   resizer.classList.add("dt-resizing");
   function onMove(e) {
     const newWidth = Math.max(40, startWidth + (e.clientX - startX));
-    detTablaColWidths[key][idx] = newWidth;
+    detTablaColWidths[key][colKey] = newWidth;
     th.style.width = newWidth + "px";
   }
   function onUp() {
@@ -3818,6 +3829,33 @@ function dtColResizeStart(ev, key, idx) {
 function detTablaGetState(key) {
   if (!detTablaState[key]) detTablaState[key] = { sortCol:null, sortDir:1, filtro:"" };
   return detTablaState[key];
+}
+
+function detTablaGetHidden(key) {
+  if (!detTablaHidden[key]) detTablaHidden[key] = new Set();
+  return detTablaHidden[key];
+}
+
+// Muestra/oculta una columna (excepto las "pinned", ej. la de acciones). Se usa para
+// que en pantallas angostas o con muchas columnas no haga falta scrollear horizontalmente.
+function dtColToggleVisible(key, colKey) {
+  const hidden = detTablaGetHidden(key);
+  if (hidden.has(colKey)) hidden.delete(colKey); else hidden.add(colKey);
+  const bar = document.getElementById(`dt-colbar-${key}`);
+  if (bar) bar.innerHTML = dtColBarInner(key);
+  const el = document.getElementById(`dt-inner-${key}`);
+  if (el) el.innerHTML = detTablaRenderInner(key);
+}
+
+function dtColBarInner(key) {
+  const cols = detTablaCols[key] || DT_COLS;
+  const hideable = cols.filter(c => !c.pinned);
+  if (hideable.length < 2) return "";
+  const hidden = detTablaGetHidden(key);
+  return hideable.map(c => {
+    const isHidden = hidden.has(c.key);
+    return `<button class="pill sm${isHidden?"":" active"}" onclick="dtColToggleVisible('${key}','${c.key}')">${isHidden?"☐":"☑"} ${esc(c.label)}</button>`;
+  }).join("");
 }
 
 function detTablaSetFiltro(key, val) {
@@ -3842,12 +3880,14 @@ function dtFieldFor(col) {
 function detTablaRenderInner(key) {
   const st = detTablaGetState(key);
   const items = detTablaCache[key] || [];
-  const cols = detTablaCols[key] || DT_COLS;
+  const allCols = detTablaCols[key] || DT_COLS;
+  const hidden = detTablaGetHidden(key);
+  const cols = allCols.filter(c => c.pinned || !hidden.has(c.key));
   const widths = detTablaColWidths[key];
   const tableCls = "jug-detalle-table" + (widths ? " dt-fixed" : "");
   const q = normStr(st.filtro);
   let filtrados = !q ? items : items.filter(it =>
-    normStr(cols.filter(c => c.key !== "monto").map(c => it[dtFieldFor(c)]).join(" ")).includes(q)
+    normStr(cols.filter(c => c.key !== "monto" && !c.render).map(c => it[dtFieldFor(c)]).join(" ")).includes(q)
   );
   if (st.sortCol) {
     const dir = st.sortDir;
@@ -3860,25 +3900,28 @@ function detTablaRenderInner(key) {
       return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
     });
   }
-  const thead = cols.map((c,i) => {
-    const wStyle = widths ? ` style="width:${widths[i]}px"` : "";
-    const resizer = `<span class="dt-resizer" onmousedown="dtColResizeStart(event,'${key}',${i})" onclick="event.stopPropagation()"></span>`;
-    if (!c.sortable) return `<th${wStyle}>${c.label}${resizer}</th>`;
+  const thead = cols.map(c => {
+    // Fallback de 120px si la tabla ya está en modo ancho-fijo pero esta columna
+    // se acaba de volver a mostrar y todavía no tiene un ancho guardado propio.
+    const wStyle = widths ? ` style="width:${widths[c.key]||120}px"` : "";
+    const resizer = `<span class="dt-resizer" onmousedown="dtColResizeStart(event,'${key}','${c.key}')" onclick="event.stopPropagation()"></span>`;
+    if (!c.sortable) return `<th data-col="${c.key}"${wStyle}>${c.label}${resizer}</th>`;
     const active = st.sortCol === c.key;
     const arrow = active ? `<span class="dt-arrow">${st.sortDir===1?"▲":"▼"}</span>` : "";
-    return `<th class="dt-sortable"${wStyle} onclick="detTablaSort('${key}','${c.key}')">${c.label}${arrow}${resizer}</th>`;
+    return `<th class="dt-sortable" data-col="${c.key}"${wStyle} onclick="detTablaSort('${key}','${c.key}')">${c.label}${arrow}${resizer}</th>`;
   }).join("");
   if (!filtrados.length) {
     return `<table class="${tableCls}"><thead><tr>${thead}</tr></thead></table><p class="dt-empty">Sin resultados${st.filtro?" para ese filtro":""}</p>`;
   }
   const rows = filtrados.map(it => {
     const tds = cols.map(c => {
+      const cls = c.cls ? ` class="${c.cls}"` : "";
+      if (c.render) return `<td${cls}>${c.render(it)}</td>`;
       if (c.key === "monto") {
         return it.monto === null
           ? `<td>—</td>`
           : `<td class="${it.monto<0?'egr':'ing'}">${it.monto<0?"-":"+"}${fmt(Math.abs(it.monto))}</td>`;
       }
-      const cls = c.cls ? ` class="${c.cls}"` : "";
       return `<td${cls}>${esc(it[dtFieldFor(c)])||"—"}</td>`;
     }).join("");
     return `<tr${it.gap ? ' class="dt-row-gap"' : ""}>${tds}</tr>`;
@@ -3890,11 +3933,13 @@ function renderDetTabla(tableKey, items, cols) {
   detTablaCache[tableKey] = items;
   detTablaCols[tableKey] = cols || DT_COLS;
   const st = detTablaGetState(tableKey);
+  const colBar = dtColBarInner(tableKey);
   return `
     <div class="jug-detalle-wrap">
       <div class="dt-filterbar">
         <input class="inp" type="search" placeholder="Filtrar…" value="${esc(st.filtro)}" oninput="detTablaSetFiltro('${tableKey}', this.value)">
       </div>
+      ${colBar ? `<div class="dt-colbar" id="dt-colbar-${tableKey}">${colBar}</div>` : ""}
       <div id="dt-inner-${tableKey}">${detTablaRenderInner(tableKey)}</div>
     </div>`;
 }

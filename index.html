@@ -2143,6 +2143,7 @@ async function deleteMovimiento(id) {
     if (!r.ok) throw new Error(r.error || "Error al eliminar");
     movimientos = movimientos.filter(m => m.id !== id);
     updateBadge();
+    saveSnapshotToCache();
     toast("Movimiento eliminado", "ok");
     renderMovimientos();
   } catch(e) { toast("Error: " + e.message, "err"); }
@@ -4902,6 +4903,7 @@ async function deletePartido(id) {
     const r = await Storage.deletePartido(id);
     if (!r.ok) throw new Error(r.error || "Error");
     partidos = partidos.filter(p => p.id !== id);
+    saveSnapshotToCache();
     toast("Partido eliminado", "ok");
     renderEntidades();
   } catch(e) { handleDeleteError(btnId, e); }
@@ -4995,6 +4997,7 @@ async function deleteEvento(id) {
     const r = await Storage.deleteEvento(id);
     if (!r.ok) throw new Error(r.error || "Error");
     eventos = eventos.filter(ev => ev.id !== id);
+    saveSnapshotToCache();
     toast("Evento eliminado", "ok");
     renderEntidades();
   } catch(e) { handleDeleteError(btnId, e); }
@@ -5187,6 +5190,7 @@ async function deleteReserva(id) {
     const r = await Storage.deleteReserva(id);
     if (!r.ok) throw new Error(r.error || "Error");
     reservas = reservas.filter(r => r.id !== id);
+    saveSnapshotToCache();
     toast("Registro eliminado", "ok");
     renderEntidades();
   } catch(e) { toast("Error: " + e.message, "err"); }
@@ -5246,6 +5250,7 @@ async function deleteJugador(id) {
     const r = await Storage.deleteJugador(id);
     if (!r.ok) throw new Error(r.error || "Error");
     jugadores = jugadores.filter(j => j.id !== id);
+    saveSnapshotToCache();
     toast("Jugador eliminado", "ok");
     renderEntidades();
   } catch(e) { handleDeleteError(btnId, e); }
@@ -5346,6 +5351,7 @@ async function deleteGrupo(id) {
     const r = await Storage.deleteGrupo(id);
     if (!r.ok) throw new Error(r.error || "Error");
     grupos = grupos.filter(g => g.id !== id);
+    saveSnapshotToCache();
     toast("Grupo eliminado", "ok");
     renderEntidades();
   } catch(e) { handleDeleteError(btnId, e); }
@@ -5490,6 +5496,7 @@ async function deleteAdherente(id) {
     const r = await Storage.deleteAdherente(id);
     if (!r.ok) throw new Error(r.error || "Error");
     adherentes = adherentes.filter(a => a.id !== id);
+    saveSnapshotToCache();
     toast("Adherente eliminado", "ok");
     renderEntidades();
   } catch(e) { handleDeleteError(btnId, e); }
@@ -5936,6 +5943,7 @@ async function importExcel(event) {
     const r = await Storage.listMov();
     if (r.ok) movimientos = (r.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
     updateBadge();
+    saveSnapshotToCache();
     hideOverlay();
     toast(`${saved} movimientos importados ✓`, "ok");
     renderConfig();

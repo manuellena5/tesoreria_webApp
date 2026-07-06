@@ -2552,25 +2552,6 @@ function renderResumen() {
 
     <div class="resumen-2col">
       <div>
-        <div class="sec-hdr"><span class="sec-title">Saldo por cuenta</span></div>
-        <div class="cuenta-list">${cuentasHtml || '<p class="note">Sin cuentas configuradas</p>'}</div>
-
-        <div class="sec-hdr">
-          <span class="sec-title">Adherentes — ${mesLabel(sharedMes)}</span>
-        </div>
-        ${!pendAdh.totalCount ? `<p class="note">Sin adherentes registrados</p>` :
-          !pendAdh.pendientes.length ? `
-          <button class="reint-aldia-toggle" style="cursor:default">
-            ${pendAdh.pagadosCount}/${pendAdh.totalCount} pagados — Todos al día ✓
-          </button>` : `
-          <button class="reint-aldia-toggle" onclick="toggleAdhResumenOpen()">
-            ${pendAdh.pagadosCount}/${pendAdh.totalCount} pagados — ${pendAdh.pendientes.length} pendientes ${adhResumenOpen?"▲":"▼"}
-          </button>
-          ${adhResumenOpen ? `<div class="adh-resumen">${adhPendientesHtml}</div>` : ""}`
-        }
-      </div>
-
-      <div>
         ${catItems.length ? `
         <div class="sec-hdr"><span class="sec-title">Tabla por categoría</span></div>
         <table class="sum-table">
@@ -2597,6 +2578,25 @@ function renderResumen() {
           <thead><tr><th>Jugador / CT</th><th style="text-align:right">Monto mes</th><th style="text-align:right">Prom. mensual</th></tr></thead>
           <tbody>${jugTableRows}</tbody>
         </table>` : ""}
+      </div>
+
+      <div>
+        <div class="sec-hdr"><span class="sec-title">Saldo por cuenta</span></div>
+        <div class="cuenta-list">${cuentasHtml || '<p class="note">Sin cuentas configuradas</p>'}</div>
+
+        <div class="sec-hdr">
+          <span class="sec-title">Adherentes — ${mesLabel(sharedMes)}</span>
+        </div>
+        ${!pendAdh.totalCount ? `<p class="note">Sin adherentes registrados</p>` :
+          !pendAdh.pendientes.length ? `
+          <button class="reint-aldia-toggle" style="cursor:default">
+            ${pendAdh.pagadosCount}/${pendAdh.totalCount} pagados — Todos al día ✓
+          </button>` : `
+          <button class="reint-aldia-toggle" onclick="toggleAdhResumenOpen()">
+            ${pendAdh.pagadosCount}/${pendAdh.totalCount} pagados — ${pendAdh.pendientes.length} pendientes ${adhResumenOpen?"▲":"▼"}
+          </button>
+          ${adhResumenOpen ? `<div class="adh-resumen">${adhPendientesHtml}</div>` : ""}`
+        }
       </div>
     </div>
     ` : ""}

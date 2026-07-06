@@ -678,9 +678,9 @@ textarea.inp { resize:none; }
     margin-bottom: 0 !important;
   }
 
-  /* Saldo por cuenta: chips compactos (nombre + saldo en una fila), con
-     auto-fill para que entren tantas columnas como quepan por fila en vez
-     de una grilla fija de 4 tarjetas cuadradas. */
+  /* Saldo por cuenta: chips compactos, nombre en una línea y saldo debajo,
+     con auto-fill para que entren tantas columnas como quepan por fila en
+     vez de una grilla fija de 4 tarjetas cuadradas. */
   #app.tab-resumen .cuenta-list {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -695,21 +695,20 @@ textarea.inp { resize:none; }
   }
   #app.tab-resumen .cuenta-list .cuenta-item-row {
     width: 100%;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
   }
   #app.tab-resumen .cuenta-list .cuenta-nombre {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 60%;
+    max-width: 100%;
   }
   #app.tab-resumen .cuenta-list .cuenta-saldo {
-    font-size: 14px;
+    font-size: 15px;
   }
   #app.tab-resumen .cuenta-list .cuenta-adj-note {
     margin-top: 0;
@@ -898,6 +897,8 @@ let reportesState = {
   anio: nowMes().slice(0,4),
   meses: [nowMes()],
   cuentas: [],
+  categoria: "",
+  rubroCod: "",
   jugadorCT: "",
   adherente: "",
   search: "",
@@ -2410,22 +2411,11 @@ function renderResumen() {
     </tr>${detalleHtml}`;
   }).join("");
 
-  // Adherentes del mes
-  const mesCod = sharedMes.replace("-","");
-  // Movimientos del mes con rubro adherentes (fallback para registros sin pago en Pagos_Adh)
-  // Mismos rubros que se consideran aporte de adherente en Resumen > Adherentes: [6] ADHERENTES | COLABORADORES y [5] PUBLICIDAD - Lonas y otros
-  const adhMovMes = movMes.filter(m => ADH_RUBROS.includes(m.codRubro) && m.tipo === "INGRESO" && m.adherente);
-  function resolveEstado(adh) {
-    const pago = pagos.find(p => p.adherenteId === adh.id && p.mes === mesCod);
-    if (pago) return pago.estado;
-    const movPago = adhMovMes.find(m => m.adherente.toLowerCase().trim() === adh.nombre.toLowerCase().trim());
-    return movPago ? "PAGADO" : "PENDIENTE";
-  }
-  const adherentesOrdenados = adherentes.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  const adhPendientes = adherentesOrdenados.filter(adh => resolveEstado(adh) === "PENDIENTE");
-  const pagadosCount = adherentes.length - adhPendientes.length;
-  const adhPendientesHtml = adhPendientes.map(adh => `<div class="adh-item-res">
-      <span class="nombre">${esc(adh.nombre)}</span>
+  // Adherentes del mes — mismo criterio que Resumen > Adherentes (calcPendientesMesActual),
+  // pero para el mes seleccionado en pantalla (sharedMes) en vez del mes real en curso
+  const pendAdh = calcPendientesEnMes(sharedMes);
+  const adhPendientesHtml = pendAdh.pendientes.map(nombre => `<div class="adh-item-res">
+      <span class="nombre">${esc(nombre)}</span>
       <span class="adh-estado pendiente">PENDIENTE</span>
     </div>`).join("");
 
@@ -2568,13 +2558,13 @@ function renderResumen() {
         <div class="sec-hdr">
           <span class="sec-title">Adherentes — ${mesLabel(sharedMes)}</span>
         </div>
-        ${!adherentes.length ? `<p class="note">Sin adherentes registrados</p>` :
-          !adhPendientes.length ? `
+        ${!pendAdh.totalCount ? `<p class="note">Sin adherentes registrados</p>` :
+          !pendAdh.pendientes.length ? `
           <button class="reint-aldia-toggle" style="cursor:default">
-            ${pagadosCount}/${adherentes.length} pagados — Todos al día ✓
+            ${pendAdh.pagadosCount}/${pendAdh.totalCount} pagados — Todos al día ✓
           </button>` : `
           <button class="reint-aldia-toggle" onclick="toggleAdhResumenOpen()">
-            ${pagadosCount}/${adherentes.length} pagados — ${adhPendientes.length} pendientes ${adhResumenOpen?"▲":"▼"}
+            ${pendAdh.pagadosCount}/${pendAdh.totalCount} pagados — ${pendAdh.pendientes.length} pendientes ${adhResumenOpen?"▲":"▼"}
           </button>
           ${adhResumenOpen ? `<div class="adh-resumen">${adhPendientesHtml}</div>` : ""}`
         }
@@ -2721,6 +2711,8 @@ function getMovimientosReportes() {
     .filter(m => m.tipo === "INGRESO" || m.tipo === "EGRESO")
     .filter(m => !reportesState.meses.length  || reportesState.meses.includes(mesFromRecord(m)))
     .filter(m => !reportesState.cuentas.length || reportesState.cuentas.includes(m.cuenta))
+    .filter(m => !reportesState.categoria || m.categoria === reportesState.categoria)
+    .filter(m => !reportesState.rubroCod  || m.codRubro === reportesState.rubroCod)
     .filter(m => !reportesState.jugadorCT || normStr(m.jugadorCT).includes(normStr(reportesState.jugadorCT)))
     .filter(m => !reportesState.adherente || normStr(m.adherente).includes(normStr(reportesState.adherente)))
     .filter(m => {
@@ -2767,8 +2759,16 @@ function renderReportesTab() {
     `<button class="pill sm ${reportesState.cuentas.includes(c)?"active":""}" onclick="toggleReportesCuenta('${esc(escJs(c))}')">${esc(c)}</button>`
   ).join("");
 
+  const categorias = [...new Set(RUBROS.map(r => r.cat))].sort();
+  const rubrosDisponibles = RUBROS
+    .filter(r => !reportesState.categoria || r.cat === reportesState.categoria)
+    .sort((a,b) => a.nombre.localeCompare(b.nombre));
+
   return `
-    <div class="sec-hdr" style="margin-top:16px"><span class="sec-title">Reportes</span></div>
+    <div class="sec-hdr" style="margin-top:16px">
+      <span class="sec-title">Reportes</span>
+      <button class="btn-sm accent" onclick="exportReportesExcel()">📥 Excel</button>
+    </div>
 
     <div class="filter-row" style="align-items:center">
       <button class="mes-sel-btn" onclick="changeReportesAnio(-1)">◀</button>
@@ -2779,6 +2779,17 @@ function renderReportesTab() {
     <div class="filter-row">${mesChips}</div>
 
     <div class="filter-row">${cuentaChips || '<span class="note">Sin cuentas configuradas</span>'}</div>
+
+    <div class="filter-row" style="gap:8px">
+      <select class="inp" style="flex:1" onchange="setReportesCategoria(this.value)">
+        <option value="">— Todas las categorías —</option>
+        ${categorias.map(c => `<option value="${esc(c)}" ${reportesState.categoria===c?"selected":""}>${esc(c)}</option>`).join("")}
+      </select>
+      <select class="inp" style="flex:1" onchange="setReportesRubro(this.value)">
+        <option value="">— Todos los rubros —</option>
+        ${rubrosDisponibles.map(r => `<option value="${esc(r.cod)}" ${reportesState.rubroCod===r.cod?"selected":""}>${esc(r.nombre)}</option>`).join("")}
+      </select>
+    </div>
 
     <div class="filter-row" style="gap:8px">
       <div class="ss-filter-wrap">
@@ -2805,8 +2816,6 @@ function renderReportesTab() {
       <input class="inp" type="search" placeholder="Buscar en concepto / observación…" value="${esc(reportesState.search)}"
              oninput="reportesState.search=this.value; document.getElementById('reportes-body').innerHTML=renderReportesBody()">
     </div>
-
-    <button class="btn-export" style="margin-bottom:14px" onclick="exportReportesExcel()">📥 Exportar a Excel</button>
 
     <div id="reportes-body">${renderReportesBody()}</div>
   `;
@@ -2909,6 +2918,17 @@ function toggleReportesAnioCompleto() {
 function toggleReportesCuenta(c) {
   const i = reportesState.cuentas.indexOf(c);
   if (i === -1) reportesState.cuentas.push(c); else reportesState.cuentas.splice(i, 1);
+  renderResumen();
+}
+
+function setReportesCategoria(v) {
+  reportesState.categoria = v;
+  reportesState.rubroCod = ""; // el rubro elegido puede no pertenecer a la nueva categoría
+  renderResumen();
+}
+
+function setReportesRubro(v) {
+  reportesState.rubroCod = v;
   renderResumen();
 }
 
@@ -3947,6 +3967,35 @@ function calcPendientesMesActual() {
     }
   }
   return { mesActual, pendientePorNombre, totalPendiente };
+}
+
+// Igual criterio que calcPendientesMesActual() (cuota mensual pendiente si está definida,
+// o "no aportó nada este mes" si no hay cuota configurada), pero para un mes arbitrario y
+// con el universo de nombres ampliado: como muchos clubes no cargan una lista formal de
+// "adherentes" (la entidad puede estar vacía), el nombre del adherente sale del propio
+// movimiento (m.adherente) — sin esto, cualquier club sin entidades registradas vería
+// siempre "sin adherentes" en Resumen > Mensual aunque tenga aportes reales cargados.
+function calcPendientesEnMes(mes) {
+  const aportadoPorNombre = {};
+  const nombres = new Set(adherentes.map(a => a.nombre));
+  for (const m of movimientos) {
+    if (!ADH_RUBROS.includes(m.codRubro) || m.tipo !== "INGRESO") continue;
+    const key = m.adherente || (m.codRubro === "42" ? "⛽ Combustible" : "Sin adherente");
+    nombres.add(key);
+    if (mesFromRecord(m) === mes) aportadoPorNombre[key] = (aportadoPorNombre[key] || 0) + m.ingreso;
+  }
+  const cuotaPorNombre = {};
+  for (const a of adherentes) cuotaPorNombre[a.nombre] = a.cuotaMensual || 0;
+
+  const pendientes = [];
+  for (const nombre of nombres) {
+    const aportado = aportadoPorNombre[nombre] || 0;
+    const cuota = cuotaPorNombre[nombre] || 0;
+    const estaPendiente = cuota > 0 ? (cuota - aportado) > TOL : aportado <= TOL;
+    if (estaPendiente) pendientes.push(nombre);
+  }
+  pendientes.sort((a,b) => a.localeCompare(b));
+  return { pendientes, totalCount: nombres.size, pagadosCount: nombres.size - pendientes.length };
 }
 
 let adhResumenSoloPendientesMes = false;

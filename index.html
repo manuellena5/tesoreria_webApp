@@ -249,6 +249,9 @@ textarea.inp { resize:none; }
 .sum-table td.egr { color:var(--red);   font-family:var(--mono); text-align:right; }
 .sum-table td.net { color:var(--text);  font-family:var(--mono); text-align:right; font-weight:600; }
 .sum-table tr:last-child td { border-bottom:none; }
+.sum-table tr.sum-table-row-toggle { cursor:pointer; }
+.sum-table tr.sum-table-row-toggle:active { background:var(--bg3); }
+.sum-table tr.sum-table-detail-row td { background:var(--bg2); }
 .reint-row { cursor:pointer; transition:background .12s; }
 .reint-row:active { background:var(--bg3); }
 .reint-row.row-ok { opacity:.55; }
@@ -675,27 +678,27 @@ textarea.inp { resize:none; }
     margin-bottom: 0 !important;
   }
 
-  /* Saldo por cuenta: de lista apilada a tarjetas cuadradas tipo KPI,
-     4 columnas por fila (tantas filas como cuentas haya). */
+  /* Saldo por cuenta: chips compactos (nombre + saldo en una fila), con
+     auto-fill para que entren tantas columnas como quepan por fila en vez
+     de una grilla fija de 4 tarjetas cuadradas. */
   #app.tab-resumen .cuenta-list {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 8px;
   }
   #app.tab-resumen .cuenta-list .cuenta-item.cuenta-item-kpi {
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
     justify-content: center;
-    gap: 6px;
-    aspect-ratio: 1 / 1;
-    text-align: center;
-    padding: 10px;
+    gap: 2px;
+    padding: 6px 10px;
   }
   #app.tab-resumen .cuenta-list .cuenta-item-row {
-    width: auto;
-    flex-direction: column;
+    width: 100%;
+    flex-direction: row;
     align-items: center;
-    gap: 4px;
+    justify-content: space-between;
+    gap: 8px;
   }
   #app.tab-resumen .cuenta-list .cuenta-nombre {
     font-size: 12px;
@@ -703,13 +706,14 @@ textarea.inp { resize:none; }
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 100%;
+    max-width: 60%;
   }
   #app.tab-resumen .cuenta-list .cuenta-saldo {
-    font-size: 17px;
+    font-size: 14px;
   }
   #app.tab-resumen .cuenta-list .cuenta-adj-note {
     margin-top: 0;
+    font-size: 10px;
   }
 }
 </style>
@@ -832,6 +836,7 @@ let appVersionActual = null;
 
 const MESES_LABELS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                        "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const MESES_ABBR = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 
 const DEFAULT_CUENTAS = ["MACRO","NARANJA X","MUTUAL","EFECTIVO","MP","UALA","MUTUAL - Plazo Fijo"];
 const DEFAULT_METODOS = ["EFECTIVO","TRANSFERENCIA","CHEQUE"];
@@ -887,6 +892,18 @@ let entidadesTab  = "jugadores";
 let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", search: "" };
 let F             = buildDefaultF();
 let resumenSubTab     = "mensual";
+let catResExpandido   = new Set();
+let adhResumenOpen    = false;
+let reportesState = {
+  anio: nowMes().slice(0,4),
+  meses: [nowMes()],
+  cuentas: [],
+  jugadorCT: "",
+  adherente: "",
+  search: "",
+  catExpandido: new Set(),
+  rubroExpandido: new Set(),
+};
 let reintegroAnio     = String(new Date().getFullYear());
 let reintegroExpandido = new Set();
 let reintegroVista     = getDefaultVista("reintegros_vista");
@@ -2193,7 +2210,11 @@ function clearListFilters() {
 function changeMes(delta) {
   sharedMes = delta < 0 ? prevMes(sharedMes) : nextMes(sharedMes);
   if (currentTab === "movimientos") renderMovimientos();
-  else if (currentTab === "resumen") renderResumen();
+  else if (currentTab === "resumen") {
+    catResExpandido.clear();
+    adhResumenOpen = false;
+    renderResumen();
+  }
 }
 
 function openMovModal(id) {
@@ -2349,28 +2370,44 @@ function renderResumen() {
   // Saldo por cuenta (todos los movimientos)
   const saldosCuentas = calcSaldosCuentas(movHasta);
 
-  // Categorías del mes (egresos)
+  // Categorías del mes (egresos), con desglose por rubro dentro de cada una
   const catMap = {};
   for (const m of movMes) {
     if (m.tipo !== "EGRESO" && m.tipo !== "INGRESO") continue;
-    if (!catMap[m.categoria]) catMap[m.categoria] = { ing:0, egr:0 };
-    if (m.tipo === "INGRESO") catMap[m.categoria].ing += m.ingreso;
-    else catMap[m.categoria].egr += m.egreso;
+    if (!catMap[m.categoria]) catMap[m.categoria] = { ing:0, egr:0, rubros:{} };
+    const cd = catMap[m.categoria];
+    const rubroKey = m.codRubro || m.rubro || "(sin rubro)";
+    if (!cd.rubros[rubroKey]) {
+      const rubroNombre = m.rubro || RUBROS.find(r => r.cod === m.codRubro)?.nombre || "(sin rubro)";
+      cd.rubros[rubroKey] = { nombre: rubroNombre, ing:0, egr:0 };
+    }
+    if (m.tipo === "INGRESO") { cd.ing += m.ingreso; cd.rubros[rubroKey].ing += m.ingreso; }
+    else { cd.egr += m.egreso; cd.rubros[rubroKey].egr += m.egreso; }
   }
   const catItems = Object.entries(catMap)
-    .map(([cat, v]) => ({ cat, ...v }))
+    .map(([cat, v]) => ({ cat, ing:v.ing, egr:v.egr, rubros: Object.values(v.rubros).sort((a,b) => b.egr - a.egr) }))
     .filter(d => d.egr > 0 || d.ing > 0)
     .sort((a,b) => b.egr - a.egr);
 
-  // Table
+  // Table — fila de categoría clickeable, expande el detalle por rubro debajo
   const tableRows = catItems.map(d => {
     const neto = d.ing - d.egr;
-    return `<tr>
-      <td>${esc(d.cat)}</td>
+    const isExp = catResExpandido.has(d.cat);
+    const detalleHtml = isExp ? d.rubros.map(r => {
+      const rn = r.ing - r.egr;
+      return `<tr class="sum-table-detail-row">
+        <td style="padding-left:22px;font-size:11px;color:var(--text3)">${esc(r.nombre)}</td>
+        <td class="ing" style="font-size:11px">${r.ing?fmt(r.ing):""}</td>
+        <td class="egr" style="font-size:11px">${r.egr?fmt(r.egr):""}</td>
+        <td class="net ${rn>=0?"":"egr"}" style="font-size:11px">${rn>=0?"+":"−"}${fmt(rn)}</td>
+      </tr>`;
+    }).join("") : "";
+    return `<tr class="sum-table-row-toggle" onclick="toggleCatRes('${esc(escJs(d.cat))}')">
+      <td>${isExp?"▾":"▸"} ${esc(d.cat)}</td>
       <td class="ing">${d.ing?fmt(d.ing):""}</td>
       <td class="egr">${d.egr?fmt(d.egr):""}</td>
       <td class="net ${neto>=0?"":"egr"}">${neto>=0?"+":"−"}${fmt(neto)}</td>
-    </tr>`;
+    </tr>${detalleHtml}`;
   }).join("");
 
   // Adherentes del mes
@@ -2384,14 +2421,13 @@ function renderResumen() {
     const movPago = adhMovMes.find(m => m.adherente.toLowerCase().trim() === adh.nombre.toLowerCase().trim());
     return movPago ? "PAGADO" : "PENDIENTE";
   }
-  const adhResumen = adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(adh => {
-    const estado = resolveEstado(adh);
-    return `<div class="adh-item-res">
+  const adherentesOrdenados = adherentes.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const adhPendientes = adherentesOrdenados.filter(adh => resolveEstado(adh) === "PENDIENTE");
+  const pagadosCount = adherentes.length - adhPendientes.length;
+  const adhPendientesHtml = adhPendientes.map(adh => `<div class="adh-item-res">
       <span class="nombre">${esc(adh.nombre)}</span>
-      <span class="adh-estado ${estado==="PAGADO"?"pagado":"pendiente"}">${estado}</span>
-    </div>`;
-  }).join("");
-  const pagadosCount = adherentes.filter(adh => resolveEstado(adh) === "PAGADO").length;
+      <span class="adh-estado pendiente">PENDIENTE</span>
+    </div>`).join("");
 
   // Top 10 jugadores/CT por monto neto (egresos - ingresos) en el mes
   const jugMontoMes = {};
@@ -2471,6 +2507,7 @@ function renderResumen() {
   const subTabsHtml = `
     <div class="entity-tabs entity-tabs--wrap">
       <button class="entity-tab ${resumenSubTab==='mensual'?'active':''}"    onclick="setResumenSubTab('mensual')">Mensual</button>
+      <button class="entity-tab ${resumenSubTab==='reportes'?'active':''}"   onclick="setResumenSubTab('reportes')">Reportes</button>
       <button class="entity-tab ${resumenSubTab==='partido'?'active':''}"    onclick="setResumenSubTab('partido')">Por Partido</button>
       <button class="entity-tab ${resumenSubTab==='reintegros'?'active':''}" onclick="setResumenSubTab('reintegros')">Reintegros${pendienteGlobal>0?" 🏥":""}</button>
       <button class="entity-tab ${resumenSubTab==='adherentes'?'active':''}" onclick="setResumenSubTab('adherentes')">Adherentes${adherentePendienteGlobal>0?" 👥":""}</button>
@@ -2530,11 +2567,17 @@ function renderResumen() {
 
         <div class="sec-hdr">
           <span class="sec-title">Adherentes — ${mesLabel(sharedMes)}</span>
-          <span class="note">${pagadosCount}/${adherentes.length} pagados</span>
         </div>
-        <div class="adh-resumen">
-          ${adhResumen || '<p class="note">Sin adherentes registrados</p>'}
-        </div>
+        ${!adherentes.length ? `<p class="note">Sin adherentes registrados</p>` :
+          !adhPendientes.length ? `
+          <button class="reint-aldia-toggle" style="cursor:default">
+            ${pagadosCount}/${adherentes.length} pagados — Todos al día ✓
+          </button>` : `
+          <button class="reint-aldia-toggle" onclick="toggleAdhResumenOpen()">
+            ${pagadosCount}/${adherentes.length} pagados — ${adhPendientes.length} pendientes ${adhResumenOpen?"▲":"▼"}
+          </button>
+          ${adhResumenOpen ? `<div class="adh-resumen">${adhPendientesHtml}</div>` : ""}`
+        }
       </div>
 
       <div>
@@ -2567,6 +2610,8 @@ function renderResumen() {
       </div>
     </div>
     ` : ""}
+
+    ${resumenSubTab === "reportes" ? renderReportesTab() : ""}
 
     ${resumenSubTab === "partido" ? (() => {
       // Tabla por partido
@@ -2664,6 +2709,254 @@ function renderResumen() {
   `);
 }
 
+// ── Reportes: tabla jerárquica Categoría → Rubro → Movimiento, con filtros
+// combinables (meses multi-selección, cuentas multi-selección, jugador/CT,
+// adherente, búsqueda libre). Estado persistente en reportesState. ──────
+
+// Movimientos filtrados por todos los criterios de reportesState (AND entre sí).
+// meses/cuentas vacíos = sin filtro (todos). Solo INGRESO/EGRESO entran en la agregación
+// por categoría/rubro (mismo criterio que la tabla por categoría de Mensual).
+function getMovimientosReportes() {
+  return movimientos
+    .filter(m => m.tipo === "INGRESO" || m.tipo === "EGRESO")
+    .filter(m => !reportesState.meses.length  || reportesState.meses.includes(mesFromRecord(m)))
+    .filter(m => !reportesState.cuentas.length || reportesState.cuentas.includes(m.cuenta))
+    .filter(m => !reportesState.jugadorCT || normStr(m.jugadorCT).includes(normStr(reportesState.jugadorCT)))
+    .filter(m => !reportesState.adherente || normStr(m.adherente).includes(normStr(reportesState.adherente)))
+    .filter(m => {
+      const q = normStr(reportesState.search);
+      return !q || normStr(m.concepto).includes(q) || normStr(m.observacion).includes(q);
+    });
+}
+
+// Agrupa movimientos ya filtrados en Categoría → Rubro → lista de movimientos.
+function buildReportesJerarquia(movs) {
+  const catMap = {};
+  for (const m of movs) {
+    const cat = m.categoria || "(sin categoría)";
+    if (!catMap[cat]) catMap[cat] = { ing:0, egr:0, count:0, rubros:{} };
+    const cd = catMap[cat];
+    cd.count++;
+    const rubroKey = m.codRubro || m.rubro || "(sin rubro)";
+    if (!cd.rubros[rubroKey]) {
+      const rubroNombre = m.rubro || RUBROS.find(r => r.cod === m.codRubro)?.nombre || "(sin rubro)";
+      cd.rubros[rubroKey] = { nombre: rubroNombre, ing:0, egr:0, count:0, movs:[] };
+    }
+    const rd = cd.rubros[rubroKey];
+    rd.count++;
+    rd.movs.push(m);
+    if (m.tipo === "INGRESO") { cd.ing += m.ingreso; rd.ing += m.ingreso; }
+    else { cd.egr += m.egreso; rd.egr += m.egreso; }
+  }
+  return Object.entries(catMap)
+    .map(([cat, v]) => ({
+      cat, ing: v.ing, egr: v.egr, count: v.count,
+      rubros: Object.entries(v.rubros).map(([key, r]) => ({ key, ...r })).sort((a,b) => b.egr - a.egr),
+    }))
+    .sort((a,b) => b.egr - a.egr);
+}
+
+function renderReportesTab() {
+  const anio = reportesState.anio;
+  const mesesAnio = Array.from({length:12}, (_,i) => anio + "-" + String(i+1).padStart(2,"0"));
+  const anioCompletoActivo = mesesAnio.every(m => reportesState.meses.includes(m));
+  const mesChips = mesesAnio.map((m,i) =>
+    `<button class="pill sm ${reportesState.meses.includes(m)?"active":""}" onclick="toggleReportesMes('${m}')">${MESES_ABBR[i]}</button>`
+  ).join("");
+  const cuentaChips = cuentas.map(c =>
+    `<button class="pill sm ${reportesState.cuentas.includes(c)?"active":""}" onclick="toggleReportesCuenta('${esc(escJs(c))}')">${esc(c)}</button>`
+  ).join("");
+
+  return `
+    <div class="sec-hdr" style="margin-top:16px"><span class="sec-title">Reportes</span></div>
+
+    <div class="filter-row" style="align-items:center">
+      <button class="mes-sel-btn" onclick="changeReportesAnio(-1)">◀</button>
+      <span class="mes-sel-label">${anio}</span>
+      <button class="mes-sel-btn" onclick="changeReportesAnio(1)">▶</button>
+      <button class="pill sm ${anioCompletoActivo?"active":""}" onclick="toggleReportesAnioCompleto()">Año completo</button>
+    </div>
+    <div class="filter-row">${mesChips}</div>
+
+    <div class="filter-row">${cuentaChips || '<span class="note">Sin cuentas configuradas</span>'}</div>
+
+    <div class="filter-row" style="gap:8px">
+      <div class="ss-filter-wrap">
+        <input class="inp ss-filter-input" id="rep-fil-jug" list="dl-rep-jugs" placeholder="Jugador/CT…"
+               value="${esc(reportesState.jugadorCT)}"
+               oninput="reportesState.jugadorCT=this.value; document.getElementById('reportes-body').innerHTML=renderReportesBody()">
+        <datalist id="dl-rep-jugs">${[
+            ...jugadores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(j=>`<option value="${esc(j.nombre)}">`),
+            ...grupos.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(g=>`<option value="${esc(g.nombre)}">`),
+          ].join("")}</datalist>
+        ${reportesState.jugadorCT ? `<button class="ss-filter-clear" onclick="reportesState.jugadorCT=''; renderResumen()">✕</button>` : ""}
+      </div>
+      <div class="ss-filter-wrap">
+        <input class="inp ss-filter-input" id="rep-fil-adh" list="dl-rep-adhs" placeholder="Adherente…"
+               value="${esc(reportesState.adherente)}"
+               oninput="reportesState.adherente=this.value; document.getElementById('reportes-body').innerHTML=renderReportesBody()">
+        <datalist id="dl-rep-adhs">${adherentes.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(a=>`<option value="${esc(a.nombre)}">`).join("")}</datalist>
+        ${reportesState.adherente ? `<button class="ss-filter-clear" onclick="reportesState.adherente=''; renderResumen()">✕</button>` : ""}
+      </div>
+    </div>
+
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input class="inp" type="search" placeholder="Buscar en concepto / observación…" value="${esc(reportesState.search)}"
+             oninput="reportesState.search=this.value; document.getElementById('reportes-body').innerHTML=renderReportesBody()">
+    </div>
+
+    <button class="btn-export" style="margin-bottom:14px" onclick="exportReportesExcel()">📥 Exportar a Excel</button>
+
+    <div id="reportes-body">${renderReportesBody()}</div>
+  `;
+}
+
+function renderReportesBody() {
+  const movs = getMovimientosReportes();
+  if (!movs.length) {
+    return `<p class="note">Sin movimientos para estos filtros</p>`;
+  }
+
+  const jerarquia = buildReportesJerarquia(movs);
+  const totIng = movs.filter(m => m.tipo === "INGRESO").reduce((s,m) => s+m.ingreso, 0);
+  const totEgr = movs.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s+m.egreso,  0);
+  const totNeto = totIng - totEgr;
+
+  const rows = jerarquia.map(cat => {
+    const catNeto = cat.ing - cat.egr;
+    const catExp  = reportesState.catExpandido.has(cat.cat);
+    let rubroRows = "";
+    if (catExp) {
+      rubroRows = cat.rubros.map(r => {
+        const rKey  = cat.cat + "||" + r.key;
+        const rExp  = reportesState.rubroExpandido.has(rKey);
+        const rNeto = r.ing - r.egr;
+        let movRows = "";
+        if (rExp) {
+          const sortedMovs = [...r.movs].sort((a,b) => b.fecha.localeCompare(a.fecha));
+          movRows = `<tr class="sum-table-detail-row"><td colspan="4" style="padding:0">
+            <table class="sum-table" style="margin:0 0 0 20px;width:calc(100% - 20px)">
+              <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto</th><th>Cuenta</th></tr></thead>
+              <tbody>${sortedMovs.map(m => {
+                const fechaD = m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
+                const montoClass = m.tipo === "INGRESO" ? "ing" : "egr";
+                const montoVal   = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
+                const montoSign  = m.tipo === "INGRESO" ? "+" : "−";
+                return `<tr>
+                  <td style="font-size:11px">${esc(fechaD)}</td>
+                  <td style="font-size:11px">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</td>
+                  <td class="${montoClass}" style="font-size:11px">${montoSign}${fmt(montoVal)}</td>
+                  <td style="font-size:11px">${esc(m.cuenta)}</td>
+                </tr>`;
+              }).join("")}</tbody>
+            </table>
+          </td></tr>`;
+        }
+        return `<tr class="sum-table-row-toggle" onclick="toggleReportesRubro('${esc(escJs(rKey))}')">
+          <td style="padding-left:20px">${rExp?"▾":"▸"} ${esc(r.nombre)} <span class="note" style="font-size:10px">(${r.count})</span></td>
+          <td class="ing">${r.ing?fmt(r.ing):""}</td>
+          <td class="egr">${r.egr?fmt(r.egr):""}</td>
+          <td class="net ${rNeto>=0?"":"egr"}">${rNeto>=0?"+":"−"}${fmt(rNeto)}</td>
+        </tr>${movRows}`;
+      }).join("");
+    }
+    return `<tr class="sum-table-row-toggle" onclick="toggleReportesCat('${esc(escJs(cat.cat))}')">
+      <td>${catExp?"▾":"▸"} ${esc(cat.cat)} <span class="note" style="font-size:10px">(${cat.count})</span></td>
+      <td class="ing">${cat.ing?fmt(cat.ing):""}</td>
+      <td class="egr">${cat.egr?fmt(cat.egr):""}</td>
+      <td class="net ${catNeto>=0?"":"egr"}">${catNeto>=0?"+":"−"}${fmt(catNeto)}</td>
+    </tr>${rubroRows}`;
+  }).join("");
+
+  const totRow = `<tr style="font-weight:600">
+    <td>TOTAL PERÍODO FILTRADO</td>
+    <td class="ing">${fmt(totIng)}</td>
+    <td class="egr">${fmt(totEgr)}</td>
+    <td class="net ${totNeto>=0?"":"egr"}">${totNeto>=0?"+":"−"}${fmt(totNeto)}</td>
+  </tr>`;
+
+  return `
+    <p class="note" style="margin-bottom:8px">${movs.length} movimiento${movs.length!==1?"s":""}</p>
+    <table class="sum-table">
+      <thead><tr><th>Categoría / Rubro</th><th style="text-align:right">Ing.</th><th style="text-align:right">Egr.</th><th style="text-align:right">Neto</th></tr></thead>
+      <tbody>${rows}${totRow}</tbody>
+    </table>`;
+}
+
+function changeReportesAnio(delta) {
+  reportesState.anio = String(Number(reportesState.anio) + delta);
+  renderResumen();
+}
+
+function toggleReportesMes(mes) {
+  const i = reportesState.meses.indexOf(mes);
+  if (i === -1) reportesState.meses.push(mes); else reportesState.meses.splice(i, 1);
+  renderResumen();
+}
+
+function toggleReportesAnioCompleto() {
+  const mesesAnio = Array.from({length:12}, (_,i) => reportesState.anio + "-" + String(i+1).padStart(2,"0"));
+  const todosSel = mesesAnio.every(m => reportesState.meses.includes(m));
+  if (todosSel) {
+    reportesState.meses = reportesState.meses.filter(m => !mesesAnio.includes(m));
+  } else {
+    for (const m of mesesAnio) if (!reportesState.meses.includes(m)) reportesState.meses.push(m);
+  }
+  renderResumen();
+}
+
+function toggleReportesCuenta(c) {
+  const i = reportesState.cuentas.indexOf(c);
+  if (i === -1) reportesState.cuentas.push(c); else reportesState.cuentas.splice(i, 1);
+  renderResumen();
+}
+
+function toggleReportesCat(cat) {
+  if (reportesState.catExpandido.has(cat)) reportesState.catExpandido.delete(cat);
+  else reportesState.catExpandido.add(cat);
+  renderResumen();
+}
+
+function toggleReportesRubro(key) {
+  if (reportesState.rubroExpandido.has(key)) reportesState.rubroExpandido.delete(key);
+  else reportesState.rubroExpandido.add(key);
+  renderResumen();
+}
+
+// Exporta exactamente la jerarquía Categoría → Rubro → Movimiento visible en pantalla,
+// ya filtrada por reportesState (meses/cuentas/jugador/adherente/búsqueda).
+function exportReportesExcel() {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+  const movs = getMovimientosReportes();
+  if (!movs.length) { toast("No hay movimientos para exportar con estos filtros", "err"); return; }
+
+  const jerarquia = buildReportesJerarquia(movs);
+  const headers = ["Categoría","Rubro","Fecha","Concepto","Ingreso","Egreso","Cuenta"];
+  const rows = [];
+  let totIng = 0, totEgr = 0;
+  for (const cat of jerarquia) {
+    rows.push([cat.cat, "", "", "", cat.ing || "", cat.egr || "", ""]);
+    for (const r of cat.rubros) {
+      rows.push(["", r.nombre, "", "", r.ing || "", r.egr || "", ""]);
+      const sorted = [...r.movs].sort((a,b) => a.fecha.localeCompare(b.fecha));
+      for (const m of sorted) {
+        rows.push(["", "", m.fecha, m.concepto || "",
+          m.tipo==="INGRESO" ? m.ingreso : "", m.tipo==="EGRESO" ? m.egreso : "", m.cuenta || ""]);
+      }
+    }
+    totIng += cat.ing; totEgr += cat.egr;
+  }
+  rows.push(["TOTAL PERÍODO FILTRADO", "", "", "", totIng, totEgr, ""]);
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws["!cols"] = [26,26,10,30,12,12,16].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, "Reportes");
+  XLSX.writeFile(wb, `tesoreria_reportes_${today()}.xlsx`);
+  toast("Excel exportado ✓", "ok");
+}
+
 // ── Patrimonio: saldo de cuentas + valor de granos en stock ──────
 function renderPatrimonio() {
   const saldos = calcSaldosCuentas(movimientos);
@@ -2759,6 +3052,19 @@ function setResumenSubTab(tab) {
   reintegroExpandido.clear();
   adherenteExpandido.clear();
   jugadorResExpandido.clear();
+  catResExpandido.clear();
+  adhResumenOpen = false;
+  renderResumen();
+}
+
+function toggleCatRes(cat) {
+  if (catResExpandido.has(cat)) catResExpandido.delete(cat);
+  else catResExpandido.add(cat);
+  renderResumen();
+}
+
+function toggleAdhResumenOpen() {
+  adhResumenOpen = !adhResumenOpen;
   renderResumen();
 }
 

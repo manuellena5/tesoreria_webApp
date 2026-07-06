@@ -943,10 +943,11 @@ let adherenteAnio       = String(new Date().getFullYear());
 let adherenteExpandido  = new Set();
 let adherenteVista      = getDefaultVista("adherentes_vista");
 let jugadorResAnio       = String(new Date().getFullYear());
-let jugadorResMes        = "";
+let jugadorResMeses      = null; // array de "MM" seleccionados; null = todavía no inicializado (se carga con todo el año disponible)
 let jugadorResExpandido  = new Set();
 let jugadorResVista       = getDefaultVista("jugadores_vista");
-let jugadorResAgrupacion  = localStorage.getItem("jugadores_agrupacion") || "jugador";
+let jugadorResAgrupacion  = localStorage.getItem("jugadores_agrupacion") || "jugador"; // "jugador" | "grupo" | "promedios"
+let jugadorResFiltro     = "";
 let eventoResAnio       = String(new Date().getFullYear());
 let eventoResMes        = "";
 let eventoResExpandido  = new Set();
@@ -4531,13 +4532,29 @@ function renderAdherenteDetalle(r) {
 // ── Jugadores — gastos/recuperos netos por jugador o grupo ──────
 function setJugadorResAnio(v) {
   jugadorResAnio = v;
-  jugadorResMes = "";
+  jugadorResMeses = null; // se reinicializa con "todo el año" del nuevo año al renderizar
   jugadorResExpandido.clear();
   renderResumen();
 }
 
-function setJugadorResMes(v) {
-  jugadorResMes = v;
+// Meses (MM) con al menos un movimiento de jugador/grupo dentro del año dado ("" = sin año → [])
+function jugadorResMesesDisponibles(anio) {
+  if (!anio) return [];
+  const movsAll = movimientos.filter(m => m.jugadorCT && jugadorResCategoria(m.codRubro) !== null);
+  return [...new Set(movsAll.filter(m => m.fecha.slice(0,4) === anio).map(m => m.fecha.slice(5,7)))].sort();
+}
+
+function toggleJugadorResMes(mes) {
+  const i = jugadorResMeses.indexOf(mes);
+  if (i === -1) jugadorResMeses.push(mes); else jugadorResMeses.splice(i, 1);
+  jugadorResExpandido.clear();
+  renderResumen();
+}
+
+function toggleJugadorResTodoElAnio() {
+  const mesesDisponibles = jugadorResMesesDisponibles(jugadorResAnio);
+  const todosSel = mesesDisponibles.length && mesesDisponibles.every(mm => jugadorResMeses.includes(mm));
+  jugadorResMeses = todosSel ? [] : [...mesesDisponibles];
   jugadorResExpandido.clear();
   renderResumen();
 }
@@ -4579,23 +4596,27 @@ function jugadorResMiembrosNombres(grupo) {
 }
 
 // anio: string "YYYY" para filtrar, o "" para todos los años
-// mes: string "MM" para filtrar dentro del año seleccionado, o "" para todo el año
-// agrupacion: "jugador" (prorratea grupos entre miembros) o "grupo" (solo grupos, monto completo)
-function calcJugadoresResumen(anio, mes, agrupacion) {
+// meses: array de "MM" a incluir dentro del año seleccionado (se ignora si anio === "")
+// agrupacion: "jugador" o "promedios" → una fila por jugador individual (solo sus movimientos directos)
+//             y una fila por grupo (monto completo, sin prorratear entre miembros).
+//             "grupo" → solo grupos, monto completo (sin filas de jugadores individuales).
+function calcJugadoresResumen(anio, meses, agrupacion) {
+  const agrupEfectiva = agrupacion === "promedios" ? "jugador" : agrupacion;
+  const mesesSet = new Set(meses || []);
   const movs = movimientos.filter(m => {
     if (!m.jugadorCT) return false;
     if (anio && m.fecha.slice(0,4) !== anio) return false;
-    if (anio && mes && m.fecha.slice(5,7) !== mes) return false;
+    if (anio && !mesesSet.has(m.fecha.slice(5,7))) return false;
     return jugadorResCategoria(m.codRubro) !== null;
   });
 
   const map = {};
   function ensure(key, esGrupo) {
-    if (!map[key]) map[key] = { nombre:key, esGrupo, sueldos:0, movilidad:0, viandas:0, almacen:0, alquilerCasa:0, medico:0, otros:0, movimientos:[] };
+    if (!map[key]) map[key] = { nombre:key, esGrupo, sueldos:0, movilidad:0, viandas:0, almacen:0, alquilerCasa:0, medico:0, otros:0, movimientos:[], mesesSet:new Set() };
     return map[key];
   }
 
-  if (agrupacion === "grupo") {
+  if (agrupEfectiva === "grupo") {
     for (const m of movs) {
       const grupo = grupos.find(g => g.nombre === m.jugadorCT);
       if (!grupo) continue;
@@ -4603,51 +4624,44 @@ function calcJugadoresResumen(anio, mes, agrupacion) {
       const neto = m.ingreso - m.egreso;
       const row  = ensure(grupo.nombre, true);
       row[cat] += neto;
-      row.movimientos.push({ ...m, montoAplicado: neto, prorrateado: false });
+      row.mesesSet.add(m.fecha.slice(0,7));
+      row.movimientos.push({ ...m, montoAplicado: neto });
     }
     for (const key in map) {
       const grupo = grupos.find(g => g.nombre === key);
       map[key].miembros = grupo ? jugadorResMiembrosNombres(grupo) : [];
     }
   } else {
-    const directos = movs.filter(m => !grupos.some(g => g.nombre === m.jugadorCT));
-    const grupales = movs.filter(m => grupos.some(g => g.nombre === m.jugadorCT));
-
-    for (const m of directos) {
-      const cat  = jugadorResCategoria(m.codRubro);
-      const neto = m.ingreso - m.egreso;
-      const row  = ensure(m.jugadorCT, false);
-      row[cat] += neto;
-      row.movimientos.push({ ...m, montoAplicado: neto, prorrateado: false });
-    }
-
-    for (const m of grupales) {
+    // Cada movimiento va entero a su fila: si jugadorCT es un grupo, a la fila del grupo;
+    // si es un jugador individual, a su propia fila. Sin prorrateo entre miembros.
+    for (const m of movs) {
       const grupo = grupos.find(g => g.nombre === m.jugadorCT);
       const cat   = jugadorResCategoria(m.codRubro);
       const neto  = m.ingreso - m.egreso;
-      const nombresMiembros = jugadorResMiembrosNombres(grupo);
-
-      if (!nombresMiembros.length) {
-        const row = ensure(grupo.nombre, true);
-        row[cat] += neto;
-        row.movimientos.push({ ...m, montoAplicado: neto, prorrateado: false, grupoOriginal: grupo.nombre, montoOriginal: neto });
-        continue;
-      }
-
-      const n = nombresMiembros.length;
-      let acumulado = 0;
-      nombresMiembros.forEach((nombre, idx) => {
-        const esUltimo = idx === n - 1;
-        const monto = esUltimo ? (neto - acumulado) : Math.round(neto / n);
-        acumulado += monto;
-        const row = ensure(nombre, false);
-        row[cat] += monto;
-        row.movimientos.push({ ...m, montoAplicado: monto, prorrateado: true, grupoOriginal: grupo.nombre, montoOriginal: neto, miembrosCount: n });
-      });
+      const row   = grupo ? ensure(grupo.nombre, true) : ensure(m.jugadorCT, false);
+      row[cat] += neto;
+      row.mesesSet.add(m.fecha.slice(0,7));
+      row.movimientos.push({ ...m, montoAplicado: neto });
+    }
+    for (const key in map) {
+      const grupo = grupos.find(g => g.nombre === key);
+      if (grupo) map[key].miembros = jugadorResMiembrosNombres(grupo);
     }
   }
 
-  return Object.values(map).map(r => ({ ...r, total: r.sueldos + r.movilidad + r.viandas + r.almacen + r.alquilerCasa + r.medico + r.otros }));
+  const CATS = ["sueldos","movilidad","viandas","almacen","alquilerCasa","medico","otros"];
+  return Object.values(map).map(r => {
+    const mesesConGasto = r.mesesSet.size;
+    const row = { ...r, total: r.sueldos + r.movilidad + r.viandas + r.almacen + r.alquilerCasa + r.medico + r.otros, mesesConGasto };
+    delete row.mesesSet;
+    if (agrupacion !== "promedios" || !mesesConGasto) return row;
+    // Promedio: cada categoría se divide por la cantidad de meses seleccionados en que
+    // este jugador/grupo tuvo algún movimiento (no por el total de meses seleccionados),
+    // para no diluir el promedio de quien se sumó o dejó de cobrar a mitad de período.
+    for (const c of CATS) row[c] = Math.round(row[c] / mesesConGasto);
+    row.total = Math.round(row.total / mesesConGasto);
+    return row;
+  });
 }
 
 function renderJugadoresResumen() {
@@ -4658,25 +4672,22 @@ function renderJugadoresResumen() {
   }
 
   // El filtro por mes solo aplica cuando hay un año específico seleccionado
-  const mesesDisponibles = jugadorResAnio
-    ? [...new Set(movsAll.filter(m => m.fecha.slice(0,4) === jugadorResAnio).map(m => m.fecha.slice(5,7)))].sort()
-    : [];
-  if (jugadorResMes && !mesesDisponibles.includes(jugadorResMes)) jugadorResMes = "";
-
-  const rows = calcJugadoresResumen(jugadorResAnio, jugadorResMes, jugadorResAgrupacion)
-    .sort((a,b) => Math.abs(b.total) - Math.abs(a.total));
+  const mesesDisponibles = jugadorResMesesDisponibles(jugadorResAnio);
+  if (jugadorResMeses === null) {
+    jugadorResMeses = [...mesesDisponibles]; // por defecto: todo el año
+  } else {
+    jugadorResMeses = jugadorResMeses.filter(mm => mesesDisponibles.includes(mm));
+  }
 
   const anioOptions = `<option value="" ${jugadorResAnio===""?"selected":""}>Todos los años</option>` +
     anios.map(a => `<option value="${a}" ${jugadorResAnio===a?"selected":""}>${a}</option>`).join("");
 
-  const mesSelector = jugadorResAnio ? `
-        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
-          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Mes:</label>
-          <select class="inp" style="flex:1" onchange="setJugadorResMes(this.value)">
-            <option value="" ${jugadorResMes===""?"selected":""}>Todo el año</option>
-            ${mesesDisponibles.map(mm => `<option value="${mm}" ${jugadorResMes===mm?"selected":""}>${MESES_LABELS[Number(mm)-1]}</option>`).join("")}
-          </select>
-        </div>` : "";
+  const anioCompletoActivo = mesesDisponibles.length > 0 && mesesDisponibles.every(mm => jugadorResMeses.includes(mm));
+  const mesChips = jugadorResAnio ? `
+    <div class="filter-row" style="margin-top:4px">
+      <button class="pill sm ${anioCompletoActivo?"active":""}" onclick="toggleJugadorResTodoElAnio()">Todo el año</button>
+      ${mesesDisponibles.map(mm => `<button class="pill sm ${jugadorResMeses.includes(mm)?"active":""}" onclick="toggleJugadorResMes('${mm}')">${MESES_ABBR[Number(mm)-1]}</button>`).join("")}
+    </div>` : "";
 
   const viewToggle = `
     <div class="reint-view-toggle">
@@ -4688,15 +4699,8 @@ function renderJugadoresResumen() {
     <div class="reint-view-toggle">
       <button class="reint-view-btn ${jugadorResAgrupacion==='jugador'?'active':''}" onclick="setJugadorResAgrupacion('jugador')">👤 Por Jugador</button>
       <button class="reint-view-btn ${jugadorResAgrupacion==='grupo'?'active':''}" onclick="setJugadorResAgrupacion('grupo')">👥 Por Grupo</button>
+      <button class="reint-view-btn ${jugadorResAgrupacion==='promedios'?'active':''}" onclick="setJugadorResAgrupacion('promedios')">📊 Promedios</button>
     </div>`;
-
-  const totalGastado = rows.reduce((s,r) => s + (r.total < 0 ? -r.total : 0), 0);
-  const periodoTxt = jugadorResMes ? ` (${MESES_LABELS[Number(jugadorResMes)-1]})` : "";
-  const totalesLine = `${rows.length} ${jugadorResAgrupacion==='grupo'?'grupo':'jugador'}${rows.length!==1?"s":""}${periodoTxt} · Total gastado: ${fmt(totalGastado)}`;
-
-  const body = !rows.length
-    ? `<p class="note" style="text-align:center;padding:16px 0">Sin movimientos con jugador/grupo asignado</p>`
-    : jugadorResVista === "cards" ? renderJugadoresResCards(rows) : renderJugadoresResTabla(rows);
 
   return `
     <div class="reint-section">
@@ -4705,16 +4709,46 @@ function renderJugadoresResumen() {
           <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
           <select class="inp" style="flex:1" onchange="setJugadorResAnio(this.value)">${anioOptions}</select>
         </div>
-        ${mesSelector}
         ${viewToggle}
       </div>
-      <div style="margin-bottom:8px">${agrupacionToggle}</div>
-      <p class="note" style="margin-bottom:12px">${totalesLine}</p>
-      ${body}
+      ${mesChips}
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0 8px;flex-wrap:wrap">
+        ${agrupacionToggle}
+        <button class="btn-sm accent" onclick="exportJugadoresResExcel()">📥 Exportar a Excel</button>
+      </div>
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input class="inp" type="search" placeholder="Buscar jugador o grupo…" value="${esc(jugadorResFiltro)}"
+               oninput="jugadorResFiltro=this.value; document.getElementById('jugadores-res-body').innerHTML=renderJugadoresResBody()">
+      </div>
+      <div id="jugadores-res-body">${renderJugadoresResBody()}</div>
     </div>`;
 }
 
-function renderJugadoresResTabla(rows) {
+// Recalcula filas + tabla/cards según año/meses/agrupación/búsqueda vigentes.
+// Separado de renderJugadoresResumen para poder re-renderizar solo esto al tipear en el buscador.
+function renderJugadoresResBody() {
+  const rows = calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
+    .filter(r => !jugadorResFiltro || normStr(r.nombre).includes(normStr(jugadorResFiltro)))
+    .sort((a,b) => Math.abs(b.total) - Math.abs(a.total));
+
+  const esPromedios = jugadorResAgrupacion === "promedios";
+  const mesesDisponibles = jugadorResMesesDisponibles(jugadorResAnio);
+  const totalGastado = rows.reduce((s,r) => s + (r.total < 0 ? -r.total : 0), 0);
+  const periodoTxt = (jugadorResAnio && mesesDisponibles.length && jugadorResMeses.length !== mesesDisponibles.length)
+    ? ` (${jugadorResMeses.slice().sort().map(mm => MESES_ABBR[Number(mm)-1]).join(", ") || "sin meses"})`
+    : "";
+  const totalLabel = esPromedios ? "Promedio mensual gastado" : "Total gastado";
+  const totalesLine = `${rows.length} ${jugadorResAgrupacion==='grupo'?'grupo':'jugador'}${rows.length!==1?"s":""}${periodoTxt} · ${totalLabel}: ${fmt(totalGastado)}`;
+
+  const body = !rows.length
+    ? `<p class="note" style="text-align:center;padding:16px 0">Sin movimientos con jugador/grupo asignado${jugadorResFiltro?" para esa búsqueda":""}</p>`
+    : jugadorResVista === "cards" ? renderJugadoresResCards(rows, esPromedios) : renderJugadoresResTabla(rows, esPromedios);
+
+  return `<p class="note" style="margin-bottom:12px">${totalesLine}</p>${body}`;
+}
+
+function renderJugadoresResTabla(rows, esPromedios) {
   const isMobile = window.matchMedia("(max-width:599px)").matches;
 
   let totSueldos=0, totMovilidad=0, totViandas=0, totAlmacen=0, totAlquilerCasa=0, totMedico=0, totOtros=0, totTotal=0;
@@ -4722,6 +4756,8 @@ function renderJugadoresResTabla(rows) {
     if (!v) return `<td style="text-align:right;color:var(--text3)">—</td>`;
     return `<td style="text-align:right;font-family:var(--mono)" class="${v<0?'egr':'ing'}">${v<0?"-":"+"}${fmt(Math.abs(v))}</td>`;
   }
+
+  const mesesColHeader = esPromedios ? `<th style="text-align:center">Meses c/gasto</th>` : "";
 
   const bodyRows = rows.map(r => {
     totSueldos      += r.sueldos;
@@ -4736,11 +4772,13 @@ function renderJugadoresResTabla(rows) {
     const detalle = isExp ? renderJugadorResDetalle(r) : "";
     const rowClass = r.esGrupo ? "reint-row" : "reint-row";
     const otrosCell = isMobile ? "" : cell(r.otros);
+    const mesesCell = esPromedios ? `<td style="text-align:center;color:var(--text3)">${r.mesesConGasto}</td>` : "";
     const nombreLbl = (r.esGrupo ? "👥 " : "") + esc(r.nombre);
-    const colspan = isMobile ? 6 : 9;
+    const colspan = (isMobile ? 6 : 9) + (esPromedios ? 1 : 0);
     return `
     <tr class="${rowClass}" style="${r.esGrupo?'background:var(--bg3)':''}" onclick="toggleJugadorResDetalle('${esc(escJs(r.nombre))}')">
       <td class="jugador-col" title="${esc(r.nombre)}">${nombreLbl}</td>
+      ${mesesCell}
       ${cell(r.sueldos)}
       ${cell(r.movilidad)}
       ${cell(r.viandas)}
@@ -4755,6 +4793,7 @@ function renderJugadoresResTabla(rows) {
 
   const totRow = `<tr class="reint-tot-row">
     <td class="jugador-col">TOTALES</td>
+    ${esPromedios ? `<td style="text-align:center">—</td>` : ""}
     ${cell(totSueldos)}
     ${cell(totMovilidad)}
     ${cell(totViandas)}
@@ -4773,6 +4812,7 @@ function renderJugadoresResTabla(rows) {
       <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}" style="${isMobile?'font-size:11px':''}">
         <thead><tr>
           <th class="jugador-col">Jugador/Grupo</th>
+          ${mesesColHeader}
           <th style="text-align:right">Sueldo</th>
           <th style="text-align:right">Movilidad</th>
           <th style="text-align:right">Viandas</th>
@@ -4788,7 +4828,7 @@ function renderJugadoresResTabla(rows) {
     ${footnote}`;
 }
 
-function renderJugadorResCard(r) {
+function renderJugadorResCard(r, esPromedios) {
   const isExp = jugadorResExpandido.has(r.nombre);
   const cols = [
     ["SUELDO", r.sueldos], ["MOVILIDAD", r.movilidad], ["VIANDAS", r.viandas],
@@ -4798,6 +4838,9 @@ function renderJugadorResCard(r) {
 
   const miembrosSub = r.esGrupo && r.miembros && r.miembros.length
     ? `<div class="entity-sub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.miembros.length} miembros: ${esc(r.miembros.join(", "))}</div>`
+    : "";
+  const mesesSub = esPromedios
+    ? `<div class="entity-sub">Meses con gasto: ${r.mesesConGasto}</div>`
     : "";
 
   const colsHtml = cols.map(([label, v]) => `
@@ -4813,13 +4856,14 @@ function renderJugadorResCard(r) {
       <span class="val ${r.total<0?'egr':'ing'}" style="font-family:var(--mono);font-weight:600">${r.total<0?"-":"+"}${fmt(Math.abs(r.total))}</span>
     </div>
     ${miembrosSub}
+    ${mesesSub}
     <div class="reint-card-body">${colsHtml}</div>
     ${isExp ? `<div class="reint-card-detalle" onclick="event.stopPropagation()">${renderJugadorResDetalle(r)}</div>` : ""}
   </div>`;
 }
 
-function renderJugadoresResCards(rows) {
-  return rows.map(renderJugadorResCard).join("");
+function renderJugadoresResCards(rows, esPromedios) {
+  return rows.map(r => renderJugadorResCard(r, esPromedios)).join("");
 }
 
 const JUGADOR_RES_CAT_LABEL = { sueldos:"Sueldo", movilidad:"Movilidad", viandas:"Viandas", almacen:"Almacén", alquilerCasa:"Alquiler y gastos casa", medico:"Médico", otros:"Otros" };
@@ -4830,16 +4874,49 @@ function renderJugadorResDetalle(r) {
     const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
     const mesRaw = mesFromRecord(m);
     const cat = JUGADOR_RES_CAT_LABEL[jugadorResCategoria(m.codRubro)] || "Otros";
-    const extra = m.prorrateado
-      ? `👥 ${m.grupoOriginal} · orig. ${fmt(Math.abs(m.montoOriginal))} ÷ ${m.miembrosCount}`
-      : "";
     return {
       fechaRaw: m.fecha||"", fechaD, mesRaw, mesTxt: mesLabel(mesRaw),
       concepto: m.concepto||"", monto: m.montoAplicado, rubro: m.rubro||"", categoria: cat,
-      entidad: m.cuenta||"", extra,
+      entidad: m.cuenta||"",
     };
   });
   return renderDetTabla(`jug_${escJs(r.nombre)}`, items);
+}
+
+// Exporta exactamente la tabla visible en pantalla (sub-tab, meses tildados y búsqueda vigentes).
+function exportJugadoresResExcel() {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+
+  const rows = calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
+    .filter(r => !jugadorResFiltro || normStr(r.nombre).includes(normStr(jugadorResFiltro)))
+    .sort((a,b) => Math.abs(b.total) - Math.abs(a.total));
+  if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
+
+  const esPromedios = jugadorResAgrupacion === "promedios";
+  const headers = ["Jugador/Grupo"];
+  if (esPromedios) headers.push("Meses con gasto");
+  headers.push("Sueldo","Movilidad","Viandas","Almacén","Alquiler y gastos casa","Médico","Otros","TOTAL");
+
+  const dataRows = rows.map(r => {
+    const fila = [r.nombre];
+    if (esPromedios) fila.push(r.mesesConGasto);
+    fila.push(r.sueldos || "", r.movilidad || "", r.viandas || "", r.almacen || "", r.alquilerCasa || "", r.medico || "", r.otros || "", r.total || "");
+    return fila;
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+  ws["!cols"] = (esPromedios ? [24,14,12,12,12,12,20,12,12,12] : [24,12,12,12,12,20,12,12,12]).map(w => ({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, "Jugadores");
+
+  const subtabPart = jugadorResAgrupacion === "grupo" ? "por_grupo" : jugadorResAgrupacion === "promedios" ? "promedios" : "por_jugador";
+  const anioPart = jugadorResAnio || "todos";
+  const mesesDisponibles = jugadorResMesesDisponibles(jugadorResAnio);
+  const todoElAnio = jugadorResAnio && mesesDisponibles.length && mesesDisponibles.every(mm => jugadorResMeses.includes(mm));
+  const mesesPart = !jugadorResAnio ? "todos" : todoElAnio ? "completo" : (jugadorResMeses.length ? jugadorResMeses.slice().sort().join("-") : "sinmeses");
+
+  XLSX.writeFile(wb, `jugadores_${subtabPart}_${anioPart}_${mesesPart}.xlsx`);
+  toast("Excel exportado ✓", "ok");
 }
 
 // ── Eventos — resumen de Peñas por evento ───────────────────────

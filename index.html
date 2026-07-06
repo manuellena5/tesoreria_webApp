@@ -599,6 +599,79 @@ textarea.inp { resize:none; }
     transform: translateX(-50%);
   }
 }
+
+/* ── Resumen / Mensual en notebook-desktop: tabs+alertas y mes+KPIs pasan de
+   apilarse a ancho completo a convivir en una sola fila compacta. Scopeado a
+   #app.tab-resumen para no tocar .entity-tabs/.sum-grid/.stat-card reusados
+   en Entidades, Movimientos, etc. Mobile queda intacto (sin media query). ── */
+@media (min-width: 1024px) {
+  #app.tab-resumen .resumen-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  #app.tab-resumen .resumen-top-row .entity-tabs {
+    flex: 0 0 auto;
+    margin-bottom: 0;
+  }
+  #app.tab-resumen .resumen-top-row .entity-tabs.entity-tabs--wrap {
+    flex-wrap: nowrap;
+  }
+  #app.tab-resumen .resumen-top-row .entity-tabs .entity-tab {
+    flex: 0 0 auto;
+    min-width: 0;
+    padding: 10px 16px;
+  }
+  #app.tab-resumen .resumen-top-row .entity-tabs--wrap .entity-tab {
+    border-top: none;
+  }
+  #app.tab-resumen .resumen-top-row .entity-tabs--wrap .entity-tab:not(:first-child) {
+    border-left: 1px solid var(--border);
+  }
+  #app.tab-resumen .resumen-top-row .resumen-alerts {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 8px;
+  }
+  #app.tab-resumen .resumen-top-row .resumen-alerts .reintegro-alert,
+  #app.tab-resumen .resumen-top-row .resumen-alerts .adherente-alert {
+    display: inline-flex;
+    width: auto;
+    margin-bottom: 0;
+    padding: 6px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  #app.tab-resumen .resumen-kpi-row {
+    display: flex;
+    align-items: stretch;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  #app.tab-resumen .resumen-kpi-row .mes-sel {
+    flex: 0 0 auto;
+    margin-bottom: 0;
+  }
+  #app.tab-resumen .resumen-kpi-row .sum-grid.three {
+    display: flex;
+    flex: 1 1 auto;
+    gap: 8px;
+    margin-bottom: 0;
+  }
+  #app.tab-resumen .resumen-kpi-row .sum-grid.three .stat-card,
+  #app.tab-resumen .resumen-kpi-row .resumen-kpi-acc {
+    flex: 1 1 140px;
+    min-width: 140px;
+    max-width: 180px;
+  }
+  #app.tab-resumen .resumen-kpi-row .resumen-kpi-acc {
+    margin-bottom: 0 !important;
+  }
+}
 </style>
 </head>
 <body>
@@ -2377,34 +2450,37 @@ function renderResumen() {
     </div>` : "";
 
   setContent(`
-    ${subTabsHtml}
-    ${alertHtml}
-    ${adherenteAlertHtml}
+    <div class="resumen-top-row">
+      ${subTabsHtml}
+      <div class="resumen-alerts">${alertHtml}${adherenteAlertHtml}</div>
+    </div>
     ${resumenSubTab === "mensual" ? `
-    <div class="mes-sel">
-      <button class="mes-sel-btn" onclick="changeMes(-1)">◀</button>
-      <span class="mes-sel-label">${mesLabel(sharedMes)}</span>
-      <button class="mes-sel-btn" onclick="changeMes(1)">▶</button>
-    </div>
+    <div class="resumen-kpi-row">
+      <div class="mes-sel">
+        <button class="mes-sel-btn" onclick="changeMes(-1)">◀</button>
+        <span class="mes-sel-label">${mesLabel(sharedMes)}</span>
+        <button class="mes-sel-btn" onclick="changeMes(1)">▶</button>
+      </div>
 
-    <div class="sum-grid three">
-      <div class="stat-card">
-        <div class="stat-label">Ingresos mes</div>
-        <div class="stat-val ing">${fmt(ingMes)}</div>
+      <div class="sum-grid three">
+        <div class="stat-card">
+          <div class="stat-label">Ingresos mes</div>
+          <div class="stat-val ing">${fmt(ingMes)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Egresos mes</div>
+          <div class="stat-val egr">${fmt(egrMes)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Saldo mes</div>
+          <div class="stat-val ${saldoMes>=0?"ing":"egr"}">${saldoMes<0?"-":""}${fmt(saldoMes)}</div>
+        </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">Egresos mes</div>
-        <div class="stat-val egr">${fmt(egrMes)}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Saldo mes</div>
-        <div class="stat-val ${saldoMes>=0?"ing":"egr"}">${saldoMes<0?"-":""}${fmt(saldoMes)}</div>
-      </div>
-    </div>
 
-    <div class="stat-card" style="margin-bottom:14px">
-      <div class="stat-label">Saldo acumulado hasta ${mesLabel(sharedMes)}</div>
-      <div class="stat-val acc" style="font-size:22px">${saldoAcc<0?"-":""}${fmt(saldoAcc)}</div>
+      <div class="stat-card resumen-kpi-acc" style="margin-bottom:14px">
+        <div class="stat-label">Saldo acumulado hasta ${mesLabel(sharedMes)}</div>
+        <div class="stat-val acc" style="font-size:22px">${saldoAcc<0?"-":""}${fmt(saldoAcc)}</div>
+      </div>
     </div>
 
     <div class="resumen-2col">

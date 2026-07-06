@@ -517,6 +517,9 @@ textarea.inp { resize:none; }
 .cuenta-saldo.pos { color:var(--green); }
 .cuenta-saldo.neg { color:var(--red);   }
 .cuenta-saldo.zer { color:var(--text3); }
+.cuenta-item-kpi { flex-direction:column; align-items:flex-start; gap:2px; }
+.cuenta-item-row { width:100%; display:flex; justify-content:space-between; align-items:center; }
+.cuenta-adj-note { font-size:10px; color:var(--adj); margin-top:2px; display:block; }
 
 /* ── Adherentes resumen ── */
 .adh-resumen { display:flex; flex-direction:column; gap:6px; margin-bottom:16px; }
@@ -670,6 +673,43 @@ textarea.inp { resize:none; }
   }
   #app.tab-resumen .resumen-kpi-row .resumen-kpi-acc {
     margin-bottom: 0 !important;
+  }
+
+  /* Saldo por cuenta: de lista apilada a tarjetas cuadradas tipo KPI,
+     4 columnas por fila (tantas filas como cuentas haya). */
+  #app.tab-resumen .cuenta-list {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  #app.tab-resumen .cuenta-list .cuenta-item.cuenta-item-kpi {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    aspect-ratio: 1 / 1;
+    text-align: center;
+    padding: 10px;
+  }
+  #app.tab-resumen .cuenta-list .cuenta-item-row {
+    width: auto;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  #app.tab-resumen .cuenta-list .cuenta-nombre {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  #app.tab-resumen .cuenta-list .cuenta-saldo {
+    font-size: 17px;
+  }
+  #app.tab-resumen .cuenta-list .cuenta-adj-note {
+    margin-top: 0;
   }
 }
 </style>
@@ -2407,10 +2447,10 @@ function renderResumen() {
   const cuentasHtml = cuentas.map(c => {
     const s  = saldosCuentas[c] || 0;
     const aj = ajustesPorCuenta[c];
-    const ajHtml = aj ? `<span style="font-size:10px;color:var(--adj);margin-top:2px;display:block">
+    const ajHtml = aj ? `<span class="cuenta-adj-note">
       ⊙ últ. ajuste ${aj.fecha.slice(8)+"/"+aj.fecha.slice(5,7)} ${aj.montoFinal>=0?"+":""}${fmt(aj.montoFinal)}</span>` : "";
-    return `<div class="cuenta-item" style="flex-direction:column;align-items:flex-start;gap:2px">
-      <div style="width:100%;display:flex;justify-content:space-between;align-items:center">
+    return `<div class="cuenta-item cuenta-item-kpi">
+      <div class="cuenta-item-row">
         <span class="cuenta-nombre">${esc(c)}</span>
         <span class="cuenta-saldo ${s>0?"pos":s<0?"neg":"zer"}">${s<0?"-":""}${fmt(s)}</span>
       </div>

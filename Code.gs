@@ -121,12 +121,28 @@ const RUBROS_MAP = {
 // ════════════════════════════════════════════════════════════
 
 function doPost(e) {
+  // Serializa todas las acciones sobre la hoja: sin este lock, dos requests
+  // concurrentes (dos borrados casi simultáneos, o la sincronización offline
+  // corriendo en paralelo con una acción en vivo) pueden leer los mismos
+  // índices de fila antes de escribir. El segundo termina operando sobre una
+  // fila que ya no es la que pensaba (el sheet se corrió al borrar/insertar
+  // la primera), borrando/editando la fila equivocada y dejando intacto el
+  // registro que el usuario sí quería eliminar — que "reaparece" en el
+  // próximo listMov porque nunca se borró de verdad.
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (lockErr) {
+    return jsonResponse({ ok: false, error: "El servidor está ocupado, probá de nuevo en unos segundos." });
+  }
   try {
     const data   = JSON.parse(e.postData.contents);
     const result = handleAction(data);
     return jsonResponse(result);
   } catch (err) {
     return jsonResponse({ ok: false, error: err.message });
+  } finally {
+    lock.releaseLock();
   }
 }
 

@@ -1264,7 +1264,7 @@ async function loadAllData() {
     return;
   }
   try {
-    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes, rEve, rCfgJ, rRos, rPJ] = await Promise.all([
+    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes, rEve] = await Promise.all([
       Storage.listMov(),
       Storage.listJugadores(),
       Storage.listGrupos(),
@@ -1274,9 +1274,6 @@ async function loadAllData() {
       Storage.listPartidos(),
       Storage.listReservas(),
       Storage.listEventos(),
-      Storage.listConfigJugadores(),
-      Storage.listRoster(),
-      Storage.listPagosJugadores(),
     ]);
     if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
     if (rJug.ok) jugadores   = rJug.jugadores   || [];
@@ -1286,9 +1283,21 @@ async function loadAllData() {
     if (rPar.ok) partidos    = rPar.partidos     || [];
     if (rRes.ok) reservas    = rRes.reservas     || [];
     if (rEve.ok) eventos     = rEve.eventos      || [];
-    if (rCfgJ.ok) configJugadores = rCfgJ.configJugadores || [];
-    if (rRos.ok)  rosterPartidos  = rRos.roster           || [];
-    if (rPJ.ok)   pagosJugadores  = rPJ.pagosJugadores    || [];
+    // Módulo de Pagos a Jugadores: en su propio Promise.all/try — si algo falla acá
+    // (ej. límite de ejecuciones simultáneas de Apps Script) no debe tumbar la carga
+    // del resto de la app (Partidos, Movimientos, etc. de arriba).
+    try {
+      const [rCfgJ, rRos, rPJ] = await Promise.all([
+        Storage.listConfigJugadores(),
+        Storage.listRoster(),
+        Storage.listPagosJugadores(),
+      ]);
+      if (rCfgJ.ok) configJugadores = rCfgJ.configJugadores || [];
+      if (rRos.ok)  rosterPartidos  = rRos.roster           || [];
+      if (rPJ.ok)   pagosJugadores  = rPJ.pagosJugadores    || [];
+    } catch (ePagos) {
+      toast("No se pudo cargar el módulo de Pagos a Jugadores: " + ePagos.message, "err");
+    }
     if (rCfg.ok) {
       applyCuentasMetodos(rCfg.config || {});
       applyPreciosGranos(rCfg.config || {});

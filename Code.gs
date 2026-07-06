@@ -31,6 +31,18 @@ const PAR_COLS  = ["ID","Fecha","Rival","NumeroFecha","Condicion","Activo","Torn
 const EVE_SHEET = "Eventos";
 const EVE_COLS  = ["ID","Nombre","Fecha","Activo"];
 
+// ── Pagos a Jugadores (módulo aparte, no integrado a Movimientos todavía) ──
+const CFGJ_SHEET = "Config Jugadores";
+const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo"];
+// Frecuencia: "partido" | "quincenal" | "mensual"
+const PJ_SHEET = "Pagos Jugadores";
+const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta"];
+// PartidosIncluidos: JSON de un array de IDs de partido ("[]" para filas quincenales/mensuales agregadas a mano)
+// Estado: "pendiente" | "pagado"
+const ROS_SHEET = "Roster Partidos";
+const ROS_COLS  = ["IdPartido","JugadorId","JugadorNombre","Rol"];
+// Rol: "titular" | "suplenteConMin" | "suplente" | "noJugo"
+
 // ── Columnas de cada pestaña ─────────────────────────────────
 const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
@@ -587,6 +599,187 @@ function handleAction(data) {
         }
       }
       return { ok: false, error: "Partido no encontrado: " + data.id };
+    }
+
+    // ─── CONFIG JUGADORES (pagos) ────────────────────────────
+
+    case "listConfigJugadores": {
+      const sh  = getOrCreateSheet(CFGJ_SHEET, CFGJ_COLS);
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, configJugadores: [] };
+      const configJugadores = all.slice(1)
+        .filter(r => r[0] && String(r[7]) !== "false")
+        .map(r => ({
+          idJugador:           String(r[0]),
+          nombre:              String(r[1]||""),
+          montoTitular:        Number(r[2]||0),
+          montoSuplenteConMin: Number(r[3]||0),
+          montoSuplente:       Number(r[4]||0),
+          frecuencia:          String(r[5]||"partido"),
+          alias:               String(r[6]||"")
+        }));
+      return { ok: true, configJugadores };
+    }
+
+    case "saveConfigJugador": {
+      const sh  = getOrCreateSheet(CFGJ_SHEET, CFGJ_COLS);
+      const c   = data.config;
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(c.idJugador)) {
+          sh.getRange(i + 1, 1, 1, CFGJ_COLS.length).setValues([[
+            c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
+            Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true"
+          ]]);
+          return { ok: true, idJugador: c.idJugador };
+        }
+      }
+      sh.appendRow([
+        c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
+        Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true"
+      ]);
+      return { ok: true, idJugador: c.idJugador };
+    }
+
+    case "deleteConfigJugador": {
+      const sh  = getOrCreateSheet(CFGJ_SHEET, CFGJ_COLS);
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(data.idJugador)) {
+          sh.getRange(i + 1, 8).setValue("false");
+          return { ok: true };
+        }
+      }
+      return { ok: false, error: "Config de jugador no encontrada: " + data.idJugador };
+    }
+
+    // ─── ROSTER PARTIDOS ──────────────────────────────────────
+
+    case "listRoster": {
+      const sh  = getOrCreateSheet(ROS_SHEET, ROS_COLS);
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, roster: [] };
+      const roster = all.slice(1)
+        .filter(r => r[0] && r[1])
+        .map(r => ({
+          partidoId:     String(r[0]),
+          jugadorId:     String(r[1]),
+          jugadorNombre: String(r[2]||""),
+          rol:           String(r[3]||"noJugo")
+        }));
+      return { ok: true, roster };
+    }
+
+    // Reemplaza el roster completo de un partido y deja lista la fila pendiente de pago
+    // (Pagos Jugadores) de cada jugador que sí jugó, con el ajuste/motivo que venga del form.
+    case "saveRoster": {
+      const rosSh = getOrCreateSheet(ROS_SHEET, ROS_COLS);
+      const pjSh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const partidoId = data.partidoId;
+      const roster    = data.roster || []; // [{jugadorId, jugadorNombre, rol, montoBase, ajuste, motivoAjuste, montoFinal}]
+
+      // Borra las filas de roster existentes de este partido y las vuelve a escribir.
+      const rosAll = rosSh.getDataRange().getValues();
+      for (let i = rosAll.length - 1; i >= 1; i--) {
+        if (String(rosAll[i][0]) === String(partidoId)) rosSh.deleteRow(i + 1);
+      }
+      for (const r of roster) {
+        rosSh.appendRow([partidoId, r.jugadorId, r.jugadorNombre||"", r.rol||"noJugo"]);
+      }
+
+      // Upsert de la fila de pago pendiente por jugador (salvo "noJugo").
+      const pjAll = pjSh.getDataRange().getValues();
+      for (const r of roster) {
+        if (r.rol === "noJugo") continue;
+        const partidosStr = JSON.stringify([partidoId]);
+        let found = false;
+        for (let i = 1; i < pjAll.length; i++) {
+          if (String(pjAll[i][1]) === String(r.jugadorId) && String(pjAll[i][3]) === partidosStr && String(pjAll[i][8]) === "pendiente") {
+            pjSh.getRange(i + 1, 5, 1, 4).setValues([[
+              Number(r.montoBase||0), Number(r.ajuste||0), r.motivoAjuste||"", Number(r.montoFinal||0)
+            ]]);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          pjSh.appendRow([
+            uid_gs(), r.jugadorId, r.jugadorNombre||"", partidosStr,
+            Number(r.montoBase||0), Number(r.ajuste||0), r.motivoAjuste||"", Number(r.montoFinal||0),
+            "pendiente", "", "", ""
+          ]);
+        }
+      }
+      return { ok: true };
+    }
+
+    // ─── PAGOS JUGADORES ──────────────────────────────────────
+
+    case "listPagosJugadores": {
+      const sh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, pagosJugadores: [] };
+      const pagosJugadores = all.slice(1)
+        .filter(r => r[0])
+        .map(r => ({
+          id:                String(r[0]),
+          jugadorId:         String(r[1]),
+          jugadorNombre:     String(r[2]||""),
+          partidosIncluidos: safeParseJSON(String(r[3]||"[]"), []),
+          montoBase:         Number(r[4]||0),
+          ajuste:            Number(r[5]||0),
+          motivoAjuste:      String(r[6]||""),
+          montoFinal:        Number(r[7]||0),
+          estado:            String(r[8]||"pendiente"),
+          fechaPago:         String(r[9]||""),
+          medioPago:         String(r[10]||""),
+          etiqueta:          String(r[11]||"")
+        }));
+      return { ok: true, pagosJugadores };
+    }
+
+    // Upsert genérico de una fila de Pagos Jugadores (ajuste manual, o alta de monto
+    // quincenal/mensual con partidosIncluidos:[] y etiqueta de período).
+    case "savePagoJugador": {
+      const sh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const p   = data.pago;
+      const all = sh.getDataRange().getValues();
+      if (p.id) {
+        for (let i = 1; i < all.length; i++) {
+          if (String(all[i][0]) === String(p.id)) {
+            sh.getRange(i + 1, 1, 1, PJ_COLS.length).setValues([[
+              p.id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
+              Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
+              p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||""
+            ]]);
+            return { ok: true, id: p.id };
+          }
+        }
+      }
+      const id = uid_gs();
+      sh.appendRow([
+        id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
+        Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
+        p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||""
+      ]);
+      return { ok: true, id };
+    }
+
+    // Marca como pagadas todas las filas cuyo ID esté en data.ids, con la misma fecha/medio.
+    case "confirmarPagosJugadores": {
+      const sh   = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const ids  = (data.ids || []).map(String);
+      if (!ids.length) return { ok: false, error: "No se especificaron pagos a confirmar" };
+      const all  = sh.getDataRange().getValues();
+      let count = 0;
+      for (let i = 1; i < all.length; i++) {
+        if (ids.indexOf(String(all[i][0])) >= 0) {
+          sh.getRange(i + 1, 9, 1, 2).setValues([[ "pagado", data.fechaPago||"" ]]);
+          sh.getRange(i + 1, 11).setValue(data.medioPago||"");
+          count++;
+        }
+      }
+      return { ok: true, count };
     }
 
     // ─── EVENTOS (Peñas y similares) ─────────────────────────

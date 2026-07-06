@@ -404,6 +404,22 @@ textarea.inp { resize:none; }
 .pago-btn { background:none; border:none; font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:transform .1s; }
 .pago-btn:active { transform:scale(0.85); }
 
+/* ── Pagos Jugadores ── */
+.pj-table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:16px; }
+.pj-table { border-collapse:collapse; font-size:12px; min-width:820px; width:100%; }
+.pj-table th { background:var(--bg3); color:var(--text3); font-size:10px; text-transform:uppercase; letter-spacing:.05em; padding:7px 8px; border:1px solid var(--border); text-align:left; white-space:nowrap; font-weight:600; }
+.pj-table td { padding:6px 8px; border:1px solid var(--border); vertical-align:middle; }
+.pj-table td.mono { font-family:var(--mono); text-align:right; white-space:nowrap; }
+.pj-table td:first-child { color:var(--text2); background:var(--bg2); white-space:nowrap; }
+.pj-table select.inp, .pj-table input.inp { padding:6px 8px; font-size:12px; min-width:88px; margin-bottom:0; }
+.pj-table input.pj-motivo { min-width:130px; }
+.pj-table tr.pj-nojugo td:not(:first-child):not(:nth-child(2)) { opacity:.4; }
+.pj-badge { font-size:10px; font-weight:600; padding:3px 8px; border-radius:20px; white-space:nowrap; }
+.pj-badge-pendiente { background:var(--warn-bg); color:var(--warn); }
+.pj-badge-pagado    { background:var(--green-bg); color:var(--green); }
+.pj-chip-row { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+.pj-acumulado { font-size:11px; color:var(--text3); }
+
 /* ── Config sections ── */
 .cfg-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:16px; margin-bottom:12px; }
 .cfg-title { font-size:14px; font-weight:600; margin-bottom:10px; }
@@ -750,6 +766,9 @@ textarea.inp { resize:none; }
     <button class="bnav-btn" id="nav-entidades"   onclick="goTab('entidades')">
       <span class="bnav-icon">👥</span><span class="bnav-lbl">Entidades</span>
     </button>
+    <button class="bnav-btn" id="nav-pagosjug"    onclick="goTab('pagosjug')">
+      <span class="bnav-icon">⚽</span><span class="bnav-lbl">Jugad. $</span>
+    </button>
     <button class="bnav-btn" id="nav-config"      onclick="goTab('config')">
       <span class="bnav-icon">⚙️</span><span class="bnav-lbl">Config</span>
     </button>
@@ -884,10 +903,18 @@ let metodos     = [...DEFAULT_METODOS];
 let reservas      = [];
 let preciosGranos = { Soja: 480000, Trigo: 293600 };
 
+// Módulo de Pagos a Jugadores
+let configJugadores = [];
+let rosterPartidos  = [];
+let pagosJugadores  = [];
+
 let currentTab    = "nuevo";
 let editId        = null;
 let sharedMes     = nowMes();
 let entidadesTab  = "jugadores";
+let pagosJugTab   = "partido";
+let pjPartidoSel  = null;
+let pjPartidosSel = null; // null = todavía no inicializado (se precarga con los partidos pendientes)
 let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", search: "" };
 let F             = buildDefaultF();
 let resumenSubTab     = "mensual";
@@ -1100,6 +1127,14 @@ const Storage = {
   async ejecutarMigracion()  { return this._post({ action:"ejecutarMigracion"         }); },
   async revertMigracion(batchId) { return this._post({ action:"revertMigracion", batchId }); },
   async setVinculos(id, vinculos) { return this._post({ action:"setVinculos", id, vinculos }); },
+  async listConfigJugadores()      { return this._post({ action:"listConfigJugadores"           }); },
+  async saveConfigJugador(c)       { return this._post({ action:"saveConfigJugador", config:c    }); },
+  async deleteConfigJugador(idJugador) { return this._post({ action:"deleteConfigJugador", idJugador }); },
+  async listRoster()               { return this._post({ action:"listRoster"                     }); },
+  async saveRoster(partidoId, roster) { return this._post({ action:"saveRoster", partidoId, roster }); },
+  async listPagosJugadores()       { return this._post({ action:"listPagosJugadores"             }); },
+  async savePagoJugador(p)         { return this._post({ action:"savePagoJugador", pago:p         }); },
+  async confirmarPagosJugadores(ids, fechaPago, medioPago) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago }); },
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -1120,6 +1155,7 @@ function saveSnapshotToCache() {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({
       movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
+      configJugadores, rosterPartidos, pagosJugadores,
       cuentas, metodos, preciosGranos, savedAt: Date.now()
     }));
   } catch (e) { /* localStorage lleno o no disponible — no es crítico */ }
@@ -1228,7 +1264,7 @@ async function loadAllData() {
     return;
   }
   try {
-    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes, rEve] = await Promise.all([
+    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes, rEve, rCfgJ, rRos, rPJ] = await Promise.all([
       Storage.listMov(),
       Storage.listJugadores(),
       Storage.listGrupos(),
@@ -1238,6 +1274,9 @@ async function loadAllData() {
       Storage.listPartidos(),
       Storage.listReservas(),
       Storage.listEventos(),
+      Storage.listConfigJugadores(),
+      Storage.listRoster(),
+      Storage.listPagosJugadores(),
     ]);
     if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
     if (rJug.ok) jugadores   = rJug.jugadores   || [];
@@ -1247,6 +1286,9 @@ async function loadAllData() {
     if (rPar.ok) partidos    = rPar.partidos     || [];
     if (rRes.ok) reservas    = rRes.reservas     || [];
     if (rEve.ok) eventos     = rEve.eventos      || [];
+    if (rCfgJ.ok) configJugadores = rCfgJ.configJugadores || [];
+    if (rRos.ok)  rosterPartidos  = rRos.roster           || [];
+    if (rPJ.ok)   pagosJugadores  = rPJ.pagosJugadores    || [];
     if (rCfg.ok) {
       applyCuentasMetodos(rCfg.config || {});
       applyPreciosGranos(rCfg.config || {});
@@ -1294,6 +1336,9 @@ function loadFromCacheIfAny() {
   partidos    = snap.partidos    || [];
   reservas    = snap.reservas    || [];
   eventos     = snap.eventos     || [];
+  configJugadores = snap.configJugadores || [];
+  rosterPartidos  = snap.rosterPartidos  || [];
+  pagosJugadores  = snap.pagosJugadores  || [];
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
@@ -1352,7 +1397,8 @@ function goTab(tab) {
   if (btn) btn.classList.add("active");
   const renderers = {
     nuevo: renderNuevo, movimientos: renderMovimientos,
-    resumen: renderResumen, entidades: renderEntidades, config: renderConfig
+    resumen: renderResumen, entidades: renderEntidades, config: renderConfig,
+    pagosjug: renderPagosJugadores
   };
   if (renderers[tab]) renderers[tab]();
 }
@@ -5068,6 +5114,7 @@ function renderEntidades() {
     {key:"grupos",    label:"Grupos"},
     {key:"adherentes",label:"Adherentes"},
     {key:"partidos",  label:"Partidos"},
+    {key:"configJug", label:"Cobros"},
     {key:"eventos",   label:"Eventos"},
     {key:"granos",    label:"Granos"},
   ];
@@ -5080,6 +5127,7 @@ function renderEntidades() {
   if (entidadesTab === "grupos")     inner = renderGrupos();
   if (entidadesTab === "adherentes") inner = renderAdherentes();
   if (entidadesTab === "partidos")   inner = renderPartidos();
+  if (entidadesTab === "configJug")  inner = renderConfigJugadores();
   if (entidadesTab === "eventos")    inner = renderEventos();
   if (entidadesTab === "granos")     inner = renderGranos();
 
@@ -5727,6 +5775,147 @@ async function deleteJugador(id) {
   } catch(e) { handleDeleteError(btnId, e); }
 }
 
+// ── Config Jugadores (cobros por partido/quincenal/mensual) ───
+function renderConfigJugadores() {
+  const configuredIds = new Set(configJugadores.map(c => c.idJugador));
+  const sorted = [...configJugadores].sort((a,b) => a.nombre.localeCompare(b.nombre));
+  const FREC_LABEL = { partido:"Por partido", quincenal:"Quincenal", mensual:"Mensual" };
+  const list = sorted.map(c => `
+    <div class="entity-item">
+      <div style="flex:1;min-width:0">
+        <div class="entity-name">${esc(c.nombre)}</div>
+        <div class="entity-sub">${FREC_LABEL[c.frecuencia]||c.frecuencia}${c.alias?" · "+esc(c.alias):""}</div>
+      </div>
+      <button class="btn-sm accent" onclick="openConfigJugadorModal('${c.idJugador}')">✏️</button>
+      <button class="btn-sm danger" id="cjdel-${c.idJugador}" onclick="confirmDeleteConfigJugador('${c.idJugador}')">✕</button>
+    </div>`).join("");
+  const hayDisponibles = jugadores.some(j => !configuredIds.has(j.id));
+  return `
+    <button class="btn-secondary" onclick="openConfigJugadorModal(null)" style="margin-bottom:12px" ${hayDisponibles?"":"disabled"}>+ Agregar cobro de jugador</button>
+    ${list || '<p class="note">Sin cobros configurados</p>'}`;
+}
+
+function openConfigJugadorModal(idJugador) {
+  const c = idJugador ? configJugadores.find(x => x.idJugador === idJugador) : null;
+  const configuredIds = new Set(configJugadores.map(x => x.idJugador));
+  const disponibles = jugadores
+    .filter(j => j.id === idJugador || !configuredIds.has(j.id))
+    .sort((a,b) => a.nombre.localeCompare(b.nombre));
+  const jugSelect = c
+    ? `<input class="inp" type="text" value="${esc(c.nombre)}" disabled>`
+    : `<select class="inp" id="cfgjug-jugador">
+         <option value="">Elegir jugador…</option>
+         ${disponibles.map(j => `<option value="${j.id}" data-nombre="${esc(j.nombre)}">${esc(j.nombre)}</option>`).join("")}
+       </select>`;
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${c ? "Editar cobro" : "Nuevo cobro de jugador"}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Jugador</label>
+            ${jugSelect}
+          </div>
+          <div class="field">
+            <label>Frecuencia de cobro</label>
+            <select class="inp" id="cfgjug-frecuencia" onchange="toggleCfgJugFrecuencia()">
+              <option value="partido" ${(!c||c.frecuencia==="partido")?"selected":""}>Por partido</option>
+              <option value="quincenal" ${(c&&c.frecuencia==="quincenal")?"selected":""}>Quincenal</option>
+              <option value="mensual" ${(c&&c.frecuencia==="mensual")?"selected":""}>Mensual</option>
+            </select>
+          </div>
+          <div id="cfgjug-montos-partido">
+            <div class="field">
+              <label>Monto Titular</label>
+              <input class="inp" id="cfgjug-titular" type="number" step="1" value="${c?c.montoTitular:0}">
+            </div>
+            <div class="field">
+              <label>Monto Suplente c/minutos</label>
+              <input class="inp" id="cfgjug-supmin" type="number" step="1" value="${c?c.montoSuplenteConMin:0}">
+            </div>
+            <div class="field">
+              <label>Monto Suplente</label>
+              <input class="inp" id="cfgjug-suplente" type="number" step="1" value="${c?c.montoSuplente:0}">
+            </div>
+          </div>
+          <div class="field">
+            <label>Alias / CBU para transferencia</label>
+            <input class="inp" id="cfgjug-alias" type="text" placeholder="jugador.mp / CBU…" value="${esc(c?c.alias:"")}">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-cfgjug" onclick="saveConfigJugadorForm('${idJugador||""}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+  toggleCfgJugFrecuencia();
+}
+
+function toggleCfgJugFrecuencia() {
+  const frec = document.getElementById("cfgjug-frecuencia")?.value;
+  const box  = document.getElementById("cfgjug-montos-partido");
+  if (box) box.style.display = frec === "partido" ? "" : "none";
+}
+
+async function saveConfigJugadorForm(idJugador) {
+  const btnId = "btn-guardar-cfgjug";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
+  let nombre;
+  if (idJugador) {
+    const existing = configJugadores.find(x => x.idJugador === idJugador);
+    nombre = existing ? existing.nombre : "";
+  } else {
+    const sel = document.getElementById("cfgjug-jugador");
+    idJugador = sel?.value || "";
+    nombre = sel?.selectedOptions[0]?.dataset.nombre || "";
+    if (!idJugador) { toast("Elegí un jugador", "err"); return; }
+  }
+  const frecuencia          = document.getElementById("cfgjug-frecuencia")?.value || "partido";
+  const montoTitular        = parseFloat(document.getElementById("cfgjug-titular")?.value  || "0") || 0;
+  const montoSuplenteConMin = parseFloat(document.getElementById("cfgjug-supmin")?.value    || "0") || 0;
+  const montoSuplente       = parseFloat(document.getElementById("cfgjug-suplente")?.value  || "0") || 0;
+  const alias                = (document.getElementById("cfgjug-alias")?.value || "").trim();
+  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias };
+  setBtnState(btnId, "saving");
+  try {
+    const r = await Storage.saveConfigJugador(config);
+    if (!r.ok) throw new Error(r.error || "Error");
+    const idx = configJugadores.findIndex(x => x.idJugador === idJugador);
+    if (idx >= 0) configJugadores[idx] = config; else configJugadores.push(config);
+    saveSnapshotToCache();
+    setBtnState(btnId, "saved");
+    toast("Cobro guardado ✓", "ok");
+    closeModal();
+    renderEntidades();
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+function confirmDeleteConfigJugador(idJugador) {
+  const btn = document.getElementById("cjdel-"+idJugador);
+  if (!btn || btn.disabled) return;
+  if (btn.dataset.confirm) { deleteConfigJugadorAction(idJugador); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
+    setTimeout(() => { if(btn && !btn.disabled){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+  }
+}
+
+async function deleteConfigJugadorAction(idJugador) {
+  const btnId = "cjdel-" + idJugador;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = "Eliminando…"; }
+  try {
+    const r = await Storage.deleteConfigJugador(idJugador);
+    if (!r.ok) throw new Error(r.error || "Error");
+    configJugadores = configJugadores.filter(x => x.idJugador !== idJugador);
+    saveSnapshotToCache();
+    toast("Cobro eliminado", "ok");
+    renderEntidades();
+  } catch(e) { handleDeleteError(btnId, e); }
+}
+
 // ── Grupos ────────────────────────────────────────────────────
 function renderGrupos() {
   const list = [...grupos].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(g => {
@@ -6012,6 +6201,443 @@ async function toggleAdhPago(adhId, adhNombre, mesCod) {
 // ══════════════════════════════════════════════════════════════
 // TAB 5 — CONFIGURACIÓN
 // ══════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════
+// PAGOS A JUGADORES (módulo aparte — no integrado a Movimientos)
+// ══════════════════════════════════════════════════════════════
+
+const PJ_ROL_LABEL = { titular:"Titular", suplenteConMin:"Suplente c/min", suplente:"Suplente", noJugo:"No jugó" };
+
+function renderPagosJugadores() {
+  const tabs = [
+    { key:"partido",       label:"Por partido" },
+    { key:"transferencias",label:"Transferencias" },
+  ];
+  const tabBtns = tabs.map(t =>
+    `<button class="entity-tab ${pagosJugTab===t.key?"active":""}" onclick="setPagosJugTab('${t.key}')">${t.label}</button>`
+  ).join("");
+  const inner = pagosJugTab === "transferencias" ? renderTransferencias() : renderPagoPartido();
+  setContent(`
+    <div class="entity-tabs">${tabBtns}</div>
+    <div id="pagosjug-content">${inner}</div>
+  `);
+}
+
+function setPagosJugTab(tab) { pagosJugTab = tab; renderPagosJugadores(); }
+
+function pjMontoRol(cfg, rol) {
+  if (rol === "titular") return Number(cfg.montoTitular || 0);
+  if (rol === "suplenteConMin") return Number(cfg.montoSuplenteConMin || 0);
+  if (rol === "suplente") return Number(cfg.montoSuplente || 0);
+  return 0;
+}
+
+/** Fila de "Pagos Jugadores" pendiente de un jugador para un partido puntual (partidosIncluidos=[partidoId]). */
+function pjFilaPartido(jugadorId, partidoId) {
+  return pagosJugadores.find(p => p.jugadorId === jugadorId
+    && p.partidosIncluidos.length === 1 && p.partidosIncluidos[0] === partidoId);
+}
+
+/** Suma de lo acumulado pendiente (quincenal/mensual) de un jugador — filas sin partido asociado. */
+function pjAcumuladoPendiente(jugadorId) {
+  return pagosJugadores
+    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
+    .reduce((s,p) => s + Number(p.montoFinal||0), 0);
+}
+
+function renderPagoPartido() {
+  const sorted = [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  if (!sorted.length) return '<p class="note">Todavía no hay partidos cargados (Entidades → Partidos).</p>';
+  if (!pjPartidoSel || !sorted.some(p => p.id === pjPartidoSel)) pjPartidoSel = sorted[0].id;
+
+  const opciones = sorted.map(p => {
+    const fd = p.fecha ? p.fecha.slice(8)+"/"+p.fecha.slice(5,7)+"/"+p.fecha.slice(0,4) : "";
+    return `<option value="${p.id}" ${p.id===pjPartidoSel?"selected":""}>${esc(p.rival)} — ${fd}</option>`;
+  }).join("");
+
+  const cfgPartido   = configJugadores.filter(c => c.frecuencia === "partido").sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const cfgPeriodico = configJugadores.filter(c => c.frecuencia !== "partido").sort((a,b)=>a.nombre.localeCompare(b.nombre));
+
+  let totalPartido = 0, pagadoPartido = 0, pendientePartido = 0;
+  const rowsPartido = cfgPartido.map(cfg => {
+    const roster = rosterPartidos.find(r => r.partidoId === pjPartidoSel && r.jugadorId === cfg.idJugador);
+    const rol    = roster ? roster.rol : "noJugo";
+    const fila   = pjFilaPartido(cfg.idJugador, pjPartidoSel);
+    const base   = pjMontoRol(cfg, rol);
+    const ajuste = fila ? Number(fila.ajuste||0) : 0;
+    const motivo = fila ? fila.motivoAjuste || "" : "";
+    const final  = fila ? Number(fila.montoFinal||0) : (base + ajuste);
+    const estado = fila ? fila.estado : "pendiente";
+    if (rol !== "noJugo") {
+      totalPartido += final;
+      if (estado === "pagado") pagadoPartido += final; else pendientePartido += final;
+    }
+    const badge = estado === "pagado"
+      ? `<span class="pj-badge pj-badge-pagado">Pagado</span>`
+      : `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`;
+    const marcarBtn = estado === "pagado" ? "" :
+      `<button class="btn-sm accent" onclick="abrirMedioPagoModal([${fila?`'${fila.id}'`:"null"}], '${cfg.idJugador}', '${pjPartidoSel}')" title="Marcar pagado">✓</button>`;
+    return `
+    <tr class="${rol==='noJugo'?'pj-nojugo':''}" data-jug="${cfg.idJugador}" data-nombre="${esc(cfg.nombre)}"
+        data-titular="${cfg.montoTitular}" data-supmin="${cfg.montoSuplenteConMin}" data-suplente="${cfg.montoSuplente}"
+        data-pagoid="${fila?fila.id:""}" data-estado="${estado}">
+      <td>${esc(cfg.nombre)}</td>
+      <td>
+        <select class="inp pj-rol" onchange="pjRecalcRow(this)" ${estado==='pagado'?"disabled":""}>
+          <option value="titular" ${rol==='titular'?'selected':''}>Titular</option>
+          <option value="suplenteConMin" ${rol==='suplenteConMin'?'selected':''}>Suplente c/min</option>
+          <option value="suplente" ${rol==='suplente'?'selected':''}>Suplente</option>
+          <option value="noJugo" ${rol==='noJugo'?'selected':''}>No jugó</option>
+        </select>
+      </td>
+      <td class="mono pj-base">${fmt(base)}</td>
+      <td><input class="inp pj-ajuste" type="number" step="1" value="${ajuste}" oninput="pjRecalcRow(this)" ${estado==='pagado'?"disabled":""}></td>
+      <td><input class="inp pj-motivo" type="text" value="${esc(motivo)}" placeholder="Motivo (opcional)" ${estado==='pagado'?"disabled":""}></td>
+      <td class="mono pj-final">${fmt(final)}</td>
+      <td>${badge}</td>
+      <td>${marcarBtn}</td>
+    </tr>`;
+  }).join("");
+
+  const rowsPeriodico = cfgPeriodico.map(cfg => {
+    const acumulado = pjAcumuladoPendiente(cfg.idJugador);
+    const label = cfg.frecuencia === "mensual" ? "Mensual · acumulado" : "Quincenal · acumulado";
+    const hayPendiente = acumulado > 0;
+    const badge = hayPendiente
+      ? `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`
+      : `<span class="pj-badge pj-badge-pagado">Al día</span>`;
+    return `
+    <tr>
+      <td>${esc(cfg.nombre)}</td>
+      <td class="pj-acumulado">${label}</td>
+      <td class="mono">${fmt(acumulado)}</td>
+      <td colspan="2" style="text-align:center">
+        <button class="btn-sm" onclick="abrirAgregarMontoModal('${cfg.idJugador}','${esc(cfg.nombre)}')">+ Agregar monto</button>
+      </td>
+      <td class="mono">${fmt(acumulado)}</td>
+      <td>${badge}</td>
+      <td>${hayPendiente ? `<button class="btn-sm accent" onclick="marcarAcumuladoPagado('${cfg.idJugador}')" title="Marcar pagado">✓</button>` : ""}</td>
+    </tr>`;
+  }).join("");
+
+  return `
+    <div class="field">
+      <label>Partido</label>
+      <select class="inp" id="pj-partido-sel" onchange="pjPartidoSel=this.value; renderPagosJugadores()">${opciones}</select>
+    </div>
+    <div class="sum-grid three">
+      <div class="stat-card"><div class="stat-label">Total a pagar</div><div class="stat-val acc">${fmt(totalPartido)}</div></div>
+      <div class="stat-card"><div class="stat-label">Ya pagado</div><div class="stat-val ing">${fmt(pagadoPartido)}</div></div>
+      <div class="stat-card"><div class="stat-label">Pendiente</div><div class="stat-val egr">${fmt(pendientePartido)}</div></div>
+    </div>
+    <div class="pj-table-wrap">
+      <table class="pj-table">
+        <thead><tr>
+          <th>Jugador</th><th>Rol</th><th>Base</th><th>Ajuste</th><th>Motivo</th><th>Final</th><th>Estado</th><th></th>
+        </tr></thead>
+        <tbody>${rowsPartido}${rowsPeriodico}</tbody>
+      </table>
+    </div>
+    <button class="btn-main" id="btn-guardar-pagopartido" onclick="guardarPagoPartido()">Guardar</button>
+  `;
+}
+
+function pjRecalcRow(el) {
+  const tr = el.closest("tr");
+  if (!tr) return;
+  const rolSel = tr.querySelector(".pj-rol").value;
+  const base = rolSel === "titular" ? Number(tr.dataset.titular||0)
+             : rolSel === "suplenteConMin" ? Number(tr.dataset.supmin||0)
+             : rolSel === "suplente" ? Number(tr.dataset.suplente||0) : 0;
+  const ajuste = Number(tr.querySelector(".pj-ajuste").value || 0);
+  tr.querySelector(".pj-base").textContent = fmt(base);
+  tr.querySelector(".pj-final").textContent = fmt(base + ajuste);
+}
+
+async function guardarPagoPartido() {
+  const btnId = "btn-guardar-pagopartido";
+  if (document.getElementById(btnId)?.disabled) return;
+  const rows = [...document.querySelectorAll("#pagosjug-content .pj-table tbody tr[data-jug]")];
+  const roster = rows.map(tr => ({
+    jugadorId:     tr.dataset.jug,
+    jugadorNombre: tr.dataset.nombre,
+    rol:           tr.querySelector(".pj-rol").value,
+    montoBase:     Number(tr.querySelector(".pj-base").textContent.replace(/[^\d-]/g,"")) || 0,
+    ajuste:        Number(tr.querySelector(".pj-ajuste").value || 0),
+    motivoAjuste:  tr.querySelector(".pj-motivo").value || "",
+    montoFinal:    Number(tr.querySelector(".pj-final").textContent.replace(/[^\d-]/g,"")) || 0,
+  }));
+  setBtnState(btnId, "saving");
+  try {
+    const r = await Storage.saveRoster(pjPartidoSel, roster);
+    if (!r.ok) throw new Error(r.error || "Error");
+    const [rRos, rPJ] = await Promise.all([Storage.listRoster(), Storage.listPagosJugadores()]);
+    if (rRos.ok) rosterPartidos = rRos.roster || [];
+    if (rPJ.ok)  pagosJugadores = rPJ.pagosJugadores || [];
+    saveSnapshotToCache();
+    setBtnState(btnId, "saved");
+    toast("Roster y montos guardados ✓", "ok");
+    renderPagosJugadores();
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+// ── Modal chico: medio de pago (reemplaza al prompt() nativo) ──
+let pjMedioPagoCallback = null;
+function abrirMedioPagoModalGenerico(titulo, onConfirm) {
+  pjMedioPagoCallback = onConfirm;
+  const opciones = metodos.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${esc(titulo)}</div>
+        <div class="field">
+          <label>Medio de pago</label>
+          <select class="inp" id="pj-medio-pago">${opciones}</select>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-confirmar-mediopago" onclick="confirmarMedioPagoModal()">Confirmar pago</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function confirmarMedioPagoModal() {
+  const btnId = "btn-confirmar-mediopago";
+  if (document.getElementById(btnId)?.disabled) return;
+  const medioPago = document.getElementById("pj-medio-pago")?.value || "";
+  setBtnState(btnId, "saving");
+  try {
+    await pjMedioPagoCallback(medioPago);
+    setBtnState(btnId, "saved");
+    closeModal();
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId) {
+  abrirMedioPagoModalGenerico("Confirmar pago", async (medioPago) => {
+    let ids = idsIniciales.filter(Boolean);
+    if (!ids.length) {
+      // La fila no existía todavía (rol recién elegido y no guardado) — hay que guardar primero.
+      await guardarPagoPartido();
+      const fila = pjFilaPartido(jugadorId, partidoId);
+      if (fila) ids = [fila.id];
+    }
+    if (!ids.length) throw new Error("Guardá el roster antes de marcar como pagado");
+    const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago);
+    if (!r.ok) throw new Error(r.error || "Error");
+    ids.forEach(id => {
+      const p = pagosJugadores.find(x => x.id === id);
+      if (p) { p.estado = "pagado"; p.fechaPago = today(); p.medioPago = medioPago; }
+    });
+    saveSnapshotToCache();
+    toast("Pago confirmado ✓", "ok");
+    renderPagosJugadores();
+  });
+}
+
+function marcarAcumuladoPagado(jugadorId) {
+  const ids = pagosJugadores
+    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
+    .map(p => p.id);
+  if (!ids.length) return;
+  abrirMedioPagoModal(ids, jugadorId, null);
+}
+
+function abrirAgregarMontoModal(jugadorId, jugadorNombre) {
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Agregar monto — ${esc(jugadorNombre)}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Monto (negativo para descuento)</label>
+            <input class="inp" id="pj-monto-nuevo" type="number" step="1" placeholder="0">
+          </div>
+          <div class="field">
+            <label>Etiqueta / motivo</label>
+            <input class="inp" id="pj-etiqueta-nueva" type="text" placeholder="1ra quincena julio, premio, descuento…">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-agregar-monto" onclick="guardarMontoNuevo('${jugadorId}','${esc(jugadorNombre)}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function guardarMontoNuevo(jugadorId, jugadorNombre) {
+  const btnId = "btn-agregar-monto";
+  if (document.getElementById(btnId)?.disabled) return;
+  const monto    = parseFloat(document.getElementById("pj-monto-nuevo")?.value || "0") || 0;
+  const etiqueta = (document.getElementById("pj-etiqueta-nueva")?.value || "").trim();
+  if (!monto) { toast("Ingresá un monto distinto de 0", "err"); return; }
+  setBtnState(btnId, "saving");
+  try {
+    const pago = {
+      jugadorId, jugadorNombre, partidosIncluidos: [],
+      montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
+      estado: "pendiente", etiqueta
+    };
+    const r = await Storage.savePagoJugador(pago);
+    if (!r.ok) throw new Error(r.error || "Error");
+    pagosJugadores.push({ id:r.id, ...pago, fechaPago:"", medioPago:"" });
+    saveSnapshotToCache();
+    setBtnState(btnId, "saved");
+    toast("Monto agregado ✓", "ok");
+    closeModal();
+    renderPagosJugadores();
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+function renderTransferencias() {
+  if (pjPartidosSel === null) {
+    // Precarga: partidos que tienen al menos una fila pendiente.
+    const idsConPendiente = new Set(
+      pagosJugadores.filter(p => p.estado === "pendiente" && p.partidosIncluidos.length === 1)
+        .map(p => p.partidosIncluidos[0])
+    );
+    pjPartidosSel = partidos.filter(p => idsConPendiente.has(p.id)).map(p => p.id);
+  }
+  const sorted = [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  if (!sorted.length) return '<p class="note">Todavía no hay partidos cargados.</p>';
+
+  const chips = sorted.map(p => {
+    const fd = p.fecha ? p.fecha.slice(8)+"/"+p.fecha.slice(5,7) : "";
+    const activo = pjPartidosSel.includes(p.id);
+    return `<button class="pill ${activo?'active':''}" onclick="pjToggleChip('${p.id}')">${esc(p.rival)} · ${fd}</button>`;
+  }).join("");
+
+  const partidosSel = sorted.filter(p => pjPartidosSel.includes(p.id));
+
+  // Jugadores relevantes: por-partido con fila en algún partido seleccionado, o periódicos con acumulado pendiente.
+  const filasPorJugador = {}; // idJugador -> { nombre, alias, porPartido:{partidoId:fila}, periodico:bool, acumulado }
+  configJugadores.forEach(cfg => {
+    if (cfg.frecuencia === "partido") {
+      const porPartido = {};
+      let tieneAlgo = false;
+      partidosSel.forEach(p => {
+        const fila = pjFilaPartido(cfg.idJugador, p.id);
+        if (fila) { porPartido[p.id] = fila; tieneAlgo = true; }
+      });
+      if (tieneAlgo) filasPorJugador[cfg.idJugador] = { nombre:cfg.nombre, alias:cfg.alias, porPartido, periodico:false };
+    } else {
+      const acumulado = pjAcumuladoPendiente(cfg.idJugador);
+      if (acumulado > 0) filasPorJugador[cfg.idJugador] = { nombre:cfg.nombre, alias:cfg.alias, periodico:true, acumulado };
+    }
+  });
+
+  const jugadorIds = Object.keys(filasPorJugador).sort((a,b) => filasPorJugador[a].nombre.localeCompare(filasPorJugador[b].nombre));
+
+  let totalTransferir = 0;
+  const rows = jugadorIds.map(jid => {
+    const info = filasPorJugador[jid];
+    let total = 0;
+    let cols;
+    if (info.periodico) {
+      cols = `<td class="mono" colspan="${partidosSel.length||1}">Acumulado</td>`;
+      total = info.acumulado;
+    } else {
+      cols = partidosSel.map(p => {
+        const fila = info.porPartido[p.id];
+        if (!fila) return `<td class="mono">—</td>`;
+        total += Number(fila.montoFinal||0);
+        return `<td class="mono">${fmt(fila.montoFinal)}${fila.estado==='pagado'?' <span class="pj-badge pj-badge-pagado" style="padding:1px 5px">✓</span>':''}</td>`;
+      }).join("");
+    }
+    totalTransferir += total;
+    const pendiente = info.periodico ? true : Object.values(info.porPartido).some(f => f.estado === "pendiente");
+    return `
+    <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-total="${total}">
+      <td>${esc(info.nombre)}</td>
+      ${cols}
+      <td class="mono">${fmt(total)}</td>
+      <td>${esc(info.alias || "—")}</td>
+      <td style="text-align:center"><input type="checkbox" class="pj-transf-cb" value="${jid}" ${pendiente?"checked":""} ${pendiente?"":"disabled"}></td>
+    </tr>`;
+  }).join("");
+
+  const partidoCols = partidosSel.map(p => `<th>${esc(p.rival)}<br>${p.fecha?p.fecha.slice(8)+"/"+p.fecha.slice(5,7):""}</th>`).join("");
+
+  return `
+    <div class="pj-chip-row">${chips}</div>
+    <div class="sum-grid three">
+      <div class="stat-card"><div class="stat-label">Jugadores a pagar</div><div class="stat-val acc">${jugadorIds.length}</div></div>
+      <div class="stat-card"><div class="stat-label">Total a transferir</div><div class="stat-val egr">${fmt(totalTransferir)}</div></div>
+      <div class="stat-card"><div class="stat-label">Partidos incluidos</div><div class="stat-val">${partidosSel.length}</div></div>
+    </div>
+    <div class="pj-table-wrap">
+      <table class="pj-table" id="pj-transf-table">
+        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Total</th><th>Alias/CBU</th><th>Incluir</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="99" class="note">Sin jugadores pendientes para los partidos seleccionados</td></tr>`}</tbody>
+      </table>
+    </div>
+    <button class="btn-export" style="margin-bottom:10px" onclick="exportarTransferencias()">📋 Exportar lista de transferencias</button>
+    <button class="btn-main" id="btn-confirmar-transf" onclick="confirmarPagosSeleccionados()">Confirmar pagos seleccionados</button>
+  `;
+}
+
+function pjToggleChip(partidoId) {
+  if (pjPartidosSel.includes(partidoId)) pjPartidosSel = pjPartidosSel.filter(id => id !== partidoId);
+  else pjPartidosSel = [...pjPartidosSel, partidoId];
+  renderPagosJugadores();
+}
+
+function pjFilasSeleccionadas() {
+  const checks = [...document.querySelectorAll("#pj-transf-table .pj-transf-cb:checked")];
+  const jugadorIds = checks.map(c => c.value);
+  const partidosSel = [...partidos].filter(p => pjPartidosSel.includes(p.id));
+  const ids = [];
+  jugadorIds.forEach(jid => {
+    const cfg = configJugadores.find(c => c.idJugador === jid);
+    if (!cfg) return;
+    if (cfg.frecuencia === "partido") {
+      partidosSel.forEach(p => {
+        const fila = pjFilaPartido(jid, p.id);
+        if (fila && fila.estado === "pendiente") ids.push(fila.id);
+      });
+    } else {
+      pagosJugadores.filter(p => p.jugadorId === jid && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
+        .forEach(p => ids.push(p.id));
+    }
+  });
+  return ids;
+}
+
+function exportarTransferencias() {
+  const checks = [...document.querySelectorAll("#pj-transf-table .pj-transf-cb:checked")];
+  if (!checks.length) { toast("No hay filas seleccionadas para exportar", "err"); return; }
+  const lineas = checks.map(c => {
+    const tr = c.closest("tr");
+    return `${tr.dataset.alias},${tr.dataset.total}`;
+  });
+  const texto = "Alias/CBU,Monto\n" + lineas.join("\n");
+  const blob = new Blob([texto], { type:"text/csv;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "transferencias_jugadores.csv"; a.click();
+  URL.revokeObjectURL(url);
+  toast("Lista exportada ✓", "ok");
+}
+
+function confirmarPagosSeleccionados() {
+  const ids = pjFilasSeleccionadas();
+  if (!ids.length) { toast("No hay pagos pendientes seleccionados", "err"); return; }
+  abrirMedioPagoModalGenerico("Confirmar " + ids.length + " pago" + (ids.length!==1?"s":""), async (medioPago) => {
+    const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago);
+    if (!r.ok) throw new Error(r.error || "Error");
+    ids.forEach(id => {
+      const p = pagosJugadores.find(x => x.id === id);
+      if (p) { p.estado = "pagado"; p.fechaPago = today(); p.medioPago = medioPago; }
+    });
+    saveSnapshotToCache();
+    toast("Pagos confirmados ✓", "ok");
+    renderPagosJugadores();
+  });
+}
 
 function renderConfig() {
   const url = getScriptUrl();

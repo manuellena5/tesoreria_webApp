@@ -1153,13 +1153,26 @@ function isNetworkError(e) {
 }
 
 function saveSnapshotToCache() {
+  const payload = JSON.stringify({
+    movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
+    configJugadores, rosterPartidos, pagosJugadores,
+    cuentas, metodos, preciosGranos, savedAt: Date.now()
+  });
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({
-      movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
-      configJugadores, rosterPartidos, pagosJugadores,
-      cuentas, metodos, preciosGranos, savedAt: Date.now()
-    }));
-  } catch (e) { /* localStorage lleno o no disponible — no es crítico */ }
+    localStorage.setItem(CACHE_KEY, payload);
+  } catch (e) {
+    // Si falla (ej. cupo de localStorage lleno) y lo tragamos en silencio, el
+    // snapshot queda congelado en un estado viejo para siempre — y ese estado
+    // viejo es justamente el que se usa para "resucitar" datos cuando más
+    // adelante se cae a modo offline. Reintentamos limpiando el snapshot previo;
+    // si igual falla, al menos queda registrado para poder diagnosticarlo.
+    try {
+      localStorage.removeItem(CACHE_KEY);
+      localStorage.setItem(CACHE_KEY, payload);
+    } catch (e2) {
+      console.warn("No se pudo guardar el snapshot offline:", e2);
+    }
+  }
 }
 
 function loadSnapshotFromCache() {
@@ -1257,7 +1270,7 @@ async function initApp() {
   if (navigator.onLine) syncPendingMovs().then(renderOfflineBanner);
 }
 
-async function loadAllData() {
+async function loadAllData(_esReintento) {
   // Sin conexión: no intentamos pegarle a Apps Script, vamos directo al cache local.
   if (!navigator.onLine) {
     if (loadFromCacheIfAny()) return;
@@ -1326,7 +1339,22 @@ async function loadAllData() {
     updateBadge();
     saveSnapshotToCache();
   } catch(e) {
-    if (isNetworkError(e) && loadFromCacheIfAny()) {
+    if (!isNetworkError(e)) {
+      toast("Error cargando datos: " + e.message, "err");
+      return;
+    }
+    // Muchos "fallos de red" acá son en realidad un cold-start lento de Apps Script,
+    // no una desconexión real — reintentamos una vez antes de resignarnos.
+    if (!_esReintento) { await loadAllData(true); return; }
+    // Si ya tenemos datos cargados en esta sesión (ej. venimos de refreshData()
+    // después de haber usado la app un rato), NO los pisamos con el snapshot de
+    // localStorage: puede ser viejo y "resucitar" en pantalla movimientos que ya
+    // se eliminaron en esta sesión. Nos quedamos con lo que ya está mostrado.
+    if (movimientos.length) {
+      toast("No se pudo actualizar (sin conexión o servidor lento) — se mantienen los datos actuales", "err");
+      return;
+    }
+    if (loadFromCacheIfAny()) {
       toast("Sin conexión — mostrando los últimos datos guardados", "err");
     } else {
       toast("Error cargando datos: " + e.message, "err");
@@ -2328,11 +2356,25 @@ function confirmDelete(id) {
 
 async function deleteMovimiento(id) {
   closeModal();
+  const mov = movimientos.find(m => m.id === id);
+  // Cargado offline y todavía no sincronizado con el backend: no existe allá
+  // todavía, así que Storage.deleteMov devolvería "no encontrado". Lo sacamos
+  // directo de la cola local en vez de pegarle al servidor.
+  if (mov && mov._pending) {
+    movimientos = movimientos.filter(m => m.id !== id);
+    removePendingMov(id);
+    updateBadge();
+    saveSnapshotToCache();
+    toast("Movimiento eliminado", "ok");
+    renderMovimientos();
+    return;
+  }
   showOverlay("Eliminando…");
   try {
     const r = await Storage.deleteMov(id);
     if (!r.ok) throw new Error(r.error || "Error al eliminar");
     movimientos = movimientos.filter(m => m.id !== id);
+    removePendingMov(id); // por las dudas quedara encolado de una edición offline previa
     updateBadge();
     saveSnapshotToCache();
     toast("Movimiento eliminado", "ok");

@@ -1258,6 +1258,24 @@ async function volverADatosActuales() {
   await refreshData();
 }
 
+// Borra el snapshot "en vivo" y todas las copias diarias guardadas en este
+// navegador (no toca la cola de pendientes de sincronizar ni la Google Sheet),
+// y fuerza una recarga completa desde el servidor. Pensado para cuando el
+// cache local de este dispositivo quedó contaminado con datos viejos (ej. por
+// el bug de fallback offline ya corregido) y siguen reapareciendo movimientos
+// ya eliminados a pesar de que el backend ya no los tiene.
+async function limpiarCacheLocal() {
+  if (!confirm("Esto borra la copia local guardada en este navegador (snapshot en vivo + Backups locales) y recarga todo desde el servidor. No afecta la Google Sheet ni otros dispositivos. ¿Continuar?")) return;
+  localStorage.removeItem(CACHE_KEY);
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(CACHE_DAILY_PREFIX)) localStorage.removeItem(key);
+  }
+  viendoSnapshotHistorico = null;
+  toast("Cache local borrado — recargando desde el servidor…", "ok");
+  await refreshData();
+}
+
 function loadSnapshotFromCache() {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
@@ -2474,6 +2492,20 @@ async function deleteMovimiento(id) {
   showOverlay("Eliminando…");
   try {
     const r = await Storage.deleteMov(id);
+    // El backend no lo tiene: puede ser un "fantasma" que quedó en un cache local
+    // viejo/contaminado (ver limpiarCacheLocal) pero que en la hoja real ya no
+    // existe. Sacarlo de la vista es lo correcto acá — insistir con el mismo
+    // error para siempre solo confunde, porque nunca va a poder "borrarse de
+    // nuevo" algo que el servidor ya no tiene.
+    if (!r.ok && /no encontrado/i.test(r.error || "")) {
+      movimientos = movimientos.filter(m => m.id !== id);
+      removePendingMov(id);
+      updateBadge();
+      saveSnapshotToCache();
+      toast("Ese movimiento ya no existía en el servidor — se quitó de la vista", "ok");
+      renderMovimientos();
+      return;
+    }
     if (!r.ok) throw new Error(r.error || "Error al eliminar");
     movimientos = movimientos.filter(m => m.id !== id);
     removePendingMov(id); // por las dudas quedara encolado de una edición offline previa
@@ -6964,6 +6996,8 @@ function renderConfig() {
       </p>
       ${viendoSnapshotHistorico ? `<button class="btn-secondary" style="margin-bottom:10px" onclick="volverADatosActuales()">← Volver a datos actuales</button>` : ""}
       ${snapshotsHtml || `<p class="cfg-note">Todavía no hay copias locales guardadas.</p>`}
+      <button class="btn-sm danger" style="margin-top:10px" onclick="limpiarCacheLocal()">🗑 Limpiar cache local de este dispositivo</button>
+      <p class="cfg-note" style="margin-top:6px">Si ves movimientos que ya eliminaste reaparecer, es porque quedaron guardados en la copia local de este navegador desde antes — este botón la borra y recarga todo de nuevo directamente desde la planilla. No afecta la Google Sheet ni a otros dispositivos.</p>
     </div>
 
     <!-- Actualización de la app -->

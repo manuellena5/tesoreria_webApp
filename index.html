@@ -311,6 +311,10 @@ textarea.inp { resize:none; }
 .jug-detalle-table th.dt-sortable { cursor:pointer; user-select:none; }
 .jug-detalle-table th.dt-sortable:hover { color:var(--text); }
 .jug-detalle-table th .dt-arrow { color:var(--accent); margin-left:2px; }
+/* Headers ordenables de tablas de resumen (ej. Resumen > Jugadores) — misma convención que .dt-sortable */
+th.rt-sortable { cursor:pointer; user-select:none; }
+th.rt-sortable:hover { color:var(--text); }
+th .rt-arrow { color:var(--accent); margin-left:2px; }
 .jug-detalle-table.dt-fixed { table-layout:fixed; }
 .dt-resizer { position:absolute; top:0; right:-4px; width:8px; height:100%; cursor:col-resize; user-select:none; z-index:1; }
 .dt-resizer:hover, .dt-resizer.dt-resizing { background:var(--accent); opacity:.4; }
@@ -948,6 +952,8 @@ let jugadorResExpandido  = new Set();
 let jugadorResVista       = getDefaultVista("jugadores_vista");
 let jugadorResAgrupacion  = localStorage.getItem("jugadores_agrupacion") || "jugador"; // "jugador" | "grupo" | "promedios"
 let jugadorResFiltro     = "";
+let jugadorResOrdenCol   = "total"; // nombre|mesesConGasto|sueldos|movilidad|viandas|almacen|alquilerCasa|medico|otros|total
+let jugadorResOrdenDir   = -1;      // 1 = ascendente (▲), -1 = descendente (▼) — igual convención que detTablaSort
 let eventoResAnio       = String(new Date().getFullYear());
 let eventoResMes        = "";
 let eventoResExpandido  = new Set();
@@ -4891,12 +4897,40 @@ function renderJugadoresResumen() {
     </div>`;
 }
 
-// Recalcula filas + tabla/cards según año/meses/agrupación/búsqueda vigentes.
+// Click en un header de columna: primer clic ordena de mayor a menor por esa
+// columna; un segundo clic sobre la misma la invierte (igual convención que
+// las tablas de detalle — ver detTablaSort).
+function setJugadorResOrden(col) {
+  if (jugadorResOrdenCol === col) jugadorResOrdenDir *= -1;
+  else { jugadorResOrdenCol = col; jugadorResOrdenDir = -1; }
+  document.getElementById("jugadores-res-body").innerHTML = renderJugadoresResBody();
+}
+
+// "Mayor a menor" para columnas de plata usa el valor absoluto (mismo criterio
+// que ya usaba el orden por defecto de Total) — son mayormente egresos
+// negativos, así que ordenar por el número crudo pondría el gasto más grande
+// último en vez de primero. La columna Jugador/Grupo ordena alfabéticamente.
+function jugadorResOrdenValor(r, col) {
+  if (col === "nombre") return r.nombre || "";
+  return Math.abs(r[col] || 0);
+}
+
+function ordenarJugadoresRes(rows) {
+  const col = jugadorResOrdenCol, dir = jugadorResOrdenDir;
+  return [...rows].sort((a, b) => {
+    const va = jugadorResOrdenValor(a, col), vb = jugadorResOrdenValor(b, col);
+    const cmp = col === "nombre" ? va.localeCompare(vb, "es", { sensitivity: "base" }) : va - vb;
+    return cmp * dir;
+  });
+}
+
+// Recalcula filas + tabla/cards según año/meses/agrupación/búsqueda/orden vigentes.
 // Separado de renderJugadoresResumen para poder re-renderizar solo esto al tipear en el buscador.
 function renderJugadoresResBody() {
-  const rows = calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
-    .filter(r => !jugadorResFiltro || normStr(r.nombre).includes(normStr(jugadorResFiltro)))
-    .sort((a,b) => Math.abs(b.total) - Math.abs(a.total));
+  const rows = ordenarJugadoresRes(
+    calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
+      .filter(r => !jugadorResFiltro || normStr(r.nombre).includes(normStr(jugadorResFiltro)))
+  );
 
   const esPromedios = jugadorResAgrupacion === "promedios";
   const mesesDisponibles = jugadorResMesesDisponibles(jugadorResAnio);
@@ -4914,6 +4948,15 @@ function renderJugadoresResBody() {
   return `<p class="note" style="margin-bottom:12px">${totalesLine}</p>${body}`;
 }
 
+// Header ordenable: tocar la columna ordena de mayor a menor (o invierte si ya
+// era la columna activa) — misma convención visual que las tablas de detalle.
+function thOrdenJugadorRes(col, label, align, extraClass) {
+  const active = jugadorResOrdenCol === col;
+  const arrow = active ? `<span class="rt-arrow">${jugadorResOrdenDir===1?"▲":"▼"}</span>` : "";
+  const cls = "rt-sortable" + (extraClass ? " " + extraClass : "");
+  return `<th class="${cls}" style="text-align:${align||'right'}" onclick="setJugadorResOrden('${col}')">${label}${arrow}</th>`;
+}
+
 function renderJugadoresResTabla(rows, esPromedios) {
   const isMobile = window.matchMedia("(max-width:599px)").matches;
 
@@ -4923,7 +4966,7 @@ function renderJugadoresResTabla(rows, esPromedios) {
     return `<td style="text-align:right;font-family:var(--mono)" class="${v<0?'egr':'ing'}">${v<0?"-":"+"}${fmt(Math.abs(v))}</td>`;
   }
 
-  const mesesColHeader = esPromedios ? `<th style="text-align:center">Meses c/gasto</th>` : "";
+  const mesesColHeader = esPromedios ? thOrdenJugadorRes("mesesConGasto", "Meses c/gasto", "center") : "";
 
   const bodyRows = rows.map(r => {
     totSueldos      += r.sueldos;
@@ -4970,23 +5013,23 @@ function renderJugadoresResTabla(rows, esPromedios) {
     <td style="text-align:right;font-family:var(--mono);font-weight:600" class="${totTotal<0?'egr':'ing'}">${totTotal<0?"-":"+"}${fmt(Math.abs(totTotal))}</td>
   </tr>`;
 
-  const otrosHeader = isMobile ? "" : `<th style="text-align:right">Otros</th>`;
+  const otrosHeader = isMobile ? "" : thOrdenJugadorRes("otros", "Otros");
   const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Vista reducida — cambiá a Cards para ver la columna Otros</p>` : "";
 
   return `
     <div class="reint-table-wrap">
       <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}" style="${isMobile?'font-size:11px':''}">
         <thead><tr>
-          <th class="jugador-col">Jugador/Grupo</th>
+          ${thOrdenJugadorRes("nombre", "Jugador/Grupo", "left", "jugador-col")}
           ${mesesColHeader}
-          <th style="text-align:right">Sueldo</th>
-          <th style="text-align:right">Movilidad</th>
-          <th style="text-align:right">Viandas</th>
-          <th style="text-align:right">Almacén</th>
-          <th style="text-align:right">Alquiler y gastos casa</th>
-          <th style="text-align:right">Médico</th>
+          ${thOrdenJugadorRes("sueldos", "Sueldo")}
+          ${thOrdenJugadorRes("movilidad", "Movilidad")}
+          ${thOrdenJugadorRes("viandas", "Viandas")}
+          ${thOrdenJugadorRes("almacen", "Almacén")}
+          ${thOrdenJugadorRes("alquilerCasa", "Alquiler y gastos casa")}
+          ${thOrdenJugadorRes("medico", "Médico")}
           ${otrosHeader}
-          <th style="text-align:right">TOTAL</th>
+          ${thOrdenJugadorRes("total", "TOTAL")}
         </tr></thead>
         <tbody>${bodyRows}${totRow}</tbody>
       </table>
@@ -5053,9 +5096,10 @@ function renderJugadorResDetalle(r) {
 function exportJugadoresResExcel() {
   if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
 
-  const rows = calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
-    .filter(r => !jugadorResFiltro || normStr(r.nombre).includes(normStr(jugadorResFiltro)))
-    .sort((a,b) => Math.abs(b.total) - Math.abs(a.total));
+  const rows = ordenarJugadoresRes(
+    calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
+      .filter(r => !jugadorResFiltro || normStr(r.nombre).includes(normStr(jugadorResFiltro)))
+  );
   if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
 
   const esPromedios = jugadorResAgrupacion === "promedios";

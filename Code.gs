@@ -1227,6 +1227,88 @@ function uid_gs() {
   return Math.random().toString(36).slice(2) + new Date().getTime().toString(36);
 }
 
+// ════════════════════════════════════════════════════════════
+// BACKUP DIARIO A DRIVE
+//
+// SETUP (una sola vez): abrí este proyecto en script.google.com, seleccioná
+// la función "configurarBackupDiario" en el desplegable de arriba y tocá
+// "Ejecutar" (te va a pedir autorización la primera vez). Eso instala un
+// trigger que corre backupDiario() todos los días a la hora definida abajo.
+// Para desinstalarlo: correr "quitarBackupDiario" una vez.
+//
+// Guarda una copia completa de la planilla (todas las pestañas) en una
+// carpeta de Drive llamada BACKUP_FOLDER_NAME, con la fecha en el nombre.
+// Se conservan los últimos BACKUP_RETENCION_DIAS días; las copias más
+// viejas se mandan a la papelera de Drive (no se borran para siempre al
+// toque, por si hace falta recuperar una por error).
+// ════════════════════════════════════════════════════════════
+
+const BACKUP_FOLDER_NAME    = "Tesorería Club - Backups";
+const BACKUP_RETENCION_DIAS = 7;
+const BACKUP_HORA           = 3; // 0-23, hora local del script (Session.getScriptTimeZone())
+
+function backupDiario() {
+  const ss     = getSpreadsheet();
+  const folder = getOrCreateBackupFolder();
+  const tz     = ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+  const fecha  = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+  const nombre = "Tesorería Club - Backup " + fecha;
+
+  // Idempotente: si el trigger ya corrió hoy (o se ejecuta a mano de nuevo), no duplica.
+  const yaExiste = folder.getFilesByName(nombre).hasNext();
+  if (!yaExiste) {
+    DriveApp.getFileById(ss.getId()).makeCopy(nombre, folder);
+    Logger.log("backupDiario: creado " + nombre);
+  } else {
+    Logger.log("backupDiario: ya existía " + nombre + ", no se duplica");
+  }
+
+  pruneBackupsViejos(folder);
+}
+
+function getOrCreateBackupFolder() {
+  const existentes = DriveApp.getFoldersByName(BACKUP_FOLDER_NAME);
+  if (existentes.hasNext()) return existentes.next();
+  return DriveApp.createFolder(BACKUP_FOLDER_NAME);
+}
+
+// Borra (a la papelera) los backups cuyo nombre tiene una fecha anterior al
+// corte de retención. Si algún archivo no matchea el patrón de nombre
+// esperado, se lo deja intacto por las dudas.
+function pruneBackupsViejos(folder) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - BACKUP_RETENCION_DIAS);
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const f = files.next();
+    const m = f.getName().match(/(\d{4}-\d{2}-\d{2})$/);
+    if (!m) continue;
+    const fechaArchivo = new Date(m[1] + "T00:00:00");
+    if (!isNaN(fechaArchivo.getTime()) && fechaArchivo < cutoff) {
+      f.setTrashed(true);
+      Logger.log("pruneBackupsViejos: enviado a papelera " + f.getName());
+    }
+  }
+}
+
+// Correr UNA VEZ manualmente desde el editor (Ejecutar) para instalar el trigger diario.
+function configurarBackupDiario() {
+  quitarBackupDiario(); // evita duplicar si se corre más de una vez
+  ScriptApp.newTrigger("backupDiario")
+    .timeBased()
+    .everyDays(1)
+    .atHour(BACKUP_HORA)
+    .create();
+  Logger.log("configurarBackupDiario: trigger instalado, corre todos los días ~" + BACKUP_HORA + ":00");
+}
+
+// Correr manualmente desde el editor si en algún momento querés desactivar el backup diario.
+function quitarBackupDiario() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === "backupDiario")
+    .forEach(t => ScriptApp.deleteTrigger(t));
+}
+
 function jsonResponse(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))

@@ -1142,8 +1142,11 @@ const Storage = {
 // MODO OFFLINE — cache local + cola de movimientos pendientes
 // ══════════════════════════════════════════════════════════════
 
-const CACHE_KEY   = "clubfm_offline_snapshot";
+const CACHE_KEY          = "clubfm_offline_snapshot";
+const CACHE_DAILY_PREFIX = "clubfm_offline_snapshot_"; // + "YYYY-MM-DD", una copia por día
+const CACHE_DAILY_DIAS   = 7;                           // cuántos días de copias diarias se conservan
 const PENDING_KEY = "clubfm_pending_movs";
+let viendoSnapshotHistorico = null; // fecha "YYYY-MM-DD" si estamos mirando una copia vieja, o null en modo normal
 
 // Detecta errores de red (offline / servidor inalcanzable) vs. errores de la app (ej. "Sin URL configurada").
 function isNetworkError(e) {
@@ -1153,6 +1156,9 @@ function isNetworkError(e) {
 }
 
 function saveSnapshotToCache() {
+  // Si estamos mirando una copia vieja (ver "Backups locales" en Config), no la
+  // pisamos con el estado en vivo — esa vista es de solo lectura.
+  if (viendoSnapshotHistorico) return;
   const payload = JSON.stringify({
     movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
     configJugadores, rosterPartidos, pagosJugadores,
@@ -1173,6 +1179,83 @@ function saveSnapshotToCache() {
       console.warn("No se pudo guardar el snapshot offline:", e2);
     }
   }
+  saveDailySnapshotIfNeeded(payload);
+}
+
+function todayKeyLocal() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+
+// Además del snapshot "en vivo" (que se pisa constantemente), guarda una copia
+// fechada por día — la primera vez que se guarda algo ese día — para poder
+// mirar manualmente cómo estaban los datos en una fecha anterior desde
+// Config > Backups locales. A propósito NO se usa en el fallback automático de
+// loadAllData(): ese sigue usando siempre la copia más reciente, para no volver
+// a mostrar datos viejos sin que el usuario lo pida explícitamente.
+function saveDailySnapshotIfNeeded(payload) {
+  try {
+    const key = CACHE_DAILY_PREFIX + todayKeyLocal();
+    if (!localStorage.getItem(key)) localStorage.setItem(key, payload);
+    pruneOldDailySnapshots();
+  } catch (e) { /* cupo lleno u otro error — no crítico, la copia diaria es un extra */ }
+}
+
+function pruneOldDailySnapshots() {
+  const cutoff = Date.now() - CACHE_DAILY_DIAS * 24 * 60 * 60 * 1000;
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith(CACHE_DAILY_PREFIX)) continue;
+    const d = new Date(key.slice(CACHE_DAILY_PREFIX.length) + "T00:00:00");
+    if (!isNaN(d.getTime()) && d.getTime() < cutoff) localStorage.removeItem(key);
+  }
+}
+
+// Lista las copias diarias guardadas en este navegador, más nueva primero.
+function listDailySnapshots() {
+  const out = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith(CACHE_DAILY_PREFIX)) continue;
+    try {
+      const snap = JSON.parse(localStorage.getItem(key));
+      out.push({ fecha: key.slice(CACHE_DAILY_PREFIX.length), savedAt: snap.savedAt, movCount: (snap.movimientos||[]).length });
+    } catch (e) { /* copia corrupta — se ignora */ }
+  }
+  return out.sort((a,b) => b.fecha.localeCompare(a.fecha));
+}
+
+// Carga en memoria (sin tocar el servidor) la copia guardada de una fecha puntual,
+// para poder inspeccionarla. Queda una vista de solo lectura hasta volverADatosActuales().
+function verSnapshotDe(fecha) {
+  const raw = localStorage.getItem(CACHE_DAILY_PREFIX + fecha);
+  if (!raw) { toast("No se encontró esa copia local", "err"); return; }
+  let snap;
+  try { snap = JSON.parse(raw); } catch (e) { toast("Copia local dañada", "err"); return; }
+  movimientos = snap.movimientos || [];
+  jugadores   = snap.jugadores   || [];
+  grupos      = snap.grupos      || [];
+  adherentes  = snap.adherentes  || [];
+  pagos       = snap.pagos       || [];
+  partidos    = snap.partidos    || [];
+  reservas    = snap.reservas    || [];
+  eventos     = snap.eventos     || [];
+  configJugadores = snap.configJugadores || [];
+  rosterPartidos  = snap.rosterPartidos  || [];
+  pagosJugadores  = snap.pagosJugadores  || [];
+  if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
+  if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
+  if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
+  viendoSnapshotHistorico = fecha;
+  updateBadge();
+  renderOfflineBanner();
+  toast("Mostrando la copia local del " + fecha + " (solo lectura)", "ok");
+  goTab("movimientos");
+}
+
+async function volverADatosActuales() {
+  viendoSnapshotHistorico = null;
+  await refreshData();
 }
 
 function loadSnapshotFromCache() {
@@ -1236,6 +1319,14 @@ async function syncPendingMovs() {
 function renderOfflineBanner() {
   const root = document.getElementById("offline-banner-root");
   if (!root) return;
+  if (viendoSnapshotHistorico) {
+    root.innerHTML = `
+      <div class="offline-banner" style="background:var(--warn-bg);color:var(--warn)">
+        <span>🕒 Viendo copia local del ${esc(viendoSnapshotHistorico)} — solo lectura, no es la data en vivo</span>
+        <button onclick="volverADatosActuales()">Volver a datos actuales</button>
+      </div>`;
+    return;
+  }
   const pending = getPendingMovs().length;
   if (navigator.onLine && !pending) { root.innerHTML = ""; return; }
   const msgs = [];
@@ -1770,9 +1861,19 @@ function filterRubros(query) {
 }
 
 // ── Save ─────────────────────────────────────────────────────
+// Evita modificar datos en vivo mientras se está mirando una copia histórica de
+// solo lectura (Config > Backups locales) — un guardado/edición ahí operaría
+// sobre el servidor real con un estado local que no es el actual.
+function bloqueadoPorVistaHistorica() {
+  if (!viendoSnapshotHistorico) return false;
+  toast("Estás viendo una copia local del " + viendoSnapshotHistorico + " — volvé a datos actuales antes de guardar o borrar", "err");
+  return true;
+}
+
 async function saveMovimiento() {
   const btn = document.getElementById("btn-guardar-mov");
   if (btn && btn.disabled) return; // evita doble envío (doble tap / doble Enter)
+  if (bloqueadoPorVistaHistorica()) return;
 
   const url = getScriptUrl();
   if (!url) { toast("Configurá la URL del script primero", "err"); goTab("config"); return; }
@@ -2355,6 +2456,7 @@ function confirmDelete(id) {
 }
 
 async function deleteMovimiento(id) {
+  if (bloqueadoPorVistaHistorica()) return;
   closeModal();
   const mov = movimientos.find(m => m.id === id);
   // Cargado offline y todavía no sincronizado con el backend: no existe allá
@@ -6780,6 +6882,12 @@ function renderConfig() {
       <button class="btn-sm danger" onclick="removeMetodo(${i})">✕</button>
     </div>`).join("");
 
+  const snapshotsHtml = listDailySnapshots().map(s => `
+    <div class="cfg-item">
+      <span style="flex:1">${esc(s.fecha)} <span class="cfg-note" style="display:inline">(${s.movCount} mov., ${new Date(s.savedAt).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})})</span></span>
+      <button class="btn-sm" onclick="verSnapshotDe('${esc(s.fecha)}')">👁 Ver</button>
+    </div>`).join("");
+
   setContent(`
     <!-- URL Script -->
     <div class="cfg-card">
@@ -6846,6 +6954,16 @@ function renderConfig() {
       <div class="cfg-title">🔄 Datos</div>
       <button class="btn-secondary" onclick="refreshData()">↻ Recargar todos los datos</button>
       <p class="cfg-note" style="margin-top:8px">Si agregaste filas directamente en la hoja de cálculo, tocá este botón para sincronizar.</p>
+    </div>
+
+    <!-- Backups locales -->
+    <div class="cfg-card">
+      <div class="cfg-title">🗄️ Backups locales</div>
+      <p class="cfg-note" style="margin-bottom:10px">
+        Cada día que usás la app en este dispositivo, se guarda automáticamente una copia local de los datos (se conservan los últimos ${CACHE_DAILY_DIAS} días). Sirve para <b>mirar</b> cómo estaban los datos en una fecha anterior — es de solo lectura y vive únicamente en este navegador, no reemplaza al backup real de la planilla en Drive.
+      </p>
+      ${viendoSnapshotHistorico ? `<button class="btn-secondary" style="margin-bottom:10px" onclick="volverADatosActuales()">← Volver a datos actuales</button>` : ""}
+      ${snapshotsHtml || `<p class="cfg-note">Todavía no hay copias locales guardadas.</p>`}
     </div>
 
     <!-- Actualización de la app -->

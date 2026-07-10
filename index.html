@@ -1141,7 +1141,7 @@ const Storage = {
   async saveRoster(partidoId, roster) { return this._post({ action:"saveRoster", partidoId, roster }); },
   async listPagosJugadores()       { return this._post({ action:"listPagosJugadores"             }); },
   async savePagoJugador(p)         { return this._post({ action:"savePagoJugador", pago:p         }); },
-  async confirmarPagosJugadores(ids, fechaPago, medioPago) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago }); },
+  async confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago, cuenta }); },
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -6681,16 +6681,22 @@ async function guardarPagoPartido() {
 let pjMedioPagoCallback = null;
 function abrirMedioPagoModalGenerico(titulo, onConfirm) {
   pjMedioPagoCallback = onConfirm;
-  const opciones = metodos.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  const opcionesMedio  = metodos.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  const opcionesCuenta = cuentas.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
         <div class="modal-handle"></div>
         <div class="modal-title">${esc(titulo)}</div>
         <div class="field">
-          <label>Medio de pago</label>
-          <select class="inp" id="pj-medio-pago">${opciones}</select>
+          <label>Cuenta</label>
+          <select class="inp" id="pj-cuenta">${opcionesCuenta}</select>
         </div>
+        <div class="field">
+          <label>Medio de pago</label>
+          <select class="inp" id="pj-medio-pago">${opcionesMedio}</select>
+        </div>
+        <p class="note">Se va a generar un movimiento de egreso por cada pago confirmado (rubro "SUELDO JUGADORES").</p>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
           <button class="btn-main" style="flex:1" id="btn-confirmar-mediopago" onclick="confirmarMedioPagoModal()">Confirmar pago</button>
@@ -6703,16 +6709,18 @@ async function confirmarMedioPagoModal() {
   const btnId = "btn-confirmar-mediopago";
   if (document.getElementById(btnId)?.disabled) return;
   const medioPago = document.getElementById("pj-medio-pago")?.value || "";
+  const cuenta    = document.getElementById("pj-cuenta")?.value || "";
+  if (!cuenta) { toast("Elegí una cuenta", "err"); return; }
   setBtnState(btnId, "saving");
   try {
-    await pjMedioPagoCallback(medioPago);
+    await pjMedioPagoCallback(medioPago, cuenta);
     setBtnState(btnId, "saved");
     closeModal();
   } catch(e) { handleSaveError(btnId, e); }
 }
 
 function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId) {
-  abrirMedioPagoModalGenerico("Confirmar pago", async (medioPago) => {
+  abrirMedioPagoModalGenerico("Confirmar pago", async (medioPago, cuenta) => {
     let ids = idsIniciales.filter(Boolean);
     if (!ids.length) {
       // La fila no existía todavía (rol recién elegido y no guardado) — hay que guardar primero.
@@ -6721,16 +6729,23 @@ function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId) {
       if (fila) ids = [fila.id];
     }
     if (!ids.length) throw new Error("Guardá el roster antes de marcar como pagado");
-    const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago);
+    const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago, cuenta);
     if (!r.ok) throw new Error(r.error || "Error");
     ids.forEach(id => {
       const p = pagosJugadores.find(x => x.id === id);
       if (p) { p.estado = "pagado"; p.fechaPago = today(); p.medioPago = medioPago; }
     });
+    aplicarMovimientosCreados(r.movimientos);
     saveSnapshotToCache();
     toast("Pago confirmado ✓", "ok");
     renderPagosJugadores();
   });
+}
+
+/** Suma al array local movimientos los que el backend acaba de crear al confirmar un pago. */
+function aplicarMovimientosCreados(movimientosCreados) {
+  (movimientosCreados || []).forEach(m => movimientos.push(m));
+  updateBadge();
 }
 
 function marcarAcumuladoPagado(jugadorId) {
@@ -6922,13 +6937,14 @@ function exportarTransferencias() {
 function confirmarPagosSeleccionados() {
   const ids = pjFilasSeleccionadas();
   if (!ids.length) { toast("No hay pagos pendientes seleccionados", "err"); return; }
-  abrirMedioPagoModalGenerico("Confirmar " + ids.length + " pago" + (ids.length!==1?"s":""), async (medioPago) => {
-    const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago);
+  abrirMedioPagoModalGenerico("Confirmar " + ids.length + " pago" + (ids.length!==1?"s":""), async (medioPago, cuenta) => {
+    const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago, cuenta);
     if (!r.ok) throw new Error(r.error || "Error");
     ids.forEach(id => {
       const p = pagosJugadores.find(x => x.id === id);
       if (p) { p.estado = "pagado"; p.fechaPago = today(); p.medioPago = medioPago; }
     });
+    aplicarMovimientosCreados(r.movimientos);
     saveSnapshotToCache();
     toast("Pagos confirmados ✓", "ok");
     renderPagosJugadores();

@@ -36,7 +36,7 @@ const CFGJ_SHEET = "Config Jugadores";
 const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo"];
 // Frecuencia: "partido" | "quincenal" | "mensual"
 const PJ_SHEET = "Pagos Jugadores";
-const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta"];
+const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID"];
 // PartidosIncluidos: JSON de un array de IDs de partido ("[]" para filas quincenales/mensuales agregadas a mano)
 // Estado: "pendiente" | "pagado"
 const ROS_SHEET = "Roster Partidos";
@@ -706,7 +706,7 @@ function handleAction(data) {
           pjSh.appendRow([
             uid_gs(), r.jugadorId, r.jugadorNombre||"", partidosStr,
             Number(r.montoBase||0), Number(r.ajuste||0), r.motivoAjuste||"", Number(r.montoFinal||0),
-            "pendiente", "", "", ""
+            "pendiente", "", "", "", ""
           ]);
         }
       }
@@ -733,7 +733,8 @@ function handleAction(data) {
           estado:            String(r[8]||"pendiente"),
           fechaPago:         String(r[9]||""),
           medioPago:         String(r[10]||""),
-          etiqueta:          String(r[11]||"")
+          etiqueta:          String(r[11]||""),
+          movimientoId:      String(r[12]||"")
         }));
       return { ok: true, pagosJugadores };
     }
@@ -750,7 +751,7 @@ function handleAction(data) {
             sh.getRange(i + 1, 1, 1, PJ_COLS.length).setValues([[
               p.id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
               Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
-              p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||""
+              p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||""
             ]]);
             return { ok: true, id: p.id };
           }
@@ -760,26 +761,71 @@ function handleAction(data) {
       sh.appendRow([
         id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
         Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
-        p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||""
+        p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", ""
       ]);
       return { ok: true, id };
     }
 
-    // Marca como pagadas todas las filas cuyo ID esté en data.ids, con la misma fecha/medio.
+    // Marca como pagadas todas las filas cuyo ID esté en data.ids, con la misma fecha/medio/cuenta,
+    // y genera un Movimiento (EGRESO) por cada una — un movimiento por partido por jugador, para
+    // poder ver cuánto se gasta de sueldos por partido en Resumen > Por Partido.
     case "confirmarPagosJugadores": {
-      const sh   = getOrCreateSheet(PJ_SHEET, PJ_COLS);
-      const ids  = (data.ids || []).map(String);
+      const sh    = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const movSh = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const parSh = getOrCreateSheet(PAR_SHEET, PAR_COLS);
+      const ids       = (data.ids || []).map(String);
       if (!ids.length) return { ok: false, error: "No se especificaron pagos a confirmar" };
-      const all  = sh.getDataRange().getValues();
-      let count = 0;
-      for (let i = 1; i < all.length; i++) {
-        if (ids.indexOf(String(all[i][0])) >= 0) {
-          sh.getRange(i + 1, 9, 1, 2).setValues([[ "pagado", data.fechaPago||"" ]]);
-          sh.getRange(i + 1, 11).setValue(data.medioPago||"");
-          count++;
-        }
+      const cuenta    = data.cuenta || "";
+      const medioPago = data.medioPago || "";
+      const fechaPago = data.fechaPago || "";
+      const mes       = fechaPago.slice(0, 7);
+      const ts        = new Date().toISOString();
+
+      const parAll = parSh.getDataRange().getValues();
+      const partidoById = {};
+      for (let i = 1; i < parAll.length; i++) {
+        if (parAll[i][0]) partidoById[String(parAll[i][0])] = { rival: String(parAll[i][2]||""), numeroFecha: String(parAll[i][3]||"") };
       }
-      return { ok: true, count };
+
+      const all = sh.getDataRange().getValues();
+      let count = 0;
+      const movimientosCreados = [];
+      for (let i = 1; i < all.length; i++) {
+        if (ids.indexOf(String(all[i][0])) < 0) continue;
+        const jugadorNombre = String(all[i][2]||"");
+        const partidosIncl  = safeParseJSON(String(all[i][3]||"[]"), []);
+        const montoFinal    = Number(all[i][7]||0);
+        const motivoAjuste  = String(all[i][6]||"");
+        const etiqueta      = String(all[i][11]||"");
+        const partidoId     = partidosIncl.length ? partidosIncl[0] : "";
+        const partidoInfo   = partidoId ? partidoById[partidoId] : null;
+        const concepto = partidoInfo
+          ? "Pago jugador " + jugadorNombre + " — " + partidoInfo.numeroFecha + " vs " + partidoInfo.rival
+          : "Pago jugador " + jugadorNombre + (etiqueta ? " — " + etiqueta : "");
+
+        const movId = uid_gs();
+        const mov = {
+          id: movId, mes, fecha: fechaPago, codRubro: "19", rubro: "SUELDO JUGADORES", categoria: "Jugadores y Cuerpo Técnico",
+          concepto, egreso: montoFinal, ingreso: 0, montoFinal,
+          cuenta, cuentaDestino: "", modoPago: medioPago,
+          jugadorCT: jugadorNombre, adherente: "", observacion: motivoAjuste || "", comprobante: "",
+          seguroReintegro: 0, tipo: "EGRESO", timestamp: ts, partidoId, eventoId: "", vinculos: []
+        };
+        movSh.appendRow([
+          mov.id, mov.mes, mov.fecha, mov.codRubro, mov.rubro, mov.categoria,
+          mov.concepto, mov.egreso, mov.ingreso, mov.montoFinal,
+          mov.cuenta, mov.cuentaDestino, mov.modoPago,
+          mov.jugadorCT, mov.adherente, mov.observacion, mov.comprobante, mov.seguroReintegro,
+          mov.tipo, mov.timestamp, mov.partidoId, mov.eventoId, stringifyVinculos(mov.vinculos)
+        ]);
+        movimientosCreados.push(mov);
+
+        sh.getRange(i + 1, 9, 1, 2).setValues([[ "pagado", fechaPago ]]);
+        sh.getRange(i + 1, 11).setValue(medioPago);
+        sh.getRange(i + 1, 13).setValue(movId);
+        count++;
+      }
+      return { ok: true, count, movimientos: movimientosCreados };
     }
 
     // ─── EVENTOS (Peñas y similares) ─────────────────────────

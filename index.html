@@ -954,6 +954,10 @@ let jugadorResAgrupacion  = localStorage.getItem("jugadores_agrupacion") || "jug
 let jugadorResFiltro     = "";
 let jugadorResOrdenCol   = "total"; // nombre|mesesConGasto|sueldos|movilidad|viandas|almacen|alquilerCasa|medico|otros|total
 let jugadorResOrdenDir   = -1;      // 1 = ascendente (▲), -1 = descendente (▼) — igual convención que detTablaSort
+let partidoResOrdenCol      = "fecha"; // fecha|buffet|buffetEgr|gastosCancha|otrosEgr|entradas|otrosIng|netoBuffet|totalNeto
+let partidoResOrdenDir      = -1;      // 1 = ascendente (▲), -1 = descendente (▼) — igual convención que detTablaSort
+let partidoResFiltroTorneo  = "";
+let partidoResFiltroPartidoId = "";
 let eventoResAnio       = String(new Date().getFullYear());
 let eventoResMes        = "";
 let eventoResExpandido  = new Set();
@@ -2831,93 +2835,7 @@ function renderResumen() {
 
     ${resumenSubTab === "reportes" ? renderReportesTab() : ""}
 
-    ${resumenSubTab === "partido" ? (() => {
-      // Tabla por partido
-      const movsPartido = movimientos.filter(m =>
-        m.partidoId &&
-        (m.tipo === "INGRESO" || m.tipo === "EGRESO")
-      );
-      // Agrupar por partido
-      const partidoMap = {};
-      for (const m of movsPartido) {
-        if (!partidoMap[m.partidoId]) partidoMap[m.partidoId] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0 };
-        const pg = partidoMap[m.partidoId];
-        if (m.tipo === "INGRESO") {
-          pg.ingresos += m.ingreso;
-          if (m.codRubro === "2")                             pg.buffetIng   += m.ingreso;
-          else if (["1","3","4"].includes(m.codRubro))        pg.entradas    += m.ingreso;
-          else                                                 pg.otrosIng    += m.ingreso;
-        } else {
-          pg.egresos += m.egreso;
-          if (m.codRubro === "2")                             pg.buffetEgr   += m.egreso;
-          else if (["12","13","14b","36"].includes(m.codRubro)) pg.gastosCancha += m.egreso;
-        }
-      }
-
-      // Obtener partidos con datos, ordenados por fecha desc
-      const partidosFiltrados = partidos
-        .filter(p => partidoMap[p.id])
-        .sort((a,b) => b.fecha.localeCompare(a.fecha));
-
-      if (!partidosFiltrados.length) return "";
-
-      // Totales
-      let totBuffetIng=0, totBuffetEgr=0, totGastosCancha=0, totEntradas=0, totOtrosIng=0, totNeto=0;
-
-      const partidoRows = partidosFiltrados.map(p => {
-        const pg = partidoMap[p.id];
-        const netoBuffet = pg.buffetIng - pg.buffetEgr;
-        const totalNeto  = pg.ingresos  - pg.egresos;
-        totBuffetIng    += pg.buffetIng;
-        totBuffetEgr    += pg.buffetEgr;
-        totGastosCancha += pg.gastosCancha;
-        totEntradas     += pg.entradas;
-        totOtrosIng     += pg.otrosIng;
-        totNeto         += totalNeto;
-        const netoClass  = totalNeto >= 0 ? "neto-pos" : "neto-neg";
-        const netoSign   = totalNeto >= 0 ? "+" : "−";
-        return `<tr>
-          <td>${esc(p.numeroFecha)} — ${esc(p.rival)}</td>
-          <td>${pg.buffetIng ? fmt(pg.buffetIng) : ""}</td>
-          <td class="egr">${pg.buffetEgr ? fmt(pg.buffetEgr) : ""}</td>
-          <td class="egr">${pg.gastosCancha ? fmt(pg.gastosCancha) : ""}</td>
-          <td>${pg.entradas ? fmt(pg.entradas) : ""}</td>
-          <td>${pg.otrosIng ? fmt(pg.otrosIng) : ""}</td>
-          <td class="${netoBuffet>=0?"ing":"egr"}">${netoBuffet!==0?(netoBuffet>=0?"+":"−")+fmt(netoBuffet):""}</td>
-          <td class="${netoClass}">${netoSign}${fmt(totalNeto)}</td>
-        </tr>`;
-      }).join("");
-
-      const totNetoClass = totNeto >= 0 ? "neto-pos" : "neto-neg";
-      const totRows = `<tr>
-        <td>TOTALES</td>
-        <td>${fmt(totBuffetIng)}</td>
-        <td class="egr">${fmt(totBuffetEgr)}</td>
-        <td class="egr">${fmt(totGastosCancha)}</td>
-        <td>${fmt(totEntradas)}</td>
-        <td>${fmt(totOtrosIng)}</td>
-        <td class="${(totBuffetIng-totBuffetEgr)>=0?"ing":"egr"}">${(totBuffetIng-totBuffetEgr)>=0?"+":"−"}${fmt(totBuffetIng-totBuffetEgr)}</td>
-        <td class="${totNetoClass}">${totNeto>=0?"+":"−"}${fmt(totNeto)}</td>
-      </tr>`;
-
-      return `
-        <div class="sec-hdr" style="margin-top:16px"><span class="sec-title">Por Partido (todos)</span></div>
-        <div style="overflow-x:auto;margin-bottom:8px">
-          <table class="partido-table">
-            <thead><tr>
-              <th>Partido</th>
-              <th>Buffet</th>
-              <th>G.Buffet</th>
-              <th>G.Cancha</th>
-              <th>Entradas</th>
-              <th>Otros Ing.</th>
-              <th>Neto Buffet</th>
-              <th>Total Neto</th>
-            </tr></thead>
-            <tbody>${partidoRows}${totRows}</tbody>
-          </table>
-        </div>`;
-    })() : ""}
+    ${resumenSubTab === "partido" ? renderPartidoResumen() : ""}
 
     ${resumenSubTab === "reintegros" ? renderReintegrosMedicos() : ""}
     ${resumenSubTab === "adherentes" ? renderAdherentesResumen() : ""}
@@ -2925,6 +2843,210 @@ function renderResumen() {
     ${resumenSubTab === "eventosRes" ? renderEventosResumen() : ""}
     ${resumenSubTab === "patrimonio" ? renderPatrimonio() : ""}
   `);
+}
+
+// ── Resumen > Por Partido — agrupa movimientos con partidoId por partido.
+// "Otros Egr." es el catch-all de egresos que no son Buffet (rubro 2) ni
+// Gastos Cancha (rubros 12/13/14b/36): antes se restaban en Total Neto sin
+// mostrarse en ninguna columna, ahora quedan desglosados. ─────────────────
+function calcPartidoResumenRows() {
+  const movsPartido = movimientos.filter(m =>
+    m.partidoId &&
+    (m.tipo === "INGRESO" || m.tipo === "EGRESO")
+  );
+  const partidoMap = {};
+  for (const m of movsPartido) {
+    if (!partidoMap[m.partidoId]) partidoMap[m.partidoId] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0, otrosEgr:0 };
+    const pg = partidoMap[m.partidoId];
+    if (m.tipo === "INGRESO") {
+      pg.ingresos += m.ingreso;
+      if (m.codRubro === "2")                             pg.buffetIng   += m.ingreso;
+      else if (["1","4"].includes(m.codRubro))             pg.entradas    += m.ingreso;
+      else                                                 pg.otrosIng    += m.ingreso;
+    } else {
+      pg.egresos += m.egreso;
+      if (m.codRubro === "2")                             pg.buffetEgr    += m.egreso;
+      else if (["12","13","14b","36"].includes(m.codRubro)) pg.gastosCancha += m.egreso;
+      else                                                 pg.otrosEgr     += m.egreso;
+    }
+  }
+
+  return partidos
+    .filter(p => partidoMap[p.id])
+    .map(p => {
+      const pg = partidoMap[p.id];
+      return { p, pg, netoBuffet: pg.buffetIng - pg.buffetEgr, totalNeto: pg.ingresos - pg.egresos };
+    });
+}
+
+function partidoResLabel(p) { return `${p.numeroFecha} — ${p.rival}`; }
+
+function partidoResOrdenValor(r, col) {
+  switch (col) {
+    case "fecha":        return r.p.fecha;
+    case "buffet":        return r.pg.buffetIng;
+    case "buffetEgr":     return r.pg.buffetEgr;
+    case "gastosCancha":  return r.pg.gastosCancha;
+    case "otrosEgr":      return r.pg.otrosEgr;
+    case "entradas":      return r.pg.entradas;
+    case "otrosIng":      return r.pg.otrosIng;
+    case "netoBuffet":    return r.netoBuffet;
+    case "totalNeto":     return r.totalNeto;
+    default:              return 0;
+  }
+}
+
+function ordenarPartidoRes(rows) {
+  const col = partidoResOrdenCol, dir = partidoResOrdenDir;
+  return [...rows].sort((a, b) => {
+    const va = partidoResOrdenValor(a, col), vb = partidoResOrdenValor(b, col);
+    const cmp = typeof va === "string" ? va.localeCompare(vb, "es", { sensitivity: "base" }) : va - vb;
+    return cmp * dir;
+  });
+}
+
+// Click en un header de columna: primer clic ordena de mayor a menor (o más
+// reciente primero, para fecha); un segundo clic sobre la misma la invierte
+// — misma convención que setJugadorResOrden.
+function setPartidoResOrden(col) {
+  if (partidoResOrdenCol === col) partidoResOrdenDir *= -1;
+  else { partidoResOrdenCol = col; partidoResOrdenDir = -1; }
+  document.getElementById("partido-res-body").innerHTML = renderPartidoResumenBody();
+}
+
+function setPartidoResFiltroTorneo(v) {
+  partidoResFiltroTorneo = v;
+  document.getElementById("partido-res-body").innerHTML = renderPartidoResumenBody();
+}
+
+function setPartidoResFiltroPartido(v) {
+  partidoResFiltroPartidoId = v;
+  document.getElementById("partido-res-body").innerHTML = renderPartidoResumenBody();
+}
+
+function thOrdenPartidoRes(col, label) {
+  const active = partidoResOrdenCol === col;
+  const arrow = active ? `<span class="rt-arrow">${partidoResOrdenDir===1?"▲":"▼"}</span>` : "";
+  return `<th class="rt-sortable" onclick="setPartidoResOrden('${col}')">${label}${arrow}</th>`;
+}
+
+function partidoResFiltrarYOrdenar() {
+  let rows = calcPartidoResumenRows();
+  if (partidoResFiltroTorneo)    rows = rows.filter(r => r.p.torneo === partidoResFiltroTorneo);
+  if (partidoResFiltroPartidoId) rows = rows.filter(r => r.p.id === partidoResFiltroPartidoId);
+  return ordenarPartidoRes(rows);
+}
+
+function renderPartidoResumenBody() {
+  const rows = partidoResFiltrarYOrdenar();
+  if (!rows.length) return `<p class="note">Sin partidos para estos filtros</p>`;
+
+  let totBuffetIng=0, totBuffetEgr=0, totGastosCancha=0, totOtrosEgr=0, totEntradas=0, totOtrosIng=0, totNeto=0;
+
+  const partidoRows = rows.map(({p, pg, netoBuffet, totalNeto}) => {
+    totBuffetIng    += pg.buffetIng;
+    totBuffetEgr    += pg.buffetEgr;
+    totGastosCancha += pg.gastosCancha;
+    totOtrosEgr     += pg.otrosEgr;
+    totEntradas     += pg.entradas;
+    totOtrosIng     += pg.otrosIng;
+    totNeto         += totalNeto;
+    const netoClass  = totalNeto >= 0 ? "neto-pos" : "neto-neg";
+    const netoSign   = totalNeto >= 0 ? "+" : "−";
+    return `<tr>
+      <td>${esc(partidoResLabel(p))}</td>
+      <td>${pg.buffetIng ? fmt(pg.buffetIng) : ""}</td>
+      <td class="egr">${pg.buffetEgr ? fmt(pg.buffetEgr) : ""}</td>
+      <td class="egr">${pg.gastosCancha ? fmt(pg.gastosCancha) : ""}</td>
+      <td class="egr">${pg.otrosEgr ? fmt(pg.otrosEgr) : ""}</td>
+      <td>${pg.entradas ? fmt(pg.entradas) : ""}</td>
+      <td>${pg.otrosIng ? fmt(pg.otrosIng) : ""}</td>
+      <td class="${netoBuffet>=0?"ing":"egr"}">${netoBuffet!==0?(netoBuffet>=0?"+":"−")+fmt(netoBuffet):""}</td>
+      <td class="${netoClass}">${netoSign}${fmt(totalNeto)}</td>
+    </tr>`;
+  }).join("");
+
+  const totNetoClass = totNeto >= 0 ? "neto-pos" : "neto-neg";
+  const totRows = `<tr>
+    <td>TOTALES</td>
+    <td>${fmt(totBuffetIng)}</td>
+    <td class="egr">${fmt(totBuffetEgr)}</td>
+    <td class="egr">${fmt(totGastosCancha)}</td>
+    <td class="egr">${fmt(totOtrosEgr)}</td>
+    <td>${fmt(totEntradas)}</td>
+    <td>${fmt(totOtrosIng)}</td>
+    <td class="${(totBuffetIng-totBuffetEgr)>=0?"ing":"egr"}">${(totBuffetIng-totBuffetEgr)>=0?"+":"−"}${fmt(totBuffetIng-totBuffetEgr)}</td>
+    <td class="${totNetoClass}">${totNeto>=0?"+":"−"}${fmt(totNeto)}</td>
+  </tr>`;
+
+  return `
+    <div style="overflow-x:auto;margin-bottom:8px">
+      <table class="partido-table">
+        <thead><tr>
+          ${thOrdenPartidoRes("fecha","Partido")}
+          ${thOrdenPartidoRes("buffet","Buffet")}
+          ${thOrdenPartidoRes("buffetEgr","G.Buffet")}
+          ${thOrdenPartidoRes("gastosCancha","G.Cancha")}
+          ${thOrdenPartidoRes("otrosEgr","Otros Egr.")}
+          ${thOrdenPartidoRes("entradas","Entradas")}
+          ${thOrdenPartidoRes("otrosIng","Otros Ing.")}
+          ${thOrdenPartidoRes("netoBuffet","Neto Buffet")}
+          ${thOrdenPartidoRes("totalNeto","Total Neto")}
+        </tr></thead>
+        <tbody>${partidoRows}${totRows}</tbody>
+      </table>
+    </div>`;
+}
+
+function exportPartidoResExcel() {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+
+  const rows = partidoResFiltrarYOrdenar();
+  if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
+
+  const headers = ["Partido","Torneo","Buffet","G.Buffet","G.Cancha","Otros Egr.","Entradas","Otros Ing.","Neto Buffet","Total Neto"];
+  const dataRows = rows.map(({p, pg, netoBuffet, totalNeto}) => [
+    partidoResLabel(p), p.torneo || "",
+    pg.buffetIng || "", pg.buffetEgr || "", pg.gastosCancha || "", pg.otrosEgr || "",
+    pg.entradas || "", pg.otrosIng || "", netoBuffet || "", totalNeto || ""
+  ]);
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+  ws["!cols"] = [28,12,12,12,12,12,12,12,12,12].map(w => ({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, "Por Partido");
+
+  const torneoPart  = partidoResFiltroTorneo || "todos";
+  const partidoPart = partidoResFiltroPartidoId ? "1partido" : "todos";
+  XLSX.writeFile(wb, `por_partido_${torneoPart}_${partidoPart}_${today()}.xlsx`);
+  toast("Excel exportado ✓", "ok");
+}
+
+function renderPartidoResumen() {
+  const allRows = calcPartidoResumenRows();
+  if (!allRows.length) return "";
+
+  const torneos = [...new Set(allRows.map(r => r.p.torneo).filter(Boolean))].sort();
+  if (partidoResFiltroTorneo && !torneos.includes(partidoResFiltroTorneo)) partidoResFiltroTorneo = "";
+  if (partidoResFiltroPartidoId && !allRows.some(r => r.p.id === partidoResFiltroPartidoId)) partidoResFiltroPartidoId = "";
+
+  const torneoOptions = `<option value="">Todos los torneos</option>` +
+    torneos.map(t => `<option value="${esc(t)}" ${partidoResFiltroTorneo===t?"selected":""}>${esc(t)}</option>`).join("");
+
+  const partidoOptions = `<option value="">Todos los partidos</option>` +
+    allRows.slice().sort((a,b) => b.p.fecha.localeCompare(a.p.fecha))
+      .map(r => `<option value="${r.p.id}" ${partidoResFiltroPartidoId===r.p.id?"selected":""}>${esc(partidoResLabel(r.p))}</option>`).join("");
+
+  return `
+    <div class="sec-hdr" style="margin-top:16px"><span class="sec-title">Por Partido (todos)</span></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1;min-width:200px">
+        <select class="inp" style="flex:1;min-width:140px" onchange="setPartidoResFiltroTorneo(this.value)">${torneoOptions}</select>
+        <select class="inp" style="flex:1;min-width:140px" onchange="setPartidoResFiltroPartido(this.value)">${partidoOptions}</select>
+      </div>
+      <button class="btn-sm accent" onclick="exportPartidoResExcel()">📥 Exportar a Excel</button>
+    </div>
+    <div id="partido-res-body">${renderPartidoResumenBody()}</div>`;
 }
 
 // ── Reportes: tabla jerárquica Categoría → Rubro → Movimiento, con filtros

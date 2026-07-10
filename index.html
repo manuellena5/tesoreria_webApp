@@ -6713,10 +6713,40 @@ async function confirmarMedioPagoModal() {
   if (!cuenta) { toast("Elegí una cuenta", "err"); return; }
   setBtnState(btnId, "saving");
   try {
+    // El callback deja el modal-root con la pantalla de confirmación (o lo cierra si falta algo
+    // que guardar antes) — no lo pisamos acá con un closeModal() automático.
     await pjMedioPagoCallback(medioPago, cuenta);
     setBtnState(btnId, "saved");
-    closeModal();
   } catch(e) { handleSaveError(btnId, e); }
+}
+
+// Pantalla final que muestra qué se acaba de pagar (jugador, partido/etiqueta, monto,
+// cuenta y medio de pago), con el mismo estilo que "Movimiento guardado" de Nuevo Movimiento.
+function mostrarConfirmacionPagosModal(movimientosCreados) {
+  const lista = movimientosCreados || [];
+  if (!lista.length) { closeModal(); return; }
+  const total = lista.reduce((s,m) => s + Number(m.egreso||0), 0);
+  const filas = lista.map(m => `
+    <div class="modal-detail-row">
+      <span class="modal-detail-lbl">${esc(m.jugadorCT)}</span>
+      <span class="modal-detail-val">${fmt(m.egreso)}</span>
+    </div>
+    <div class="pj-acumulado" style="margin:-6px 0 8px">${esc(m.concepto)} · ${esc(m.cuenta)} · ${esc(m.modoPago)}</div>
+  `).join("");
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div style="text-align:center;font-size:12px;font-weight:600;color:var(--green);letter-spacing:.05em;margin-bottom:2px">
+          ✓ PAGO${lista.length!==1?"S":""} CONFIRMADO${lista.length!==1?"S":""}
+        </div>
+        <div class="modal-monto-big egr">−${fmt(total)}</div>
+        ${filas}
+        <div class="modal-footer">
+          <button class="btn-main" onclick="closeModal()">Aceptar</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId) {
@@ -6737,8 +6767,8 @@ function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId) {
     });
     aplicarMovimientosCreados(r.movimientos);
     saveSnapshotToCache();
-    toast("Pago confirmado ✓", "ok");
     renderPagosJugadores();
+    mostrarConfirmacionPagosModal(r.movimientos);
   });
 }
 
@@ -6946,8 +6976,8 @@ function confirmarPagosSeleccionados() {
     });
     aplicarMovimientosCreados(r.movimientos);
     saveSnapshotToCache();
-    toast("Pagos confirmados ✓", "ok");
     renderPagosJugadores();
+    mostrarConfirmacionPagosModal(r.movimientos);
   });
 }
 

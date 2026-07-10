@@ -778,7 +778,7 @@ function handleAction(data) {
       const cuenta    = data.cuenta || "";
       const medioPago = data.medioPago || "";
       const fechaPago = data.fechaPago || "";
-      const mes       = fechaPago.slice(0, 7);
+      const mes       = fechaPago.slice(0, 7).replace("-", ""); // "YYYYMM" — mismo formato que usa el resto de Movimientos
       const ts        = new Date().toISOString();
 
       const parAll = parSh.getDataRange().getValues();

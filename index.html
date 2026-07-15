@@ -919,6 +919,7 @@ let entidadesTab  = "jugadores";
 let pagosJugTab   = "partido";
 let pjPartidoSel  = null;
 let pjPartidosSel = null; // null = todavía no inicializado (se precarga con los partidos pendientes)
+let pjMesSel      = null; // null = todavía no inicializado (se precarga con el mes actual); "" = "Sin mes asignado"
 let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", search: "" };
 let F             = buildDefaultF();
 let resumenSubTab     = "mensual";
@@ -6632,15 +6633,34 @@ async function toggleAdhPago(adhId, adhNombre, mesCod) {
 
 const PJ_ROL_LABEL = { titular:"Titular", suplenteConMin:"Suplente c/min", suplente:"Suplente", noJugo:"No jugó" };
 
+// Opciones de <select> de mes en formato "YYYY-MM" (mismo formato que nowMes()/mesLabel()), en un
+// rango razonable alrededor del mes actual (por defecto 2 meses atrás a 3 meses adelante) para poder
+// cargar pagos que corresponden al mes siguiente sin tener que esperar a que llegue.
+function generarOpcionesMes(selected, before, after) {
+  before = before == null ? 2 : before;
+  after  = after  == null ? 3 : after;
+  let m = nowMes();
+  for (let i = 0; i < before; i++) m = prevMes(m);
+  const opts = [];
+  for (let i = 0; i < before + after + 1; i++) {
+    opts.push(`<option value="${m}" ${m===selected?"selected":""}>${mesLabel(m)}</option>`);
+    m = nextMes(m);
+  }
+  return opts.join("");
+}
+
 function renderPagosJugadores() {
   const tabs = [
     { key:"partido",       label:"Por partido" },
+    { key:"mensual",       label:"Mensual" },
     { key:"transferencias",label:"Transferencias" },
   ];
   const tabBtns = tabs.map(t =>
     `<button class="entity-tab ${pagosJugTab===t.key?"active":""}" onclick="setPagosJugTab('${t.key}')">${t.label}</button>`
   ).join("");
-  const inner = pagosJugTab === "transferencias" ? renderTransferencias() : renderPagoPartido();
+  const inner = pagosJugTab === "transferencias" ? renderTransferencias()
+              : pagosJugTab === "mensual" ? renderPagoMensual()
+              : renderPagoPartido();
   setContent(`
     <div class="entity-tabs">${tabBtns}</div>
     <div id="pagosjug-content">${inner}</div>
@@ -6680,7 +6700,8 @@ function renderPagoPartido() {
   }).join("");
 
   const cfgPartido   = configJugadores.filter(c => c.frecuencia === "partido").sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  const cfgPeriodico = configJugadores.filter(c => c.frecuencia !== "partido").sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  // Los "mensual" tienen su propia subtab ("Mensual") — acá solo quedan los quincenales.
+  const cfgPeriodico = configJugadores.filter(c => c.frecuencia === "quincenal").sort((a,b)=>a.nombre.localeCompare(b.nombre));
 
   let totalPartido = 0, pagadoPartido = 0, pendientePartido = 0;
   const rowsPartido = cfgPartido.map(cfg => {
@@ -6725,7 +6746,7 @@ function renderPagoPartido() {
 
   const rowsPeriodico = cfgPeriodico.map(cfg => {
     const acumulado = pjAcumuladoPendiente(cfg.idJugador);
-    const label = cfg.frecuencia === "mensual" ? "Mensual · acumulado" : "Quincenal · acumulado";
+    const label = "Quincenal · acumulado";
     const hayPendiente = acumulado > 0;
     const badge = hayPendiente
       ? `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`
@@ -6766,6 +6787,82 @@ function renderPagoPartido() {
   `;
 }
 
+/** Filas de "Pagos Jugadores" acumuladas (sin partido asociado) de un jugador para un mes puntual ("" = sin mes asignado). */
+function pjFilasMes(jugadorId, mes) {
+  return pagosJugadores.filter(p =>
+    p.jugadorId === jugadorId && p.partidosIncluidos.length === 0 && (p.mes||"") === mes
+  );
+}
+
+function renderPagoMensual() {
+  const cfgMensual = configJugadores.filter(c => c.frecuencia === "mensual").sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  if (pjMesSel === null) pjMesSel = nowMes();
+
+  const opcionesMes = `<option value="" ${pjMesSel===""?"selected":""}>Sin mes asignado</option>` + generarOpcionesMes(pjMesSel);
+  const selectorMes = `
+    <div class="field">
+      <label>Mes</label>
+      <select class="inp" id="pj-mes-sel" onchange="pjMesSel=this.value; renderPagosJugadores()">${opcionesMes}</select>
+    </div>`;
+
+  if (!cfgMensual.length) {
+    return selectorMes + '<p class="note">Todavía no hay jugadores con frecuencia "mensual" (Entidades → Config Jugadores).</p>';
+  }
+
+  let totalMes = 0, pagadoMes = 0, pendienteMes = 0;
+  const rows = cfgMensual.map(cfg => {
+    const filas       = pjFilasMes(cfg.idJugador, pjMesSel);
+    const pendientes  = filas.filter(p => p.estado === "pendiente");
+    const pagados     = filas.filter(p => p.estado === "pagado");
+    const totalPend   = pendientes.reduce((s,p) => s + Number(p.montoFinal||0), 0);
+    const totalPagado = pagados.reduce((s,p) => s + Number(p.montoFinal||0), 0);
+    const totalNeto   = totalPend + totalPagado;
+    totalMes += totalNeto; pagadoMes += totalPagado; pendienteMes += totalPend;
+
+    const detalle = filas.length
+      ? filas.map(p => `${esc(p.etiqueta || "Monto")}: ${fmt(p.montoFinal)}${p.estado==='pagado'?' ✓':''}`).join(" · ")
+      : `<span class="pj-acumulado">Sin cargos este mes</span>`;
+
+    const badge = !filas.length ? ""
+      : pendientes.length === 0
+        ? `<span class="pj-badge pj-badge-pagado">Pagado</span>`
+        : `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`;
+
+    const marcarBtn = pendientes.length
+      ? `<button class="btn-sm accent" onclick="marcarMesPagado('${cfg.idJugador}','${pjMesSel}')" title="Marcar pagado">✓</button>`
+      : "";
+
+    return `
+    <tr>
+      <td>${esc(cfg.nombre)}</td>
+      <td class="pj-acumulado">${detalle}</td>
+      <td colspan="2" style="text-align:center">
+        <button class="btn-sm" onclick="abrirAgregarMontoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${pjMesSel}')">+ Agregar monto</button>
+      </td>
+      <td class="mono">${fmt(totalNeto)}</td>
+      <td>${badge}</td>
+      <td>${marcarBtn}</td>
+    </tr>`;
+  }).join("");
+
+  return `
+    ${selectorMes}
+    <div class="sum-grid three">
+      <div class="stat-card"><div class="stat-label">Total del mes</div><div class="stat-val acc">${fmt(totalMes)}</div></div>
+      <div class="stat-card"><div class="stat-label">Ya pagado</div><div class="stat-val ing">${fmt(pagadoMes)}</div></div>
+      <div class="stat-card"><div class="stat-label">Pendiente</div><div class="stat-val egr">${fmt(pendienteMes)}</div></div>
+    </div>
+    <div class="pj-table-wrap">
+      <table class="pj-table">
+        <thead><tr>
+          <th>Jugador</th><th>Detalle</th><th colspan="2"></th><th>Total</th><th>Estado</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 function pjRecalcRow(el) {
   const tr = el.closest("tr");
   if (!tr) return;
@@ -6782,6 +6879,8 @@ async function guardarPagoPartido() {
   const btnId = "btn-guardar-pagopartido";
   if (document.getElementById(btnId)?.disabled) return;
   const rows = [...document.querySelectorAll("#pagosjug-content .pj-table tbody tr[data-jug]")];
+  const partidoActual = partidos.find(p => p.id === pjPartidoSel);
+  const mesPartido = partidoActual ? getMes(partidoActual.fecha) : "";
   const roster = rows.map(tr => ({
     jugadorId:     tr.dataset.jug,
     jugadorNombre: tr.dataset.nombre,
@@ -6790,6 +6889,7 @@ async function guardarPagoPartido() {
     ajuste:        Number(tr.querySelector(".pj-ajuste").value || 0),
     motivoAjuste:  tr.querySelector(".pj-motivo").value || "",
     montoFinal:    Number(tr.querySelector(".pj-final").textContent.replace(/[^\d-]/g,"")) || 0,
+    mes:           mesPartido,
   }));
   setBtnState(btnId, "saving");
   try {
@@ -6914,7 +7014,17 @@ function marcarAcumuladoPagado(jugadorId) {
   abrirMedioPagoModal(ids, jugadorId, null);
 }
 
-function abrirAgregarMontoModal(jugadorId, jugadorNombre) {
+/** Análoga a marcarAcumuladoPagado() pero sólo para las filas pendientes de un jugador "mensual" en un mes puntual. */
+function marcarMesPagado(jugadorId, mes) {
+  const ids = pagosJugadores
+    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0 && (p.mes||"") === mes)
+    .map(p => p.id);
+  if (!ids.length) return;
+  abrirMedioPagoModal(ids, jugadorId, null);
+}
+
+function abrirAgregarMontoModal(jugadorId, jugadorNombre, mesDefault) {
+  const mesSel = mesDefault || nowMes();
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
@@ -6924,6 +7034,10 @@ function abrirAgregarMontoModal(jugadorId, jugadorNombre) {
           <div class="field">
             <label>Monto (negativo para descuento)</label>
             <input class="inp" id="pj-monto-nuevo" type="number" step="1" placeholder="0">
+          </div>
+          <div class="field">
+            <label>Mes</label>
+            <select class="inp" id="pj-mes-nuevo">${generarOpcionesMes(mesSel)}</select>
           </div>
           <div class="field">
             <label>Etiqueta / motivo</label>
@@ -6942,6 +7056,7 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
   const btnId = "btn-agregar-monto";
   if (document.getElementById(btnId)?.disabled) return;
   const monto    = parseFloat(document.getElementById("pj-monto-nuevo")?.value || "0") || 0;
+  const mes      = document.getElementById("pj-mes-nuevo")?.value || "";
   const etiqueta = (document.getElementById("pj-etiqueta-nueva")?.value || "").trim();
   if (!monto) { toast("Ingresá un monto distinto de 0", "err"); return; }
   setBtnState(btnId, "saving");
@@ -6949,7 +7064,7 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
     const pago = {
       jugadorId, jugadorNombre, partidosIncluidos: [],
       montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
-      estado: "pendiente", etiqueta
+      estado: "pendiente", etiqueta, mes
     };
     const r = await Storage.savePagoJugador(pago);
     if (!r.ok) throw new Error(r.error || "Error");

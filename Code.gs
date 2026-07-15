@@ -36,9 +36,11 @@ const CFGJ_SHEET = "Config Jugadores";
 const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo"];
 // Frecuencia: "partido" | "quincenal" | "mensual"
 const PJ_SHEET = "Pagos Jugadores";
-const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID"];
+const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes"];
 // PartidosIncluidos: JSON de un array de IDs de partido ("[]" para filas quincenales/mensuales agregadas a mano)
 // Estado: "pendiente" | "pagado"
+// Mes: "YYYY-MM" (mismo formato que nowMes()/mesLabel() en index.html — NO el "YYYYMM" de MOV_COLS.MES),
+// sólo relevante para filas de jugadores "mensual" (partidosIncluidos:[]). Filas viejas pueden tenerlo vacío.
 const ROS_SHEET = "Roster Partidos";
 const ROS_COLS  = ["IdPartido","JugadorId","JugadorNombre","Rol"];
 // Rol: "titular" | "suplenteConMin" | "suplente" | "noJugo"
@@ -676,7 +678,7 @@ function handleAction(data) {
       const rosSh = getOrCreateSheet(ROS_SHEET, ROS_COLS);
       const pjSh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
       const partidoId = data.partidoId;
-      const roster    = data.roster || []; // [{jugadorId, jugadorNombre, rol, montoBase, ajuste, motivoAjuste, montoFinal}]
+      const roster    = data.roster || []; // [{jugadorId, jugadorNombre, rol, montoBase, ajuste, motivoAjuste, montoFinal, mes}]
 
       // Borra las filas de roster existentes de este partido y las vuelve a escribir.
       const rosAll = rosSh.getDataRange().getValues();
@@ -698,6 +700,7 @@ function handleAction(data) {
             pjSh.getRange(i + 1, 5, 1, 4).setValues([[
               Number(r.montoBase||0), Number(r.ajuste||0), r.motivoAjuste||"", Number(r.montoFinal||0)
             ]]);
+            pjSh.getRange(i + 1, 14).setValue(r.mes||"");
             found = true;
             break;
           }
@@ -706,7 +709,7 @@ function handleAction(data) {
           pjSh.appendRow([
             uid_gs(), r.jugadorId, r.jugadorNombre||"", partidosStr,
             Number(r.montoBase||0), Number(r.ajuste||0), r.motivoAjuste||"", Number(r.montoFinal||0),
-            "pendiente", "", "", "", ""
+            "pendiente", "", "", "", "", r.mes||""
           ]);
         }
       }
@@ -734,7 +737,8 @@ function handleAction(data) {
           fechaPago:         String(r[9]||""),
           medioPago:         String(r[10]||""),
           etiqueta:          String(r[11]||""),
-          movimientoId:      String(r[12]||"")
+          movimientoId:      String(r[12]||""),
+          mes:               String(r[13]||"")
         }));
       return { ok: true, pagosJugadores };
     }
@@ -751,7 +755,7 @@ function handleAction(data) {
             sh.getRange(i + 1, 1, 1, PJ_COLS.length).setValues([[
               p.id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
               Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
-              p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||""
+              p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||"", p.mes||""
             ]]);
             return { ok: true, id: p.id };
           }
@@ -761,7 +765,7 @@ function handleAction(data) {
       sh.appendRow([
         id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
         Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
-        p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", ""
+        p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", "", p.mes||""
       ]);
       return { ok: true, id };
     }

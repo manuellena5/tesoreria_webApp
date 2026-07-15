@@ -6250,18 +6250,20 @@ function openConfigJugadorModal(idJugador) {
               <option value="mensual" ${(c&&c.frecuencia==="mensual")?"selected":""}>Mensual</option>
             </select>
           </div>
-          <div id="cfgjug-montos-partido">
+          <div>
             <div class="field">
-              <label>Monto Titular</label>
+              <label id="cfgjug-titular-label">Monto Titular</label>
               <input class="inp" id="cfgjug-titular" type="number" step="1" value="${c?c.montoTitular:0}">
             </div>
-            <div class="field">
-              <label>Monto Suplente c/minutos</label>
-              <input class="inp" id="cfgjug-supmin" type="number" step="1" value="${c?c.montoSuplenteConMin:0}">
-            </div>
-            <div class="field">
-              <label>Monto Suplente</label>
-              <input class="inp" id="cfgjug-suplente" type="number" step="1" value="${c?c.montoSuplente:0}">
+            <div id="cfgjug-montos-supmin-suplente">
+              <div class="field">
+                <label>Monto Suplente c/minutos</label>
+                <input class="inp" id="cfgjug-supmin" type="number" step="1" value="${c?c.montoSuplenteConMin:0}">
+              </div>
+              <div class="field">
+                <label>Monto Suplente</label>
+                <input class="inp" id="cfgjug-suplente" type="number" step="1" value="${c?c.montoSuplente:0}">
+              </div>
             </div>
           </div>
           <div class="field">
@@ -6279,9 +6281,12 @@ function openConfigJugadorModal(idJugador) {
 }
 
 function toggleCfgJugFrecuencia() {
-  const frec = document.getElementById("cfgjug-frecuencia")?.value;
-  const box  = document.getElementById("cfgjug-montos-partido");
+  const frec  = document.getElementById("cfgjug-frecuencia")?.value;
+  const box   = document.getElementById("cfgjug-montos-supmin-suplente");
+  const label = document.getElementById("cfgjug-titular-label");
   if (box) box.style.display = frec === "partido" ? "" : "none";
+  if (label) label.textContent = frec === "quincenal" ? "Monto por quincena"
+    : frec === "mensual" ? "Monto mensual" : "Monto Titular";
 }
 
 async function saveConfigJugadorForm(idJugador) {
@@ -7025,6 +7030,9 @@ function marcarMesPagado(jugadorId, mes) {
 
 function abrirAgregarMontoModal(jugadorId, jugadorNombre, mesDefault) {
   const mesSel = mesDefault || nowMes();
+  // Prellena con el monto configurado en Entidades → Cobros (quincenal/mensual) para no tener que retipearlo cada vez.
+  const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+  const montoDefault = cfg && cfg.montoTitular ? cfg.montoTitular : "";
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
@@ -7033,7 +7041,7 @@ function abrirAgregarMontoModal(jugadorId, jugadorNombre, mesDefault) {
         <div class="fgrid">
           <div class="field">
             <label>Monto (negativo para descuento)</label>
-            <input class="inp" id="pj-monto-nuevo" type="number" step="1" placeholder="0">
+            <input class="inp" id="pj-monto-nuevo" type="number" step="1" placeholder="0" value="${montoDefault}">
           </div>
           <div class="field">
             <label>Mes</label>

@@ -4252,10 +4252,16 @@ function toggleAdherenteDetalle(key) {
 // Rubros que se consideran aportes de adherentes: [6] ADHERENTES | COLABORADORES y [5] PUBLICIDAD - Lonas y otros
 const ADH_RUBROS = ["5", "6", "42"];
 
+// Un movimiento es aporte de adherente si tiene un adherente asignado (cualquier rubro),
+// o si es de rubro 5/6/42 aunque no tenga adherente (para preservar "⛽ Combustible" / "Sin adherente")
+function esAporteAdherente(m) {
+  return m.tipo === "INGRESO" && ((m.adherente && m.adherente.trim() !== "") || ADH_RUBROS.includes(m.codRubro));
+}
+
 // anio: string "YYYY" para filtrar, o "" para todos los años
 function calcAdherentesPorAnio(anio) {
   const movs6 = movimientos.filter(m =>
-    ADH_RUBROS.includes(m.codRubro) && m.tipo === "INGRESO" && (!anio || m.fecha.slice(0,4) === anio)
+    esAporteAdherente(m) && (!anio || m.fecha.slice(0,4) === anio)
   );
   const map = {};
   for (const a of adherentes) {
@@ -4296,7 +4302,7 @@ function calcPendientesMesActual() {
   const mesActual = nowMes();
   const aportadoPorNombre = {};
   for (const m of movimientos) {
-    if (!ADH_RUBROS.includes(m.codRubro) || m.tipo !== "INGRESO") continue;
+    if (!esAporteAdherente(m)) continue;
     if (mesFromRecord(m) !== mesActual) continue;
     const key = m.adherente || (m.codRubro === "42" ? "⛽ Combustible" : "Sin adherente");
     aportadoPorNombre[key] = (aportadoPorNombre[key] || 0) + m.ingreso;
@@ -4329,7 +4335,7 @@ function calcPendientesEnMes(mes) {
   const aportadoPorNombre = {};
   const nombres = new Set(adherentes.map(a => a.nombre));
   for (const m of movimientos) {
-    if (!ADH_RUBROS.includes(m.codRubro) || m.tipo !== "INGRESO") continue;
+    if (!esAporteAdherente(m)) continue;
     const key = m.adherente || (m.codRubro === "42" ? "⛽ Combustible" : "Sin adherente");
     nombres.add(key);
     if (mesFromRecord(m) === mes) aportadoPorNombre[key] = (aportadoPorNombre[key] || 0) + m.ingreso;
@@ -4355,7 +4361,7 @@ function toggleAdhResumenSoloPendientesMes() {
 }
 
 function renderAdherentesResumen() {
-  const movs6All = movimientos.filter(m => ADH_RUBROS.includes(m.codRubro) && m.tipo === "INGRESO");
+  const movs6All = movimientos.filter(esAporteAdherente);
   const anios = [...new Set(movs6All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
   if (adherenteAnio !== "" && !anios.includes(adherenteAnio) && anios.length) {
     adherenteAnio = anios[0];

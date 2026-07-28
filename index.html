@@ -977,7 +977,10 @@ function getDefaultVista(storageKey) {
 // ══════════════════════════════════════════════════════════════
 
 function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
-const pad2 = n => String(n).padStart(2, "0");
+// OJO: declaración de función, no `const pad2 = ...`. Arriba, en la inicialización
+// de estado (`let F = buildDefaultF()`), se llama a today() ANTES de esta línea; con
+// const/let quedaría en zona muerta temporal y tiraría ReferenceError al cargar.
+function pad2(n) { return String(n).padStart(2, "0"); }
 // Fecha de hoy en hora LOCAL. Con toISOString() (UTC) después de las 21:00 de
 // Argentina el resultado saltaba al día siguiente.
 function today() {

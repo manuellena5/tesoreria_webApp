@@ -1377,27 +1377,43 @@ function jsonResponse(obj) {
 }
 
 // ── Timestamps de carga ──────────────────────────────────────
-// Zona horaria del club. Argentina no tiene horario de verano, así que el offset
-// es siempre -03:00 y los timestamps ISO se pueden comparar como texto.
-const TZ_CLUB = "America/Argentina/Buenos_Aires";
+// Argentina no tiene horario de verano: el offset es SIEMPRE -03:00. Por eso el
+// formato se arma con aritmética en vez de Utilities.formatDate — evita depender
+// del patrón "XXX" de SimpleDateFormat (que no está garantizado en Apps Script y
+// haría fallar listMov entero) y evita 500+ llamadas al servicio por request.
+const TZ_OFFSET_MIN = -180;                 // -03:00 en minutos
+const TZ_OFFSET_STR = "-03:00";
+// Un timestamp ya normalizado: no hace falta reprocesarlo al leer.
+const TS_OK_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-03:00$/;
 
-/** Momento actual como ISO local con offset, ej. "2026-07-28T11:42:07-03:00".
+function pad2_gs(n) { return String(n).length < 2 ? "0" + n : String(n); }
+
+/** Un Date (instante absoluto) → ISO local con offset, ej. "2026-07-28T11:42:07-03:00". */
+function isoLocalFromDate(d) {
+  const u = new Date(d.getTime() + TZ_OFFSET_MIN * 60000);
+  return u.getUTCFullYear() + "-" + pad2_gs(u.getUTCMonth() + 1) + "-" + pad2_gs(u.getUTCDate())
+       + "T" + pad2_gs(u.getUTCHours()) + ":" + pad2_gs(u.getUTCMinutes()) + ":" + pad2_gs(u.getUTCSeconds())
+       + TZ_OFFSET_STR;
+}
+
+/** Momento actual como ISO local con offset.
  *  Antes se guardaba con toISOString() (UTC), que se leía 3 horas adelantado. */
 function nowTsLocal() {
-  return Utilities.formatDate(new Date(), TZ_CLUB, "yyyy-MM-dd'T'HH:mm:ssXXX");
+  return isoLocalFromDate(new Date());
 }
 
 /** Normaliza lo que haya en la celda timestamp a ISO local con offset.
- *  Contempla los 3 casos posibles: Date (si Sheets lo auto-parseó), string ISO
- *  en UTC (formato viejo) y string ya normalizado. */
+ *  Contempla los casos posibles: ya normalizado, Date (si Sheets lo auto-parseó),
+ *  string ISO en UTC (formato viejo) y basura sin parsear (se devuelve tal cual). */
 function tsToIsoLocal(val) {
   if (!val) return "";
-  if (val instanceof Date) return Utilities.formatDate(val, TZ_CLUB, "yyyy-MM-dd'T'HH:mm:ssXXX");
+  if (val instanceof Date) return isoLocalFromDate(val);
   const s = String(val).trim();
   if (!s) return "";
+  if (TS_OK_RE.test(s)) return s;          // camino rápido: ya está en formato
   const d = new Date(s);
   if (isNaN(d.getTime())) return s;
-  return Utilities.formatDate(d, TZ_CLUB, "yyyy-MM-dd'T'HH:mm:ssXXX");
+  return isoLocalFromDate(d);
 }
 
 /** Utilitario de mantenimiento: reescribe toda la columna timestamp de Movimientos

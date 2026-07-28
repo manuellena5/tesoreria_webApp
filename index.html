@@ -977,7 +977,55 @@ function getDefaultVista(storageKey) {
 // ══════════════════════════════════════════════════════════════
 
 function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
-function today() { return new Date().toISOString().split("T")[0]; }
+const pad2 = n => String(n).padStart(2, "0");
+// Fecha de hoy en hora LOCAL. Con toISOString() (UTC) después de las 21:00 de
+// Argentina el resultado saltaba al día siguiente.
+function today() {
+  const d = new Date();
+  return d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate());
+}
+// Momento actual como ISO local con offset, ej. "2026-07-28T21:42:07-03:00".
+// Es la marca de ALTA del movimiento: se genera acá (no en el backend) para que
+// un movimiento cargado sin conexión conserve la hora real de carga y no la de
+// sincronización. Ver tsToIsoLocal()/nowTsLocal() en Code.gs.
+function nowTimestamp() {
+  const d = new Date();
+  const off = -d.getTimezoneOffset();
+  const sg  = off >= 0 ? "+" : "-";
+  const oh  = pad2(Math.floor(Math.abs(off) / 60));
+  const om  = pad2(Math.abs(off) % 60);
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`
+       + `T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}${sg}${oh}:${om}`;
+}
+
+// ── Orden de carga de movimientos ────────────────────────────
+// Los movimientos se ordenan por fecha y, dentro de la misma fecha, por el momento
+// en que fueron ingresados. El timestamp es la fuente principal; para los registros
+// viejos (importados en lote, sin hora confiable) se cae al campo "orden", que es
+// la posición de la fila en la hoja de cálculo.
+function movTsMs(m) {
+  const t = Date.parse(m && m.timestamp ? m.timestamp : "");
+  return isNaN(t) ? null : t;
+}
+/** Compara dos movimientos por orden de ingreso (más viejo primero). */
+function cmpMovCarga(a, b) {
+  const ta = movTsMs(a), tb = movTsMs(b);
+  if (ta !== null && tb !== null && ta !== tb) return ta - tb;
+  return (a.orden || 0) - (b.orden || 0);
+}
+/** Compara por fecha ascendente, desempatando por orden de ingreso. */
+function cmpMovFecha(a, b) {
+  const f = (a.fecha || "").localeCompare(b.fecha || "");
+  return f || cmpMovCarga(a, b);
+}
+/** Timestamp de alta legible en hora local, ej. "28/07/2026 21:42". */
+function fmtTimestamp(ts) {
+  const t = Date.parse(ts || "");
+  if (isNaN(t)) return "—";
+  const d = new Date(t);
+  return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)}/${d.getFullYear()} `
+       + `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
 function nowMes() {
   const d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
@@ -1960,6 +2008,19 @@ async function saveMovimiento() {
   }
 
   const wasEdit = !!editId;
+
+  // Marca de alta. En un alta nueva es ahora; editando se conserva la original
+  // para que el movimiento no se mueva de lugar en el orden de carga.
+  if (wasEdit) {
+    const prev = movimientos.find(m => m.id === mov.id);
+    mov.timestamp = (prev && prev.timestamp) || "";
+    mov.orden     = prev && prev.orden !== undefined ? prev.orden : 0;
+  } else {
+    mov.timestamp = nowTimestamp();
+    // Al final de la lista hasta el próximo refresco desde la hoja
+    mov.orden = movimientos.reduce((mx, m) => Math.max(mx, m.orden || 0), 0) + 1;
+  }
+
   setSaveBtnState("saving");
   showOverlay(navigator.onLine ? "Guardando…" : "Guardando (sin conexión)…");
   try {
@@ -2263,6 +2324,9 @@ function renderMovTabla(movMes) {
     return {
       id: m.id,
       fechaRaw: m.fecha || "",
+      // Desempate de la columna Fecha: orden de carga (ver detTablaRenderInner)
+      cargaMs: movTsMs(m),
+      cargaOrden: m.orden || 0,
       fechaD: m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "",
       concepto: m.concepto || "",
       monto,
@@ -2352,12 +2416,13 @@ function renderMovList() {
   const exportBtn = document.getElementById("mov-export-btn");
   if (exportBtn) exportBtn.innerHTML = `📥 Exportar ${mesLabel(sharedMes)}${filtersActive ? ' (filtrado)' : ''} a Excel`;
 
-  // Orden, aplicado después de filtrar
+  // Orden, aplicado después de filtrar. Por fecha se desempata por orden de carga
+  // (ver cmpMovFecha), así los movimientos del mismo día quedan como se ingresaron.
   movMes.sort((a,b) => {
-    if (movOrden === "fecha_asc")  return a.fecha.localeCompare(b.fecha);
+    if (movOrden === "fecha_asc")  return  cmpMovFecha(a,b);
     if (movOrden === "monto_desc") return Math.abs(b.montoFinal) - Math.abs(a.montoFinal);
     if (movOrden === "monto_asc")  return Math.abs(a.montoFinal) - Math.abs(b.montoFinal);
-    return b.fecha.localeCompare(a.fecha); // fecha_desc (default)
+    return -cmpMovFecha(a,b); // fecha_desc (default)
   });
 
   const cnt = document.getElementById("mov-count");
@@ -2443,6 +2508,7 @@ function openMovModal(id) {
     (m.codRubro === "21" && m.tipo === "EGRESO") ? ["Reintegro", m.seguroReintegro ? "SÍ" : "NO"] : null,
     ["Observación", m.observacion || "—"],
     ["Comprobante", m.comprobante || "—"],
+    ["Cargado",     fmtTimestamp(m.timestamp)],
   ].filter(r => r && r[1] && r[1] !== "—").map(([l,v]) =>
     `<div class="modal-detail-row"><span class="modal-detail-lbl">${l}</span><span class="modal-detail-val">${esc(v)}</span></div>`
   ).join("");
@@ -4736,7 +4802,16 @@ function detTablaRenderInner(key) {
     const dir = st.sortDir;
     filtrados = [...filtrados].sort((a,b) => {
       let av, bv;
-      if (st.sortCol === "fecha") { av = a.fechaRaw||""; bv = b.fechaRaw||""; }
+      if (st.sortCol === "fecha") {
+        av = a.fechaRaw||""; bv = b.fechaRaw||"";
+        // A igual fecha, orden de carga (los items que lo exponen, ej. Movimientos)
+        if (av === bv && (a.cargaOrden !== undefined || b.cargaOrden !== undefined)) {
+          if (a.cargaMs != null && b.cargaMs != null && a.cargaMs !== b.cargaMs) {
+            return (a.cargaMs - b.cargaMs) * dir;
+          }
+          return ((a.cargaOrden||0) - (b.cargaOrden||0)) * dir;
+        }
+      }
       else if (st.sortCol === "mes") { av = a.mesRaw||""; bv = b.mesRaw||""; }
       else if (st.sortCol === "monto") { av = a.monto||0; bv = b.monto||0; return (av-bv)*dir; }
       else { av = normStr(a[st.sortCol]); bv = normStr(b[st.sortCol]); }

@@ -180,9 +180,13 @@ function handleAction(data) {
       autoFillIds(sh, r => r[4] || r[6] || r[7] || r[8]); // Rubro, Concepto o montos
       const all = sh.getDataRange().getValues();
       if (all.length <= 1) return { ok: true, movimientos: [] };
-      let rows = all.slice(1).filter(r => r[0]);
-      if (data.mes) rows = rows.filter(r => String(r[1]) === String(data.mes));
-      const movimientos = rows.map(r => ({
+      // "orden" = posición original de la fila en la hoja (orden de alta). Se usa
+      // en el front como desempate cuando dos movimientos comparten fecha y no
+      // tienen timestamp confiable (registros viejos importados en lote).
+      let rows = all.slice(1).map((r, i) => ({ r, i })).filter(x => x.r[0]);
+      if (data.mes) rows = rows.filter(x => String(x.r[1]) === String(data.mes));
+      const movimientos = rows.map(({ r, i }) => ({
+        orden:         i,
         id:            String(r[0]),
         mes:           String(r[1]),
         fecha:         formatFecha(r[2]),
@@ -202,7 +206,7 @@ function handleAction(data) {
         comprobante:   String(r[16] || ""),
         seguroReintegro: Number(r[17] || 0),
         tipo:          String(r[18] || ""),
-        timestamp:     String(r[19] || ""),
+        timestamp:     tsToIsoLocal(r[19]),
         partidoId:     String(r[20]||""),
         eventoId:      String(r[21]||""),
         vinculos:      parseVinculosJson(r[22]),
@@ -218,7 +222,10 @@ function handleAction(data) {
       // siempre agrega una fila nueva, nunca pisa una existente.
       let id = m.id || uid_gs();
       if (idExisteEnMov(sh, id)) id = uid_gs();
-      const ts = new Date().toISOString();
+      // El cliente manda el timestamp del momento en que se apretó Guardar. Si el
+      // movimiento se cargó sin conexión y se sincroniza más tarde, esa marca es la
+      // que vale (no la hora de sincronización). Sin timestamp del cliente, ahora.
+      const ts = tsToIsoLocal(m.timestamp) || nowTsLocal();
       sh.appendRow([
         id, m.mes||"", m.fecha||"", m.codRubro||"", m.rubro||"", m.categoria||"",
         m.concepto||"", Number(m.egreso||0), Number(m.ingreso||0), Number(m.montoFinal||0),
@@ -239,12 +246,15 @@ function handleAction(data) {
       const all = sh.getDataRange().getValues();
       for (let i = 1; i < all.length; i++) {
         if (String(all[i][0]) === String(m.id)) {
+          // El timestamp es la marca de ALTA, no de última modificación: editar un
+          // movimiento no debe moverlo de lugar en el orden de carga.
+          const tsOriginal = tsToIsoLocal(all[i][19]) || nowTsLocal();
           sh.getRange(i + 1, 1, 1, MOV_COLS.length).setValues([[
             m.id, m.mes||"", m.fecha||"", m.codRubro||"", m.rubro||"", m.categoria||"",
             m.concepto||"", Number(m.egreso||0), Number(m.ingreso||0), Number(m.montoFinal||0),
             m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
             m.jugadorCT||"", m.adherente||"",
-            m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", new Date().toISOString(),
+            m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", tsOriginal,
             m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos)
           ]]);
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
@@ -280,7 +290,8 @@ function handleAction(data) {
           m.concepto, m.egreso || 0, m.ingreso || 0, m.montoFinal || 0,
           m.cuenta, m.cuentaDestino || "", m.modoPago,
           m.jugadorCT || "", m.adherente || "", m.observacion || "",
-          m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo, m.timestamp,
+          m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo,
+          tsToIsoLocal(m.timestamp) || nowTsLocal(),
           m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos)
         ]);
         if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
@@ -471,13 +482,13 @@ function handleAction(data) {
         if (String(all[i][1]) === String(data.adhId) && String(all[i][3]) === String(data.mes)) {
           const next = String(all[i][4]) === "PAGADO" ? "PENDIENTE" : "PAGADO";
           sh.getRange(i + 1, 5).setValue(next);
-          sh.getRange(i + 1, 7).setValue(new Date().toISOString());
+          sh.getRange(i + 1, 7).setValue(nowTsLocal());
           return { ok: true, estado: next };
         }
       }
       // Not found → create as PAGADO
       const adhNombre = data.adhNombre || data.adhId;
-      sh.appendRow([uid_gs(), data.adhId, adhNombre, data.mes, "PAGADO", "", new Date().toISOString()]);
+      sh.appendRow([uid_gs(), data.adhId, adhNombre, data.mes, "PAGADO", "", nowTsLocal()]);
       return { ok: true, estado: "PAGADO" };
     }
 
@@ -489,13 +500,13 @@ function handleAction(data) {
         if (String(all[i][0]) === String(p.id)) {
           sh.getRange(i + 1, 1, 1, PAG_COLS.length).setValues([[
             p.id, p.adherenteId, p.adherenteNombre,
-            p.mes, p.estado, p.movimientoId || "", new Date().toISOString()
+            p.mes, p.estado, p.movimientoId || "", nowTsLocal()
           ]]);
           return { ok: true };
         }
       }
       const id = uid_gs();
-      sh.appendRow([id, p.adherenteId, p.adherenteNombre, p.mes, p.estado, p.movimientoId || "", new Date().toISOString()]);
+      sh.appendRow([id, p.adherenteId, p.adherenteNombre, p.mes, p.estado, p.movimientoId || "", nowTsLocal()]);
       return { ok: true, id };
     }
 
@@ -783,7 +794,7 @@ function handleAction(data) {
       const medioPago = data.medioPago || "";
       const fechaPago = data.fechaPago || "";
       const mes       = fechaPago.slice(0, 7).replace("-", ""); // "YYYYMM" — mismo formato que usa el resto de Movimientos
-      const ts        = new Date().toISOString();
+      const ts        = nowTsLocal();
 
       const parAll = parSh.getDataRange().getValues();
       const partidoById = {};
@@ -895,7 +906,7 @@ function handleAction(data) {
       const sh    = getOrCreateSheet(MOV_SHEET, MOV_COLS);
       const migSh = getOrCreateSheet(MIG_SHEET, MIG_COLS);
       const batchId = "mig-" + new Date().getTime();
-      const ts = new Date().toISOString();
+      const ts = nowTsLocal();
       const colNum = { codRubro: 4, rubro: 5, categoria: 6 };
       for (const ch of plan.plan) {
         sh.getRange(ch.rowIndex + 1, colNum[ch.campo]).setValue(ch.nuevo);
@@ -949,7 +960,7 @@ function handleAction(data) {
       const id = r.id || uid_gs();
       sh.appendRow([
         id, r.fecha || "", r.grano || "", r.tipo || "", Number(r.kg || 0),
-        r.nota || "", r.movimientoId || "", new Date().toISOString()
+        r.nota || "", r.movimientoId || "", nowTsLocal()
       ]);
       return { ok: true, id };
     }
@@ -970,7 +981,7 @@ function handleAction(data) {
     case "seedGranos": {
       const resSh = getOrCreateSheet(RES_SHEET, RES_COLS);
       if (resSh.getLastRow() <= 1) {
-        const ts = new Date().toISOString();
+        const ts = nowTsLocal();
         const fecha = ts.slice(0, 10);
         resSh.appendRow([uid_gs(), fecha, "Soja",  "COSECHA", 36020, "Stock inicial", "", ts]);
         resSh.appendRow([uid_gs(), fecha, "Trigo", "COSECHA", 43860, "Stock inicial", "", ts]);
@@ -1191,11 +1202,11 @@ function autoUpsertPago(movId, adherenteNombre, mes, estado) {
       if (String(pagAll[i][1]) === adhId && String(pagAll[i][3]) === String(mes)) {
         pagSh.getRange(i + 1, 5).setValue(estado);
         pagSh.getRange(i + 1, 6).setValue(movId);
-        pagSh.getRange(i + 1, 7).setValue(new Date().toISOString());
+        pagSh.getRange(i + 1, 7).setValue(nowTsLocal());
         return;
       }
     }
-    pagSh.appendRow([uid_gs(), adhId, adhNombreReal, mes, estado, movId, new Date().toISOString()]);
+    pagSh.appendRow([uid_gs(), adhId, adhNombreReal, mes, estado, movId, nowTsLocal()]);
   } catch (e) {
     // No interrumpir la transacción principal
   }
@@ -1363,6 +1374,51 @@ function jsonResponse(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ── Timestamps de carga ──────────────────────────────────────
+// Zona horaria del club. Argentina no tiene horario de verano, así que el offset
+// es siempre -03:00 y los timestamps ISO se pueden comparar como texto.
+const TZ_CLUB = "America/Argentina/Buenos_Aires";
+
+/** Momento actual como ISO local con offset, ej. "2026-07-28T11:42:07-03:00".
+ *  Antes se guardaba con toISOString() (UTC), que se leía 3 horas adelantado. */
+function nowTsLocal() {
+  return Utilities.formatDate(new Date(), TZ_CLUB, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+/** Normaliza lo que haya en la celda timestamp a ISO local con offset.
+ *  Contempla los 3 casos posibles: Date (si Sheets lo auto-parseó), string ISO
+ *  en UTC (formato viejo) y string ya normalizado. */
+function tsToIsoLocal(val) {
+  if (!val) return "";
+  if (val instanceof Date) return Utilities.formatDate(val, TZ_CLUB, "yyyy-MM-dd'T'HH:mm:ssXXX");
+  const s = String(val).trim();
+  if (!s) return "";
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  return Utilities.formatDate(d, TZ_CLUB, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+/** Utilitario de mantenimiento: reescribe toda la columna timestamp de Movimientos
+ *  al formato local con offset. Se corre a mano desde el editor de Apps Script,
+ *  una sola vez, para dejar prolijos los registros viejos guardados en UTC.
+ *  No cambia el instante representado, solo cómo se lee en la hoja. */
+function normalizarTimestampsMovimientos() {
+  const sh   = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+  const col  = MOV_COLS.indexOf("timestamp") + 1;
+  const last = sh.getLastRow();
+  if (last < 2) return "Sin filas";
+  const rng  = sh.getRange(2, col, last - 1, 1);
+  const vals = rng.getValues();
+  let cambiados = 0;
+  const out = vals.map(r => {
+    const nuevo = tsToIsoLocal(r[0]);
+    if (nuevo !== String(r[0] || "")) cambiados++;
+    return [nuevo];
+  });
+  rng.setNumberFormat("@").setValues(out);
+  return "Timestamps normalizados: " + cambiados + " de " + vals.length;
 }
 
 function formatFecha(val) {

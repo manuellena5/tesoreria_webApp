@@ -911,7 +911,7 @@ let preciosGranos = { Soja: 480000, Trigo: 293600 };
 let configJugadores = [];
 let rosterPartidos  = [];
 let pagosJugadores  = [];
-let premios         = []; // catálogo global: [{id, descripcion, monto}]
+// Los premios de cada jugador viajan dentro de su fila de configJugadores (config.premios).
 
 let currentTab    = "nuevo";
 let editId        = null;
@@ -1199,9 +1199,6 @@ const Storage = {
   async listPagosJugadores()       { return this._post({ action:"listPagosJugadores"             }); },
   async savePagoJugador(p)         { return this._post({ action:"savePagoJugador", pago:p         }); },
   async confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago, cuenta }); },
-  async listPremios()              { return this._post({ action:"listPremios"                    }); },
-  async savePremio(p)              { return this._post({ action:"savePremio", premio:p           }); },
-  async deletePremio(id)           { return this._post({ action:"deletePremio", id               }); },
   async aplicarPremios(lista)      { return this._post({ action:"aplicarPremios", premios:lista  }); },
 };
 
@@ -1228,7 +1225,7 @@ function saveSnapshotToCache() {
   if (viendoSnapshotHistorico) return;
   const payload = JSON.stringify({
     movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
-    configJugadores, rosterPartidos, pagosJugadores, premios,
+    configJugadores, rosterPartidos, pagosJugadores,
     cuentas, metodos, preciosGranos, savedAt: Date.now()
   });
   try {
@@ -1310,7 +1307,6 @@ function verSnapshotDe(fecha) {
   configJugadores = snap.configJugadores || [];
   rosterPartidos  = snap.rosterPartidos  || [];
   pagosJugadores  = snap.pagosJugadores  || [];
-  premios         = snap.premios         || [];
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
@@ -1460,16 +1456,14 @@ async function loadAllData(_esReintento) {
     // (ej. límite de ejecuciones simultáneas de Apps Script) no debe tumbar la carga
     // del resto de la app (Partidos, Movimientos, etc. de arriba).
     try {
-      const [rCfgJ, rRos, rPJ, rPre] = await Promise.all([
+      const [rCfgJ, rRos, rPJ] = await Promise.all([
         Storage.listConfigJugadores(),
         Storage.listRoster(),
         Storage.listPagosJugadores(),
-        Storage.listPremios(),
       ]);
       if (rCfgJ.ok) configJugadores = rCfgJ.configJugadores || [];
       if (rRos.ok)  rosterPartidos  = rRos.roster           || [];
       if (rPJ.ok)   pagosJugadores  = rPJ.pagosJugadores    || [];
-      if (rPre.ok)  premios         = rPre.premios          || [];
     } catch (ePagos) {
       toast("No se pudo cargar el módulo de Pagos a Jugadores: " + ePagos.message, "err");
     }
@@ -1538,7 +1532,6 @@ function loadFromCacheIfAny() {
   configJugadores = snap.configJugadores || [];
   rosterPartidos  = snap.rosterPartidos  || [];
   pagosJugadores  = snap.pagosJugadores  || [];
-  premios         = snap.premios         || [];
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
@@ -6292,113 +6285,64 @@ function renderConfigJugadores() {
   const configuredIds = new Set(configJugadores.map(c => c.idJugador));
   const sorted = [...configJugadores].sort((a,b) => a.nombre.localeCompare(b.nombre));
   const FREC_LABEL = { partido:"Por partido", quincenal:"Quincenal", mensual:"Mensual" };
-  const list = sorted.map(c => `
+  const list = sorted.map(c => {
+    const nPremios = (c.premios || []).length;
+    const subPremios = nPremios ? " · 🏆 " + nPremios + " premio" + (nPremios!==1?"s":"") : "";
+    return `
     <div class="entity-item">
       <div style="flex:1;min-width:0">
         <div class="entity-name">${esc(c.nombre)}</div>
-        <div class="entity-sub">${FREC_LABEL[c.frecuencia]||c.frecuencia}${c.alias?" · "+esc(c.alias):""}</div>
+        <div class="entity-sub">${FREC_LABEL[c.frecuencia]||c.frecuencia}${c.alias?" · "+esc(c.alias):""}${subPremios}</div>
       </div>
       <button class="btn-sm accent" onclick="openConfigJugadorModal('${c.idJugador}')">✏️</button>
       <button class="btn-sm danger" id="cjdel-${c.idJugador}" onclick="confirmDeleteConfigJugador('${c.idJugador}')">✕</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   const hayDisponibles = jugadores.some(j => !configuredIds.has(j.id));
   return `
     <button class="btn-secondary" onclick="openConfigJugadorModal(null)" style="margin-bottom:12px" ${hayDisponibles?"":"disabled"}>+ Agregar cobro de jugador</button>
-    ${list || '<p class="note">Sin cobros configurados</p>'}
-    ${renderPremios()}`;
+    ${list || '<p class="note">Sin cobros configurados</p>'}`;
 }
 
-// ── Premios (catálogo global: gol, valla invicta, etc.) ───────
-// No dependen de la frecuencia de cobro — se pueden aplicar a cualquier jugador
-// desde el botón 🏆 de Pagos Jugadores.
-function renderPremios() {
-  const list = [...premios].sort((a,b) => a.descripcion.localeCompare(b.descripcion)).map(p => `
-    <div class="entity-item">
-      <div style="flex:1;min-width:0">
-        <div class="entity-name">${esc(p.descripcion)}</div>
-        <div class="entity-sub mono">${fmt(p.monto)}</div>
-      </div>
-      <button class="btn-sm accent" onclick="openPremioModal('${p.id}')">✏️</button>
-      <button class="btn-sm danger" id="predel-${p.id}" onclick="confirmDeletePremio('${p.id}')">✕</button>
-    </div>`).join("");
+// ── Premios del jugador (dentro del modal de cobro) ───────────
+// Cada jugador tiene su propia lista de premios (descripción + monto). Se cargan
+// junto con el resto del cobro y después se aplican desde el botón 🏆 de Pagos Jugadores.
+let cfgPremioSeq = 0;
+
+function premioRowHTML(p) {
+  const k = "pr" + (cfgPremioSeq++);
   return `
-    <div style="margin-top:22px;padding-top:14px;border-top:1px solid var(--border)">
-      <div style="font-size:13px;font-weight:600;margin-bottom:8px">Premios</div>
-      <p class="note" style="margin-top:0">Se pueden aplicar a cualquier jugador, sin importar su frecuencia de cobro.</p>
-      <button class="btn-secondary" onclick="openPremioModal(null)" style="margin-bottom:12px">+ Agregar premio</button>
-      ${list || '<p class="note">Sin premios configurados</p>'}
+    <div class="entity-item cfgjug-premio" id="cfgpremio-${k}" style="gap:6px">
+      <input class="inp cfgjug-premio-desc" type="text" placeholder="Gol, Valla invicta…"
+             value="${esc(p?p.descripcion:"")}" style="flex:1;min-width:0">
+      <input class="inp cfgjug-premio-monto" type="number" step="1" placeholder="0"
+             value="${p?p.monto:""}" style="width:110px">
+      <button class="btn-sm danger" onclick="quitarPremioCfg('${k}')" title="Quitar">✕</button>
     </div>`;
 }
 
-function openPremioModal(premioId) {
-  const p = premioId ? premios.find(x => x.id === premioId) : null;
-  document.getElementById("modal-root").innerHTML = `
-    <div class="modal-overlay" onclick="closeModal(event)">
-      <div class="modal-card" onclick="event.stopPropagation()">
-        <div class="modal-handle"></div>
-        <div class="modal-title">${p ? "Editar premio" : "Nuevo premio"}</div>
-        <div class="fgrid">
-          <div class="field">
-            <label>Descripción</label>
-            <input class="inp" id="premio-desc" type="text" placeholder="Gol, Valla invicta…" value="${esc(p?p.descripcion:"")}">
-          </div>
-          <div class="field">
-            <label>Monto</label>
-            <input class="inp" id="premio-monto" type="number" step="1" value="${p?p.monto:0}">
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" id="btn-guardar-premio" onclick="savePremioForm('${premioId||""}')">Guardar</button>
-        </div>
-      </div>
-    </div>`;
+function agregarPremioCfg(p) {
+  const box = document.getElementById("cfgjug-premios-lista");
+  if (!box) return;
+  const vacio = document.getElementById("cfgjug-premios-vacio");
+  if (vacio) vacio.remove();
+  box.insertAdjacentHTML("beforeend", premioRowHTML(p));
 }
 
-async function savePremioForm(premioId) {
-  const btnId = "btn-guardar-premio";
-  if (document.getElementById(btnId)?.disabled) return;
-  const descripcion = (document.getElementById("premio-desc")?.value || "").trim();
-  const monto       = parseFloat(document.getElementById("premio-monto")?.value || "0") || 0;
-  if (!descripcion) { toast("Poné una descripción", "err"); return; }
-  if (!monto)       { toast("Ingresá un monto distinto de 0", "err"); return; }
-  setBtnState(btnId, "saving");
-  try {
-    const r = await Storage.savePremio({ id: premioId || "", descripcion, monto });
-    if (!r.ok) throw new Error(r.error || "Error");
-    const id = premioId || r.id;
-    const idx = premios.findIndex(x => x.id === id);
-    if (idx >= 0) premios[idx] = { id, descripcion, monto }; else premios.push({ id, descripcion, monto });
-    saveSnapshotToCache();
-    setBtnState(btnId, "saved");
-    toast("Premio guardado ✓", "ok");
-    closeModal();
-    renderEntidades();
-  } catch(e) { handleSaveError(btnId, e); }
-}
-
-function confirmDeletePremio(premioId) {
-  const btn = document.getElementById("predel-"+premioId);
-  if (!btn || btn.disabled) return;
-  if (btn.dataset.confirm) { deletePremioAction(premioId); }
-  else {
-    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
-    setTimeout(() => { if(btn && !btn.disabled){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+function quitarPremioCfg(k) {
+  document.getElementById("cfgpremio-" + k)?.remove();
+  const box = document.getElementById("cfgjug-premios-lista");
+  if (box && !box.querySelector(".cfgjug-premio")) {
+    box.innerHTML = '<p class="note" id="cfgjug-premios-vacio" style="margin:0">Sin premios para este jugador</p>';
   }
 }
 
-async function deletePremioAction(premioId) {
-  const btnId = "predel-" + premioId;
-  const btn = document.getElementById(btnId);
-  if (btn) { btn.disabled = true; btn.textContent = "Eliminando…"; }
-  try {
-    const r = await Storage.deletePremio(premioId);
-    if (!r.ok) throw new Error(r.error || "Error");
-    premios = premios.filter(x => x.id !== premioId);
-    saveSnapshotToCache();
-    toast("Premio eliminado", "ok");
-    renderEntidades();
-  } catch(e) { handleDeleteError(btnId, e); }
+/** Lee las filas de premios del modal de cobro, descartando las incompletas. */
+function leerPremiosCfg() {
+  return [...document.querySelectorAll(".cfgjug-premio")].map(row => ({
+    descripcion: (row.querySelector(".cfgjug-premio-desc")?.value || "").trim(),
+    monto:       parseFloat(row.querySelector(".cfgjug-premio-monto")?.value || "0") || 0
+  })).filter(p => p.descripcion && p.monto);
 }
 
 function openConfigJugadorModal(idJugador) {
@@ -6407,6 +6351,7 @@ function openConfigJugadorModal(idJugador) {
   const disponibles = jugadores
     .filter(j => j.id === idJugador || !configuredIds.has(j.id))
     .sort((a,b) => a.nombre.localeCompare(b.nombre));
+  const premiosIniciales = (c && c.premios ? c.premios : []).map(p => premioRowHTML(p)).join("");
   const jugSelect = c
     ? `<input class="inp" type="text" value="${esc(c.nombre)}" disabled>`
     : `<select class="inp" id="cfgjug-jugador">
@@ -6451,6 +6396,14 @@ function openConfigJugadorModal(idJugador) {
             <label>Alias / CBU para transferencia</label>
             <input class="inp" id="cfgjug-alias" type="text" placeholder="jugador.mp / CBU…" value="${esc(c?c.alias:"")}">
           </div>
+          <div class="field">
+            <label>Premios</label>
+            <p class="note" style="margin:0 0 8px">Se cobran aparte de la frecuencia (gol, valla invicta…). Después se aplican desde 🏆 en Pagos Jugadores.</p>
+            <div id="cfgjug-premios-lista">
+              ${premiosIniciales || '<p class="note" id="cfgjug-premios-vacio" style="margin:0">Sin premios para este jugador</p>'}
+            </div>
+            <button class="btn-secondary" style="margin-top:8px" onclick="agregarPremioCfg()">+ Agregar premio</button>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
@@ -6488,7 +6441,8 @@ async function saveConfigJugadorForm(idJugador) {
   const montoSuplenteConMin = parseFloat(document.getElementById("cfgjug-supmin")?.value    || "0") || 0;
   const montoSuplente       = parseFloat(document.getElementById("cfgjug-suplente")?.value  || "0") || 0;
   const alias                = (document.getElementById("cfgjug-alias")?.value || "").trim();
-  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias };
+  const premiosCfg           = leerPremiosCfg();
+  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias, premios: premiosCfg };
   setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveConfigJugador(config);
@@ -7297,19 +7251,21 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
 // Cada premio con cantidad > 0 genera una fila pendiente propia (sin partido asociado),
 // que se suma al pendiente del jugador y se cobra junto con el resto.
 function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
-  if (!premios.length) {
-    toast("Primero cargá premios en Entidades → Cobros", "err");
+  const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+  const lista = (cfg && cfg.premios) ? cfg.premios : [];
+  if (!lista.length) {
+    toast("Este jugador no tiene premios cargados (Entidades → Cobros → editar el cobro)", "err");
     return;
   }
   const mesSel = mesDefault || nowMes();
-  const filas = [...premios].sort((a,b) => a.descripcion.localeCompare(b.descripcion)).map(p => `
+  const filas = lista.map((p, i) => `
     <div class="entity-item">
       <div style="flex:1;min-width:0">
         <div class="entity-name">${esc(p.descripcion)}</div>
         <div class="entity-sub mono">${fmt(p.monto)} c/u</div>
       </div>
-      <input class="inp premio-cant" data-id="${p.id}" data-monto="${p.monto}" type="number" min="0" step="1"
-             value="0" style="width:72px;text-align:center" oninput="premiosRecalcTotal()">
+      <input class="inp premio-cant" data-idx="${i}" data-desc="${esc(p.descripcion)}" data-monto="${p.monto}"
+             type="number" min="0" step="1" value="0" style="width:72px;text-align:center" oninput="premiosRecalcTotal()">
     </div>`).join("");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
@@ -7348,12 +7304,12 @@ async function guardarPremiosJugador(jugadorId, jugadorNombre) {
   [...document.querySelectorAll(".premio-cant")].forEach(inp => {
     const cant = Number(inp.value || 0);
     if (cant <= 0) return;
-    const p = premios.find(x => x.id === inp.dataset.id);
-    if (!p) return;
+    const monto = Number(inp.dataset.monto || 0);
+    const desc  = inp.dataset.desc || "Premio";
     lista.push({
       jugadorId, jugadorNombre,
-      montoFinal: p.monto * cant,
-      etiqueta:   p.descripcion + (cant > 1 ? " x" + cant : ""),
+      montoFinal: monto * cant,
+      etiqueta:   desc + (cant > 1 ? " x" + cant : ""),
       mes
     });
   });

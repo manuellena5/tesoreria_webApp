@@ -33,8 +33,10 @@ const EVE_COLS  = ["ID","Nombre","Fecha","Activo"];
 
 // ── Pagos a Jugadores (módulo aparte, no integrado a Movimientos todavía) ──
 const CFGJ_SHEET = "Config Jugadores";
-const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo"];
+const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios"];
 // Frecuencia: "partido" | "quincenal" | "mensual"
+// Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
+// independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
 const PJ_SHEET = "Pagos Jugadores";
 const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes"];
 // PartidosIncluidos: JSON de un array de IDs de partido ("[]" para filas quincenales/mensuales agregadas a mano)
@@ -44,10 +46,6 @@ const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBas
 const ROS_SHEET = "Roster Partidos";
 const ROS_COLS  = ["IdPartido","JugadorId","JugadorNombre","Rol"];
 // Rol: "titular" | "suplenteConMin" | "suplente" | "noJugo"
-// Catálogo global de premios (gol, valla invicta, etc.) — aplicable a cualquier jugador
-// sin importar su frecuencia de cobro. Al aplicarse generan filas en PJ_SHEET.
-const PRE_SHEET = "Premios";
-const PRE_COLS  = ["ID","Descripcion","Monto","Activo"];
 
 // ── Columnas de cada pestaña ─────────────────────────────────
 const MOV_COLS = [
@@ -633,7 +631,8 @@ function handleAction(data) {
           montoSuplenteConMin: Number(r[3]||0),
           montoSuplente:       Number(r[4]||0),
           frecuencia:          String(r[5]||"partido"),
-          alias:               String(r[6]||"")
+          alias:               String(r[6]||""),
+          premios:             safeParseJSON(String(r[8]||"[]"), [])
         }));
       return { ok: true, configJugadores };
     }
@@ -646,14 +645,16 @@ function handleAction(data) {
         if (String(all[i][0]) === String(c.idJugador)) {
           sh.getRange(i + 1, 1, 1, CFGJ_COLS.length).setValues([[
             c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
-            Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true"
+            Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true",
+            JSON.stringify(c.premios||[])
           ]]);
           return { ok: true, idJugador: c.idJugador };
         }
       }
       sh.appendRow([
         c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
-        Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true"
+        Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true",
+        JSON.stringify(c.premios||[])
       ]);
       return { ok: true, idJugador: c.idJugador };
     }
@@ -670,53 +671,8 @@ function handleAction(data) {
       return { ok: false, error: "Config de jugador no encontrada: " + data.idJugador };
     }
 
-    // ─── PREMIOS (catálogo global) ────────────────────────────
-
-    case "listPremios": {
-      const sh  = getOrCreateSheet(PRE_SHEET, PRE_COLS);
-      const all = sh.getDataRange().getValues();
-      if (all.length <= 1) return { ok: true, premios: [] };
-      const premios = all.slice(1)
-        .filter(r => r[0] && String(r[3]) !== "false")
-        .map(r => ({
-          id:          String(r[0]),
-          descripcion: String(r[1]||""),
-          monto:       Number(r[2]||0)
-        }));
-      return { ok: true, premios };
-    }
-
-    case "savePremio": {
-      const sh  = getOrCreateSheet(PRE_SHEET, PRE_COLS);
-      const p   = data.premio;
-      const all = sh.getDataRange().getValues();
-      if (p.id) {
-        for (let i = 1; i < all.length; i++) {
-          if (String(all[i][0]) === String(p.id)) {
-            sh.getRange(i + 1, 1, 1, PRE_COLS.length).setValues([[
-              p.id, p.descripcion||"", Number(p.monto||0), "true"
-            ]]);
-            return { ok: true, id: p.id };
-          }
-        }
-      }
-      const id = uid_gs();
-      sh.appendRow([id, p.descripcion||"", Number(p.monto||0), "true"]);
-      return { ok: true, id };
-    }
-
-    case "deletePremio": {
-      const sh  = getOrCreateSheet(PRE_SHEET, PRE_COLS);
-      const all = sh.getDataRange().getValues();
-      for (let i = 1; i < all.length; i++) {
-        if (String(all[i][0]) === String(data.id)) {
-          sh.getRange(i + 1, 4).setValue("false");
-          return { ok: true };
-        }
-      }
-      return { ok: false, error: "Premio no encontrado: " + data.id };
-    }
-
+    // ─── PREMIOS APLICADOS ────────────────────────────────────
+    // El catálogo de premios de cada jugador vive en CFGJ_SHEET (columna Premios).
     // Alta en lote de premios aplicados a un jugador: cada uno genera una fila
     // pendiente en Pagos Jugadores (sin partido asociado) que se cobra junto al resto.
     case "aplicarPremios": {

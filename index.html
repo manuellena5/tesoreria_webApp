@@ -911,6 +911,7 @@ let preciosGranos = { Soja: 480000, Trigo: 293600 };
 let configJugadores = [];
 let rosterPartidos  = [];
 let pagosJugadores  = [];
+let premios         = []; // catálogo global: [{id, descripcion, monto}]
 
 let currentTab    = "nuevo";
 let editId        = null;
@@ -1198,6 +1199,10 @@ const Storage = {
   async listPagosJugadores()       { return this._post({ action:"listPagosJugadores"             }); },
   async savePagoJugador(p)         { return this._post({ action:"savePagoJugador", pago:p         }); },
   async confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago, cuenta }); },
+  async listPremios()              { return this._post({ action:"listPremios"                    }); },
+  async savePremio(p)              { return this._post({ action:"savePremio", premio:p           }); },
+  async deletePremio(id)           { return this._post({ action:"deletePremio", id               }); },
+  async aplicarPremios(lista)      { return this._post({ action:"aplicarPremios", premios:lista  }); },
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -1223,7 +1228,7 @@ function saveSnapshotToCache() {
   if (viendoSnapshotHistorico) return;
   const payload = JSON.stringify({
     movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
-    configJugadores, rosterPartidos, pagosJugadores,
+    configJugadores, rosterPartidos, pagosJugadores, premios,
     cuentas, metodos, preciosGranos, savedAt: Date.now()
   });
   try {
@@ -1305,6 +1310,7 @@ function verSnapshotDe(fecha) {
   configJugadores = snap.configJugadores || [];
   rosterPartidos  = snap.rosterPartidos  || [];
   pagosJugadores  = snap.pagosJugadores  || [];
+  premios         = snap.premios         || [];
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
@@ -1454,14 +1460,16 @@ async function loadAllData(_esReintento) {
     // (ej. límite de ejecuciones simultáneas de Apps Script) no debe tumbar la carga
     // del resto de la app (Partidos, Movimientos, etc. de arriba).
     try {
-      const [rCfgJ, rRos, rPJ] = await Promise.all([
+      const [rCfgJ, rRos, rPJ, rPre] = await Promise.all([
         Storage.listConfigJugadores(),
         Storage.listRoster(),
         Storage.listPagosJugadores(),
+        Storage.listPremios(),
       ]);
       if (rCfgJ.ok) configJugadores = rCfgJ.configJugadores || [];
       if (rRos.ok)  rosterPartidos  = rRos.roster           || [];
       if (rPJ.ok)   pagosJugadores  = rPJ.pagosJugadores    || [];
+      if (rPre.ok)  premios         = rPre.premios          || [];
     } catch (ePagos) {
       toast("No se pudo cargar el módulo de Pagos a Jugadores: " + ePagos.message, "err");
     }
@@ -1530,6 +1538,7 @@ function loadFromCacheIfAny() {
   configJugadores = snap.configJugadores || [];
   rosterPartidos  = snap.rosterPartidos  || [];
   pagosJugadores  = snap.pagosJugadores  || [];
+  premios         = snap.premios         || [];
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
@@ -6295,7 +6304,101 @@ function renderConfigJugadores() {
   const hayDisponibles = jugadores.some(j => !configuredIds.has(j.id));
   return `
     <button class="btn-secondary" onclick="openConfigJugadorModal(null)" style="margin-bottom:12px" ${hayDisponibles?"":"disabled"}>+ Agregar cobro de jugador</button>
-    ${list || '<p class="note">Sin cobros configurados</p>'}`;
+    ${list || '<p class="note">Sin cobros configurados</p>'}
+    ${renderPremios()}`;
+}
+
+// ── Premios (catálogo global: gol, valla invicta, etc.) ───────
+// No dependen de la frecuencia de cobro — se pueden aplicar a cualquier jugador
+// desde el botón 🏆 de Pagos Jugadores.
+function renderPremios() {
+  const list = [...premios].sort((a,b) => a.descripcion.localeCompare(b.descripcion)).map(p => `
+    <div class="entity-item">
+      <div style="flex:1;min-width:0">
+        <div class="entity-name">${esc(p.descripcion)}</div>
+        <div class="entity-sub mono">${fmt(p.monto)}</div>
+      </div>
+      <button class="btn-sm accent" onclick="openPremioModal('${p.id}')">✏️</button>
+      <button class="btn-sm danger" id="predel-${p.id}" onclick="confirmDeletePremio('${p.id}')">✕</button>
+    </div>`).join("");
+  return `
+    <div style="margin-top:22px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px">Premios</div>
+      <p class="note" style="margin-top:0">Se pueden aplicar a cualquier jugador, sin importar su frecuencia de cobro.</p>
+      <button class="btn-secondary" onclick="openPremioModal(null)" style="margin-bottom:12px">+ Agregar premio</button>
+      ${list || '<p class="note">Sin premios configurados</p>'}
+    </div>`;
+}
+
+function openPremioModal(premioId) {
+  const p = premioId ? premios.find(x => x.id === premioId) : null;
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${p ? "Editar premio" : "Nuevo premio"}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Descripción</label>
+            <input class="inp" id="premio-desc" type="text" placeholder="Gol, Valla invicta…" value="${esc(p?p.descripcion:"")}">
+          </div>
+          <div class="field">
+            <label>Monto</label>
+            <input class="inp" id="premio-monto" type="number" step="1" value="${p?p.monto:0}">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-premio" onclick="savePremioForm('${premioId||""}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function savePremioForm(premioId) {
+  const btnId = "btn-guardar-premio";
+  if (document.getElementById(btnId)?.disabled) return;
+  const descripcion = (document.getElementById("premio-desc")?.value || "").trim();
+  const monto       = parseFloat(document.getElementById("premio-monto")?.value || "0") || 0;
+  if (!descripcion) { toast("Poné una descripción", "err"); return; }
+  if (!monto)       { toast("Ingresá un monto distinto de 0", "err"); return; }
+  setBtnState(btnId, "saving");
+  try {
+    const r = await Storage.savePremio({ id: premioId || "", descripcion, monto });
+    if (!r.ok) throw new Error(r.error || "Error");
+    const id = premioId || r.id;
+    const idx = premios.findIndex(x => x.id === id);
+    if (idx >= 0) premios[idx] = { id, descripcion, monto }; else premios.push({ id, descripcion, monto });
+    saveSnapshotToCache();
+    setBtnState(btnId, "saved");
+    toast("Premio guardado ✓", "ok");
+    closeModal();
+    renderEntidades();
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+function confirmDeletePremio(premioId) {
+  const btn = document.getElementById("predel-"+premioId);
+  if (!btn || btn.disabled) return;
+  if (btn.dataset.confirm) { deletePremioAction(premioId); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?";
+    setTimeout(() => { if(btn && !btn.disabled){ btn.dataset.confirm=""; btn.textContent="✕"; }}, 3000);
+  }
+}
+
+async function deletePremioAction(premioId) {
+  const btnId = "predel-" + premioId;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = "Eliminando…"; }
+  try {
+    const r = await Storage.deletePremio(premioId);
+    if (!r.ok) throw new Error(r.error || "Error");
+    premios = premios.filter(x => x.id !== premioId);
+    saveSnapshotToCache();
+    toast("Premio eliminado", "ok");
+    renderEntidades();
+  } catch(e) { handleDeleteError(btnId, e); }
 }
 
 function openConfigJugadorModal(idJugador) {
@@ -6772,6 +6875,13 @@ function pjAcumuladoPendiente(jugadorId) {
     .reduce((s,p) => s + Number(p.montoFinal||0), 0);
 }
 
+/** IDs de las filas pendientes sin partido asociado de un jugador (premios y montos sueltos). */
+function pjIdsAcumuladoPendiente(jugadorId) {
+  return pagosJugadores
+    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
+    .map(p => p.id);
+}
+
 function renderPagoPartido() {
   const sorted = [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha));
   if (!sorted.length) return '<p class="note">Todavía no hay partidos cargados (Entidades → Partidos).</p>';
@@ -6796,15 +6906,27 @@ function renderPagoPartido() {
     const motivo = fila ? fila.motivoAjuste || "" : "";
     const final  = fila ? Number(fila.montoFinal||0) : (base + ajuste);
     const estado = fila ? fila.estado : "pendiente";
+    // Premios / montos sueltos pendientes: viven en filas propias (sin partido) y se
+    // cobran junto con el partido, así que suman al total del jugador.
+    const premiosPend = pjAcumuladoPendiente(cfg.idJugador);
+    const idsPremios  = pjIdsAcumuladoPendiente(cfg.idJugador);
     if (rol !== "noJugo") {
       totalPartido += final;
       if (estado === "pagado") pagadoPartido += final; else pendientePartido += final;
     }
-    const badge = estado === "pagado"
+    totalPartido     += premiosPend;
+    pendientePartido += premiosPend;
+    const hayPendiente = estado !== "pagado" || premiosPend > 0;
+    const badge = !hayPendiente
       ? `<span class="pj-badge pj-badge-pagado">Pagado</span>`
       : `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`;
-    const marcarBtn = estado === "pagado" ? "" :
-      `<button class="btn-sm accent" onclick="abrirMedioPagoModal([${fila?`'${fila.id}'`:"null"}], '${cfg.idJugador}', '${pjPartidoSel}')" title="Marcar pagado">✓</button>`;
+    const idsPremiosLit = "[" + idsPremios.map(i => `'${i}'`).join(",") + "]";
+    const marcarBtn = !hayPendiente ? "" :
+      `<button class="btn-sm accent" onclick="abrirMedioPagoModal([${fila?`'${fila.id}'`:"null"}], '${cfg.idJugador}', '${pjPartidoSel}', ${idsPremiosLit})" title="Marcar pagado">✓</button>`;
+    const premiosCell = `
+      <td class="mono">${premiosPend ? fmt(premiosPend) : "—"}
+        <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
+      </td>`;
     return `
     <tr class="${rol==='noJugo'?'pj-nojugo':''}" data-jug="${cfg.idJugador}" data-nombre="${esc(cfg.nombre)}"
         data-titular="${cfg.montoTitular}" data-supmin="${cfg.montoSuplenteConMin}" data-suplente="${cfg.montoSuplente}"
@@ -6821,6 +6943,7 @@ function renderPagoPartido() {
       <td class="mono pj-base">${fmt(base)}</td>
       <td><input class="inp pj-ajuste" type="number" step="1" value="${ajuste}" oninput="pjRecalcRow(this)" ${estado==='pagado'?"disabled":""}></td>
       <td><input class="inp pj-motivo" type="text" value="${esc(motivo)}" placeholder="Motivo (opcional)" ${estado==='pagado'?"disabled":""}></td>
+      ${premiosCell}
       <td class="mono pj-final">${fmt(final)}</td>
       <td>${badge}</td>
       <td>${marcarBtn}</td>
@@ -6842,6 +6965,9 @@ function renderPagoPartido() {
       <td colspan="2" style="text-align:center">
         <button class="btn-sm" onclick="abrirAgregarMontoModal('${cfg.idJugador}','${esc(cfg.nombre)}')">+ Agregar monto</button>
       </td>
+      <td style="text-align:center">
+        <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
+      </td>
       <td class="mono">${fmt(acumulado)}</td>
       <td>${badge}</td>
       <td>${hayPendiente ? `<button class="btn-sm accent" onclick="marcarAcumuladoPagado('${cfg.idJugador}')" title="Marcar pagado">✓</button>` : ""}</td>
@@ -6861,7 +6987,7 @@ function renderPagoPartido() {
     <div class="pj-table-wrap">
       <table class="pj-table">
         <thead><tr>
-          <th>Jugador</th><th>Rol</th><th>Base</th><th>Ajuste</th><th>Motivo</th><th>Final</th><th>Estado</th><th></th>
+          <th>Jugador</th><th>Rol</th><th>Base</th><th>Ajuste</th><th>Motivo</th><th>Premios</th><th>Final</th><th>Estado</th><th></th>
         </tr></thead>
         <tbody>${rowsPartido}${rowsPeriodico}</tbody>
       </table>
@@ -6921,6 +7047,7 @@ function renderPagoMensual() {
       <td class="pj-acumulado">${detalle}</td>
       <td colspan="2" style="text-align:center">
         <button class="btn-sm" onclick="abrirAgregarMontoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${pjMesSel}')">+ Agregar monto</button>
+        <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}','${pjMesSel}')" title="Agregar premios">🏆</button>
       </td>
       <td class="mono">${fmt(totalNeto)}</td>
       <td>${badge}</td>
@@ -7060,15 +7187,18 @@ function mostrarConfirmacionPagosModal(movimientosCreados) {
     </div>`;
 }
 
-function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId) {
+function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId, idsExtra) {
   abrirMedioPagoModalGenerico("Confirmar pago", async (medioPago, cuenta) => {
-    let ids = idsIniciales.filter(Boolean);
-    if (!ids.length) {
+    let ids = (idsIniciales || []).filter(Boolean);
+    const extra = (idsExtra || []).filter(Boolean);
+    if (partidoId && !ids.length) {
       // La fila no existía todavía (rol recién elegido y no guardado) — hay que guardar primero.
       await guardarPagoPartido();
       const fila = pjFilaPartido(jugadorId, partidoId);
       if (fila) ids = [fila.id];
     }
+    // Los premios (filas sin partido) se cobran junto con el resto.
+    ids = [...new Set([...ids, ...extra])];
     if (!ids.length) throw new Error("Guardá el roster antes de marcar como pagado");
     const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago, cuenta);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -7163,6 +7293,89 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
   } catch(e) { handleSaveError(btnId, e); }
 }
 
+// ── Aplicar premios a un jugador ──────────────────────────────
+// Cada premio con cantidad > 0 genera una fila pendiente propia (sin partido asociado),
+// que se suma al pendiente del jugador y se cobra junto con el resto.
+function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
+  if (!premios.length) {
+    toast("Primero cargá premios en Entidades → Cobros", "err");
+    return;
+  }
+  const mesSel = mesDefault || nowMes();
+  const filas = [...premios].sort((a,b) => a.descripcion.localeCompare(b.descripcion)).map(p => `
+    <div class="entity-item">
+      <div style="flex:1;min-width:0">
+        <div class="entity-name">${esc(p.descripcion)}</div>
+        <div class="entity-sub mono">${fmt(p.monto)} c/u</div>
+      </div>
+      <input class="inp premio-cant" data-id="${p.id}" data-monto="${p.monto}" type="number" min="0" step="1"
+             value="0" style="width:72px;text-align:center" oninput="premiosRecalcTotal()">
+    </div>`).join("");
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Premios — ${esc(jugadorNombre)}</div>
+        <div class="field">
+          <label>Mes</label>
+          <select class="inp" id="premios-mes">${generarOpcionesMes(mesSel)}</select>
+        </div>
+        ${filas}
+        <div class="modal-detail-row" style="margin-top:10px">
+          <span class="modal-detail-lbl">Total</span>
+          <span class="modal-detail-val mono" id="premios-total">${fmt(0)}</span>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-aplicar-premios" onclick="guardarPremiosJugador('${jugadorId}','${esc(jugadorNombre)}')">Agregar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function premiosRecalcTotal() {
+  const total = [...document.querySelectorAll(".premio-cant")]
+    .reduce((s,i) => s + (Number(i.value||0) * Number(i.dataset.monto||0)), 0);
+  const el = document.getElementById("premios-total");
+  if (el) el.textContent = fmt(total);
+}
+
+async function guardarPremiosJugador(jugadorId, jugadorNombre) {
+  const btnId = "btn-aplicar-premios";
+  if (document.getElementById(btnId)?.disabled) return;
+  const mes = document.getElementById("premios-mes")?.value || "";
+  const lista = [];
+  [...document.querySelectorAll(".premio-cant")].forEach(inp => {
+    const cant = Number(inp.value || 0);
+    if (cant <= 0) return;
+    const p = premios.find(x => x.id === inp.dataset.id);
+    if (!p) return;
+    lista.push({
+      jugadorId, jugadorNombre,
+      montoFinal: p.monto * cant,
+      etiqueta:   p.descripcion + (cant > 1 ? " x" + cant : ""),
+      mes
+    });
+  });
+  if (!lista.length) { toast("Poné al menos una cantidad", "err"); return; }
+  setBtnState(btnId, "saving");
+  try {
+    const r = await Storage.aplicarPremios(lista);
+    if (!r.ok) throw new Error(r.error || "Error");
+    (r.creados || []).forEach(c => pagosJugadores.push({
+      id: c.id, jugadorId: c.jugadorId, jugadorNombre: c.jugadorNombre,
+      partidosIncluidos: [], montoBase: c.montoFinal, ajuste: 0, motivoAjuste: "",
+      montoFinal: c.montoFinal, estado: "pendiente", fechaPago: "", medioPago: "",
+      etiqueta: c.etiqueta, movimientoId: "", mes: c.mes || ""
+    }));
+    saveSnapshotToCache();
+    setBtnState(btnId, "saved");
+    toast("Premios agregados ✓", "ok");
+    closeModal();
+    renderPagosJugadores();
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
 function renderTransferencias() {
   if (pjPartidosSel === null) {
     // Precarga: partidos que tienen al menos una fila pendiente.
@@ -7193,7 +7406,11 @@ function renderTransferencias() {
         const fila = pjFilaPartido(cfg.idJugador, p.id);
         if (fila) { porPartido[p.id] = fila; tieneAlgo = true; }
       });
-      if (tieneAlgo) filasPorJugador[cfg.idJugador] = { nombre:cfg.nombre, alias:cfg.alias, porPartido, periodico:false };
+      // Premios / montos sueltos pendientes: se transfieren junto con lo del partido.
+      const premiosPend = pjAcumuladoPendiente(cfg.idJugador);
+      if (tieneAlgo || premiosPend > 0) {
+        filasPorJugador[cfg.idJugador] = { nombre:cfg.nombre, alias:cfg.alias, porPartido, periodico:false, premios:premiosPend };
+      }
     } else {
       const acumulado = pjAcumuladoPendiente(cfg.idJugador);
       if (acumulado > 0) filasPorJugador[cfg.idJugador] = { nombre:cfg.nombre, alias:cfg.alias, periodico:true, acumulado };
@@ -7217,9 +7434,11 @@ function renderTransferencias() {
         total += Number(fila.montoFinal||0);
         return `<td class="mono">${fmt(fila.montoFinal)}${fila.estado==='pagado'?' <span class="pj-badge pj-badge-pagado" style="padding:1px 5px">✓</span>':''}</td>`;
       }).join("");
+      total += Number(info.premios || 0);
     }
     totalTransferir += total;
-    const pendiente = info.periodico ? true : Object.values(info.porPartido).some(f => f.estado === "pendiente");
+    const pendiente = info.periodico ? true
+      : (Number(info.premios||0) > 0 || Object.values(info.porPartido).some(f => f.estado === "pendiente"));
     return `
     <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-total="${total}">
       <td>${esc(info.nombre)}</td>
@@ -7269,6 +7488,8 @@ function pjFilasSeleccionadas() {
         const fila = pjFilaPartido(jid, p.id);
         if (fila && fila.estado === "pendiente") ids.push(fila.id);
       });
+      // Premios / montos sueltos pendientes (filas sin partido) del mismo jugador.
+      pjIdsAcumuladoPendiente(jid).forEach(id => ids.push(id));
     } else {
       pagosJugadores.filter(p => p.jugadorId === jid && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
         .forEach(p => ids.push(p.id));

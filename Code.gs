@@ -44,6 +44,10 @@ const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBas
 const ROS_SHEET = "Roster Partidos";
 const ROS_COLS  = ["IdPartido","JugadorId","JugadorNombre","Rol"];
 // Rol: "titular" | "suplenteConMin" | "suplente" | "noJugo"
+// Catálogo global de premios (gol, valla invicta, etc.) — aplicable a cualquier jugador
+// sin importar su frecuencia de cobro. Al aplicarse generan filas en PJ_SHEET.
+const PRE_SHEET = "Premios";
+const PRE_COLS  = ["ID","Descripcion","Monto","Activo"];
 
 // ── Columnas de cada pestaña ─────────────────────────────────
 const MOV_COLS = [
@@ -664,6 +668,71 @@ function handleAction(data) {
         }
       }
       return { ok: false, error: "Config de jugador no encontrada: " + data.idJugador };
+    }
+
+    // ─── PREMIOS (catálogo global) ────────────────────────────
+
+    case "listPremios": {
+      const sh  = getOrCreateSheet(PRE_SHEET, PRE_COLS);
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, premios: [] };
+      const premios = all.slice(1)
+        .filter(r => r[0] && String(r[3]) !== "false")
+        .map(r => ({
+          id:          String(r[0]),
+          descripcion: String(r[1]||""),
+          monto:       Number(r[2]||0)
+        }));
+      return { ok: true, premios };
+    }
+
+    case "savePremio": {
+      const sh  = getOrCreateSheet(PRE_SHEET, PRE_COLS);
+      const p   = data.premio;
+      const all = sh.getDataRange().getValues();
+      if (p.id) {
+        for (let i = 1; i < all.length; i++) {
+          if (String(all[i][0]) === String(p.id)) {
+            sh.getRange(i + 1, 1, 1, PRE_COLS.length).setValues([[
+              p.id, p.descripcion||"", Number(p.monto||0), "true"
+            ]]);
+            return { ok: true, id: p.id };
+          }
+        }
+      }
+      const id = uid_gs();
+      sh.appendRow([id, p.descripcion||"", Number(p.monto||0), "true"]);
+      return { ok: true, id };
+    }
+
+    case "deletePremio": {
+      const sh  = getOrCreateSheet(PRE_SHEET, PRE_COLS);
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(data.id)) {
+          sh.getRange(i + 1, 4).setValue("false");
+          return { ok: true };
+        }
+      }
+      return { ok: false, error: "Premio no encontrado: " + data.id };
+    }
+
+    // Alta en lote de premios aplicados a un jugador: cada uno genera una fila
+    // pendiente en Pagos Jugadores (sin partido asociado) que se cobra junto al resto.
+    case "aplicarPremios": {
+      const sh    = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const lista = data.premios || []; // [{jugadorId, jugadorNombre, montoFinal, etiqueta, mes}]
+      const creados = [];
+      for (const p of lista) {
+        const id = uid_gs();
+        sh.appendRow([
+          id, p.jugadorId, p.jugadorNombre||"", "[]",
+          Number(p.montoFinal||0), 0, "", Number(p.montoFinal||0),
+          "pendiente", "", "", p.etiqueta||"", "", p.mes||""
+        ]);
+        creados.push({ id, ...p });
+      }
+      return { ok: true, creados };
     }
 
     // ─── ROSTER PARTIDOS ──────────────────────────────────────

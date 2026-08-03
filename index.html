@@ -6884,7 +6884,7 @@ function renderPagoPartido() {
     return `
     <tr class="${rol==='noJugo'?'pj-nojugo':''}" data-jug="${cfg.idJugador}" data-nombre="${esc(cfg.nombre)}"
         data-titular="${cfg.montoTitular}" data-supmin="${cfg.montoSuplenteConMin}" data-suplente="${cfg.montoSuplente}"
-        data-pagoid="${fila?fila.id:""}" data-estado="${estado}">
+        data-premios="${premiosPend}" data-pagoid="${fila?fila.id:""}" data-estado="${estado}">
       <td>${esc(cfg.nombre)}</td>
       <td>
         <select class="inp pj-rol" onchange="pjRecalcRow(this)" ${estado==='pagado'?"disabled":""}>
@@ -6898,7 +6898,7 @@ function renderPagoPartido() {
       <td><input class="inp pj-ajuste" type="number" step="1" value="${ajuste}" oninput="pjRecalcRow(this)" ${estado==='pagado'?"disabled":""}></td>
       <td><input class="inp pj-motivo" type="text" value="${esc(motivo)}" placeholder="Motivo (opcional)" ${estado==='pagado'?"disabled":""}></td>
       ${premiosCell}
-      <td class="mono pj-final">${fmt(final)}</td>
+      <td class="mono pj-final">${fmt(final + premiosPend)}</td>
       <td>${badge}</td>
       <td>${marcarBtn}</td>
     </tr>`;
@@ -7027,16 +7027,51 @@ function renderPagoMensual() {
   `;
 }
 
+/** Monto base de una fila de la tabla "Por partido" según el rol elegido. */
+function pjBaseDeFila(tr) {
+  const rolSel = tr.querySelector(".pj-rol")?.value;
+  return rolSel === "titular" ? Number(tr.dataset.titular||0)
+       : rolSel === "suplenteConMin" ? Number(tr.dataset.supmin||0)
+       : rolSel === "suplente" ? Number(tr.dataset.suplente||0) : 0;
+}
+
 function pjRecalcRow(el) {
   const tr = el.closest("tr");
   if (!tr) return;
-  const rolSel = tr.querySelector(".pj-rol").value;
-  const base = rolSel === "titular" ? Number(tr.dataset.titular||0)
-             : rolSel === "suplenteConMin" ? Number(tr.dataset.supmin||0)
-             : rolSel === "suplente" ? Number(tr.dataset.suplente||0) : 0;
-  const ajuste = Number(tr.querySelector(".pj-ajuste").value || 0);
-  tr.querySelector(".pj-base").textContent = fmt(base);
-  tr.querySelector(".pj-final").textContent = fmt(base + ajuste);
+  const base    = pjBaseDeFila(tr);
+  const ajuste  = Number(tr.querySelector(".pj-ajuste").value || 0);
+  const premios = Number(tr.dataset.premios || 0); // se cobran junto con el partido
+  tr.querySelector(".pj-base").textContent  = fmt(base);
+  tr.querySelector(".pj-final").textContent = fmt(base + ajuste + premios);
+}
+
+/** Guarda lo que el usuario tiene cargado (sin grabar) en la tabla "Por partido",
+ *  para poder restaurarlo después de un re-render (ej. al agregar un premio). */
+function pjSnapshotFormPartido() {
+  const st = {};
+  document.querySelectorAll("#pagosjug-content .pj-table tbody tr[data-jug]").forEach(tr => {
+    st[tr.dataset.jug] = {
+      rol:    tr.querySelector(".pj-rol")?.value,
+      ajuste: tr.querySelector(".pj-ajuste")?.value,
+      motivo: tr.querySelector(".pj-motivo")?.value,
+    };
+  });
+  return st;
+}
+
+function pjRestoreFormPartido(st) {
+  if (!st) return;
+  document.querySelectorAll("#pagosjug-content .pj-table tbody tr[data-jug]").forEach(tr => {
+    const s = st[tr.dataset.jug];
+    if (!s) return;
+    const rol = tr.querySelector(".pj-rol");
+    const aj  = tr.querySelector(".pj-ajuste");
+    const mo  = tr.querySelector(".pj-motivo");
+    if (rol && !rol.disabled && s.rol    != null) rol.value = s.rol;
+    if (aj  && !aj.disabled  && s.ajuste != null) aj.value  = s.ajuste;
+    if (mo  && !mo.disabled  && s.motivo != null) mo.value  = s.motivo;
+    if (rol) pjRecalcRow(rol);
+  });
 }
 
 async function guardarPagoPartido() {
@@ -7045,16 +7080,22 @@ async function guardarPagoPartido() {
   const rows = [...document.querySelectorAll("#pagosjug-content .pj-table tbody tr[data-jug]")];
   const partidoActual = partidos.find(p => p.id === pjPartidoSel);
   const mesPartido = partidoActual ? getMes(partidoActual.fecha) : "";
-  const roster = rows.map(tr => ({
-    jugadorId:     tr.dataset.jug,
-    jugadorNombre: tr.dataset.nombre,
-    rol:           tr.querySelector(".pj-rol").value,
-    montoBase:     Number(tr.querySelector(".pj-base").textContent.replace(/[^\d-]/g,"")) || 0,
-    ajuste:        Number(tr.querySelector(".pj-ajuste").value || 0),
-    motivoAjuste:  tr.querySelector(".pj-motivo").value || "",
-    montoFinal:    Number(tr.querySelector(".pj-final").textContent.replace(/[^\d-]/g,"")) || 0,
-    mes:           mesPartido,
-  }));
+  // El montoBase/montoFinal se calculan de los inputs, NO del texto de la celda "Final":
+  // esa celda muestra además los premios, que van en filas propias y no deben duplicarse acá.
+  const roster = rows.map(tr => {
+    const montoBase = pjBaseDeFila(tr);
+    const ajuste    = Number(tr.querySelector(".pj-ajuste").value || 0);
+    return {
+      jugadorId:     tr.dataset.jug,
+      jugadorNombre: tr.dataset.nombre,
+      rol:           tr.querySelector(".pj-rol").value,
+      montoBase,
+      ajuste,
+      motivoAjuste:  tr.querySelector(".pj-motivo").value || "",
+      montoFinal:    montoBase + ajuste,
+      mes:           mesPartido,
+    };
+  });
   setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveRoster(pjPartidoSel, roster);
@@ -7229,6 +7270,7 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
   const mes      = document.getElementById("pj-mes-nuevo")?.value || "";
   const etiqueta = (document.getElementById("pj-etiqueta-nueva")?.value || "").trim();
   if (!monto) { toast("Ingresá un monto distinto de 0", "err"); return; }
+  const formPrevio = pjSnapshotFormPartido();
   setBtnState(btnId, "saving");
   try {
     const pago = {
@@ -7244,6 +7286,7 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
     toast("Monto agregado ✓", "ok");
     closeModal();
     renderPagosJugadores();
+    pjRestoreFormPartido(formPrevio);
   } catch(e) { handleSaveError(btnId, e); }
 }
 
@@ -7314,6 +7357,9 @@ async function guardarPremiosJugador(jugadorId, jugadorNombre) {
     });
   });
   if (!lista.length) { toast("Poné al menos una cantidad", "err"); return; }
+  // El re-render de abajo reconstruye la tabla — nos guardamos lo que el usuario
+  // tenía cargado sin grabar (rol, ajuste, motivo) para no hacérselo perder.
+  const formPrevio = pjSnapshotFormPartido();
   setBtnState(btnId, "saving");
   try {
     const r = await Storage.aplicarPremios(lista);
@@ -7329,6 +7375,7 @@ async function guardarPremiosJugador(jugadorId, jugadorNombre) {
     toast("Premios agregados ✓", "ok");
     closeModal();
     renderPagosJugadores();
+    pjRestoreFormPartido(formPrevio);
   } catch(e) { handleSaveError(btnId, e); }
 }
 

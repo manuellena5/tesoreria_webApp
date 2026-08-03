@@ -806,6 +806,24 @@ function handleAction(data) {
       return { ok: true, id };
     }
 
+    // Borra una fila pendiente de Pagos Jugadores (ej. premio que el usuario quitó
+    // desde el modal de Premios). Solo se permite si sigue pendiente, para no perder
+    // el rastro de pagos ya confirmados.
+    case "deletePagoJugador": {
+      const sh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(data.id)) {
+          if (String(all[i][8]) !== "pendiente") {
+            return { ok: false, error: "No se puede quitar un pago ya confirmado" };
+          }
+          sh.deleteRow(i + 1);
+          return { ok: true };
+        }
+      }
+      return { ok: false, error: "Pago no encontrado: " + data.id };
+    }
+
     // Marca como pagadas todas las filas cuyo ID esté en data.ids, con la misma fecha/medio/cuenta,
     // y genera un Movimiento (EGRESO) por cada una — un movimiento por partido por jugador, para
     // poder ver cuánto se gasta de sueldos por partido en Resumen > Por Partido.

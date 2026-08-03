@@ -1198,6 +1198,7 @@ const Storage = {
   async saveRoster(partidoId, roster) { return this._post({ action:"saveRoster", partidoId, roster }); },
   async listPagosJugadores()       { return this._post({ action:"listPagosJugadores"             }); },
   async savePagoJugador(p)         { return this._post({ action:"savePagoJugador", pago:p         }); },
+  async deletePagoJugador(id)      { return this._post({ action:"deletePagoJugador", id           }); },
   async confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago, cuenta }); },
   async aplicarPremios(lista)      { return this._post({ action:"aplicarPremios", premios:lista  }); },
 };
@@ -7291,8 +7292,19 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
 }
 
 // ── Aplicar premios a un jugador ──────────────────────────────
-// Cada premio con cantidad > 0 genera una fila pendiente propia (sin partido asociado),
-// que se suma al pendiente del jugador y se cobra junto con el resto.
+// Cada premio con cantidad > 0 genera/actualiza una fila pendiente propia (sin
+// partido asociado), que se suma al pendiente del jugador y se cobra junto con el
+// resto. Si el jugador ya tenía ese premio cargado (pendiente), se precarga la
+// cantidad para poder modificarla o ponerla en 0 para quitarlo.
+
+/** Filas pendientes (sin partido) de un jugador que corresponden a un premio dado,
+ *  matcheando por descripción (la etiqueta guardada es "desc" o "desc xN"). */
+function pjPremioExistente(jugadorId, descripcion) {
+  return pagosJugadores.filter(p => p.jugadorId === jugadorId && p.estado === "pendiente"
+    && p.partidosIncluidos.length === 0
+    && (p.etiqueta === descripcion || p.etiqueta.startsWith(descripcion + " x")));
+}
+
 function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
   const cfg = configJugadores.find(c => c.idJugador === jugadorId);
   const lista = (cfg && cfg.premios) ? cfg.premios : [];
@@ -7301,15 +7313,22 @@ function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
     return;
   }
   const mesSel = mesDefault || nowMes();
-  const filas = lista.map((p, i) => `
+  const filas = lista.map((p, i) => {
+    const existentes = pjPremioExistente(jugadorId, p.descripcion);
+    const existingIds = existentes.map(r => r.id);
+    const existingTotal = existentes.reduce((s,r) => s + Number(r.montoFinal||0), 0);
+    const cantActual = existentes.length ? Math.max(1, Math.round(existingTotal / (Number(p.monto)||1))) : 0;
+    return `
     <div class="entity-item">
       <div style="flex:1;min-width:0">
         <div class="entity-name">${esc(p.descripcion)}</div>
         <div class="entity-sub mono">${fmt(p.monto)} c/u</div>
       </div>
       <input class="inp premio-cant" data-idx="${i}" data-desc="${esc(p.descripcion)}" data-monto="${p.monto}"
-             type="number" min="0" step="1" value="0" style="width:72px;text-align:center" oninput="premiosRecalcTotal()">
-    </div>`).join("");
+             data-existing-ids='${JSON.stringify(existingIds)}'
+             type="number" min="0" step="1" value="${cantActual}" style="width:72px;text-align:center" oninput="premiosRecalcTotal()">
+    </div>`;
+  }).join("");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
@@ -7320,16 +7339,18 @@ function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
           <select class="inp" id="premios-mes">${generarOpcionesMes(mesSel)}</select>
         </div>
         ${filas}
+        <p class="note" style="margin:4px 0 0">Poné la cantidad en 0 para quitar un premio ya cargado.</p>
         <div class="modal-detail-row" style="margin-top:10px">
           <span class="modal-detail-lbl">Total</span>
           <span class="modal-detail-val mono" id="premios-total">${fmt(0)}</span>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" id="btn-aplicar-premios" onclick="guardarPremiosJugador('${jugadorId}','${esc(jugadorNombre)}')">Agregar</button>
+          <button class="btn-main" style="flex:1" id="btn-aplicar-premios" onclick="guardarPremiosJugador('${jugadorId}','${esc(jugadorNombre)}')">Guardar</button>
         </div>
       </div>
     </div>`;
+  premiosRecalcTotal();
 }
 
 function premiosRecalcTotal() {
@@ -7343,36 +7364,60 @@ async function guardarPremiosJugador(jugadorId, jugadorNombre) {
   const btnId = "btn-aplicar-premios";
   if (document.getElementById(btnId)?.disabled) return;
   const mes = document.getElementById("premios-mes")?.value || "";
-  const lista = [];
+  // Por cada tipo de premio: cant 0 con filas existentes -> quitarlas; cant > 0 ->
+  // actualiza la primera fila existente (o crea una nueva) y borra duplicados sueltos.
+  const aBorrar = [];
+  const aGuardar = [];
   [...document.querySelectorAll(".premio-cant")].forEach(inp => {
     const cant = Number(inp.value || 0);
-    if (cant <= 0) return;
     const monto = Number(inp.dataset.monto || 0);
     const desc  = inp.dataset.desc || "Premio";
-    lista.push({
-      jugadorId, jugadorNombre,
+    const existingIds = JSON.parse(inp.dataset.existingIds || "[]");
+    if (cant <= 0) {
+      aBorrar.push(...existingIds);
+      return;
+    }
+    const [keepId, ...dupIds] = existingIds;
+    aBorrar.push(...dupIds);
+    aGuardar.push({
+      id: keepId || "", jugadorId, jugadorNombre,
       montoFinal: monto * cant,
       etiqueta:   desc + (cant > 1 ? " x" + cant : ""),
       mes
     });
   });
-  if (!lista.length) { toast("Poné al menos una cantidad", "err"); return; }
+  if (!aBorrar.length && !aGuardar.length) { toast("Poné al menos una cantidad", "err"); return; }
   // El re-render de abajo reconstruye la tabla — nos guardamos lo que el usuario
   // tenía cargado sin grabar (rol, ajuste, motivo) para no hacérselo perder.
   const formPrevio = pjSnapshotFormPartido();
   setBtnState(btnId, "saving");
   try {
-    const r = await Storage.aplicarPremios(lista);
-    if (!r.ok) throw new Error(r.error || "Error");
-    (r.creados || []).forEach(c => pagosJugadores.push({
-      id: c.id, jugadorId: c.jugadorId, jugadorNombre: c.jugadorNombre,
-      partidosIncluidos: [], montoBase: c.montoFinal, ajuste: 0, motivoAjuste: "",
-      montoFinal: c.montoFinal, estado: "pendiente", fechaPago: "", medioPago: "",
-      etiqueta: c.etiqueta, movimientoId: "", mes: c.mes || ""
-    }));
+    for (const id of aBorrar) {
+      const r = await Storage.deletePagoJugador(id);
+      if (!r.ok) throw new Error(r.error || "Error");
+      const idx = pagosJugadores.findIndex(p => p.id === id);
+      if (idx >= 0) pagosJugadores.splice(idx, 1);
+    }
+    for (const p of aGuardar) {
+      const r = await Storage.savePagoJugador({
+        id: p.id, jugadorId: p.jugadorId, jugadorNombre: p.jugadorNombre,
+        partidosIncluidos: [], montoBase: p.montoFinal, ajuste: 0, motivoAjuste: "",
+        montoFinal: p.montoFinal, estado: "pendiente", fechaPago: "", medioPago: "",
+        etiqueta: p.etiqueta, movimientoId: "", mes: p.mes
+      });
+      if (!r.ok) throw new Error(r.error || "Error");
+      const fila = {
+        id: r.id, jugadorId: p.jugadorId, jugadorNombre: p.jugadorNombre,
+        partidosIncluidos: [], montoBase: p.montoFinal, ajuste: 0, motivoAjuste: "",
+        montoFinal: p.montoFinal, estado: "pendiente", fechaPago: "", medioPago: "",
+        etiqueta: p.etiqueta, movimientoId: "", mes: p.mes
+      };
+      const idx = pagosJugadores.findIndex(x => x.id === r.id);
+      if (idx >= 0) pagosJugadores[idx] = fila; else pagosJugadores.push(fila);
+    }
     saveSnapshotToCache();
     setBtnState(btnId, "saved");
-    toast("Premios agregados ✓", "ok");
+    toast("Premios actualizados ✓", "ok");
     closeModal();
     renderPagosJugadores();
     pjRestoreFormPartido(formPrevio);

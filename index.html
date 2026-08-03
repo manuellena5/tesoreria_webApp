@@ -573,6 +573,10 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 /* ── Misc ── */
 .divider { height:1px; background:var(--border); margin:14px 0; }
 .note { font-size:12px; color:var(--text3); line-height:1.6; }
+/* Vista previa del comprobante: el documento se arma a tamaño real y se escala acá */
+.comp-preview-label { font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--text3); margin:14px 0 6px; }
+.comp-preview-wrap { background:var(--bg3); border:1px solid var(--border); border-radius:10px; padding:10px; overflow:hidden; }
+.comp-preview-wrap #comprobante-doc { transform-origin:top left; }
 .accent-text { color:var(--accent); font-weight:600; }
 
 /* ── Partido table ── */
@@ -1471,6 +1475,7 @@ async function loadAllData(_esReintento) {
     if (rCfg.ok) {
       applyCuentasMetodos(rCfg.config || {});
       applyPreciosGranos(rCfg.config || {});
+      ultimoComprobante = Number((rCfg.config || {}).ultimoComprobante || 0) || 0;
       // If not yet seeded, run initSeed
       if (!rCfg.config || !rCfg.config.seeded) {
         await runInitSeed();
@@ -2526,6 +2531,7 @@ function openMovModal(id) {
         <div class="modal-monto-big ${montoClass}">${montoSign}${fmt(montoVal)}</div>
         ${rows}
         <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="abrirComprobanteModal('${id}')">🧾 Comprobante</button>
           <button class="btn-secondary" style="flex:1" onclick="editMovimiento('${id}')">✏️ Editar</button>
           <button class="btn-sm danger" style="padding:12px 16px" id="del-btn-${id}" onclick="confirmDelete('${id}')">🗑</button>
         </div>
@@ -2623,6 +2629,7 @@ function closeModal(e) {
 }
 
 function showMovSavedModal(mov, wasEdit) {
+  compMovPendiente = mov; // por si todavía no está en el array de movimientos
   const montoClass = mov.tipo==="INGRESO" ? "ing" : mov.tipo==="EGRESO" ? "egr" : mov.tipo==="AJUSTE" ? "adj" : "int";
   const montoVal   = mov.tipo==="INGRESO" ? mov.ingreso : mov.tipo==="AJUSTE" ? Math.abs(mov.montoFinal) : mov.egreso || mov.montoFinal;
   const montoSign  = mov.tipo==="INGRESO" ? "+" : mov.tipo==="EGRESO" ? "\u2212" : mov.tipo==="AJUSTE" ? (mov.montoFinal>=0?"\u229a+":"\u229a\u2212") : "\u21c4";
@@ -2650,7 +2657,8 @@ function showMovSavedModal(mov, wasEdit) {
         <div class="modal-monto-big ${montoClass}">${montoSign}${fmt(montoVal)}</div>
         ${detalles}
         <div class="modal-footer">
-          <button class="btn-main" onclick="document.getElementById('modal-root').innerHTML=''">Aceptar</button>
+          <button class="btn-secondary" style="flex:1" onclick="abrirComprobanteModal('${mov.id}')">🧾 Generar comprobante</button>
+          <button class="btn-main" style="flex:1" onclick="document.getElementById('modal-root').innerHTML=''">Aceptar</button>
         </div>
       </div>
     </div>`;
@@ -8167,6 +8175,368 @@ document.addEventListener("keydown", (e) => {
     if (map[e.key]) { e.preventDefault(); goTab(map[e.key]); }
   }
 });
+
+// ══════════════════════════════════════════════════════════════
+// COMPROBANTES  (reemplaza a la webapp aparte comprobantes.html)
+//
+// Documento blanco y negro pensado para imprimir, con el escudo del club y las
+// tres firmas. Se genera desde un movimiento ya guardado: los campos vienen
+// precargados pero son todos editables antes de exportar la imagen.
+// ══════════════════════════════════════════════════════════════
+
+const COMP_ANCHO = 520; // ancho real del documento al exportar (px)
+
+const COMP_FIRMAS = [
+  { nombre: "Laureano Gagliardo", cargo: "Presidente", img: "data:image/jpeg;base64,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" },
+  { nombre: "Raul Tini",          cargo: "Tesorero",   img: "data:image/jpeg;base64,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" },
+  { nombre: "Manuel Ellena",      cargo: "Secretario", img: "data:image/jpeg;base64,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" },
+];
+
+// Último número emitido, persistido en la hoja Config (clave "ultimoComprobante")
+// para que la numeración sea correlativa entre el celular y la computadora.
+let ultimoComprobante = 0;
+let compData          = null; // datos del comprobante que se está editando
+let compMovPendiente  = null; // movimiento recién guardado, todavía no listado
+
+function fmtFechaDMY(f) {
+  if (!f || f.length < 10) return f || "";
+  return f.slice(8,10) + "/" + f.slice(5,7) + "/" + f.slice(0,4);
+}
+
+// El escudo se pasa a escala de grises una sola vez y se cachea: html2canvas no
+// soporta el filtro CSS grayscale, así que hay que hornearlo en la imagen.
+let _escudoBN = null;
+function escudoBN() {
+  return new Promise((resolve) => {
+    if (_escudoBN) { resolve(_escudoBN); return; }
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c   = document.createElement("canvas");
+        c.width   = img.width;
+        c.height  = img.height;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const d = ctx.getImageData(0, 0, c.width, c.height);
+        for (let i = 0; i < d.data.length; i += 4) {
+          const g = 0.299*d.data[i] + 0.587*d.data[i+1] + 0.114*d.data[i+2];
+          d.data[i] = d.data[i+1] = d.data[i+2] = g;
+        }
+        ctx.putImageData(d, 0, 0);
+        _escudoBN = c.toDataURL("image/png");
+      } catch (e) {
+        _escudoBN = "./icon-192.png"; // canvas contaminado — se usa el original
+      }
+      resolve(_escudoBN);
+    };
+    img.onerror = () => { _escudoBN = "./icon-192.png"; resolve(_escudoBN); };
+    img.src = "./icon-192.png";
+  });
+}
+
+/** Precarga los datos del comprobante a partir de un movimiento guardado. */
+function movToComprobante(mov) {
+  const esAdh  = (mov.rubro || "").toUpperCase().includes("ADHERENTE");
+  const monto  = mov.tipo === "INGRESO"
+    ? Number(mov.ingreso || 0)
+    : Number(mov.egreso || mov.montoFinal || 0);
+  const mesKey = mov.mes ? mov.mes.slice(0,4) + "-" + mov.mes.slice(4) : "";
+  return {
+    movId:    mov.id,
+    tipoDoc:  esAdh ? "recibo" : "comprobante",
+    numero:   (Number(ultimoComprobante) || 0) + 1,
+    fecha:    fmtFechaDMY(mov.fecha),
+    receptor: mov.jugadorCT || mov.adherente || mov.concepto || "",
+    periodo:  mesLabel(mesKey),
+    items:    [{ desc: mov.concepto || mov.rubro || "Concepto", monto }],
+    mensaje:  "Gracias por su colaboración.",
+  };
+}
+
+function abrirComprobanteModal(movId) {
+  const mov = movimientos.find(m => m.id === movId)
+           || (compMovPendiente && compMovPendiente.id === movId ? compMovPendiente : null);
+  if (!mov) { toast("No se encontró el movimiento", "err"); return; }
+  compData = movToComprobante(mov);
+  renderComprobanteModal();
+  escudoBN().then(() => compRefreshDoc());
+}
+
+// ── Modal: campos editables arriba, vista previa abajo ────────
+function renderComprobanteModal() {
+  const d = compData;
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()" style="max-width:620px">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Comprobante</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Tipo de documento</label>
+            <select class="inp" id="comp-tipo" onchange="compOnInput()">
+              <option value="comprobante" ${d.tipoDoc==="comprobante"?"selected":""}>Comprobante de pago</option>
+              <option value="recibo" ${d.tipoDoc==="recibo"?"selected":""}>Recibo de adhesión</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px">
+            <div class="field" style="flex:0 0 110px">
+              <label>N°</label>
+              <input class="inp" id="comp-numero" type="number" step="1" value="${d.numero}" oninput="compOnInput()">
+            </div>
+            <div class="field" style="flex:1">
+              <label>Fecha</label>
+              <input class="inp" id="comp-fecha" type="text" value="${esc(d.fecha)}" oninput="compOnInput()">
+            </div>
+          </div>
+          <div class="field">
+            <label>Receptor</label>
+            <input class="inp" id="comp-receptor" type="text" value="${esc(d.receptor)}" oninput="compOnInput()">
+          </div>
+          <div class="field">
+            <label>Período</label>
+            <input class="inp" id="comp-periodo" type="text" value="${esc(d.periodo)}" placeholder="Agosto 2026" oninput="compOnInput()">
+          </div>
+          <div class="field">
+            <label>Detalle</label>
+            <div id="comp-items">${d.items.map(it => compItemRowHTML(it)).join("")}</div>
+            <button class="btn-secondary" style="margin-top:8px" onclick="compAgregarItem()">+ Agregar concepto</button>
+          </div>
+          <div class="field">
+            <label>Mensaje (opcional)</label>
+            <input class="inp" id="comp-mensaje" type="text" value="${esc(d.mensaje)}" oninput="compOnInput()">
+          </div>
+        </div>
+
+        <div class="comp-preview-label">Vista previa</div>
+        <div id="comp-preview-wrap" class="comp-preview-wrap">
+          <div id="comprobante-doc"></div>
+        </div>
+
+        <p class="note" id="comp-status" style="text-align:center"></p>
+        <div class="modal-footer">
+          <button class="btn-main" style="flex:1;background:#25d366;color:#0b3d20" id="btn-comp-share" onclick="compExportar('share')">Enviar por WhatsApp</button>
+          <button class="btn-secondary" style="flex:1" id="btn-comp-png" onclick="compExportar('download')">Descargar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+let compItemSeq = 0;
+function compItemRowHTML(it) {
+  const k = "ci" + (compItemSeq++);
+  return `
+    <div class="entity-item comp-item-row" id="compitem-${k}" style="gap:6px">
+      <input class="inp comp-item-desc" type="text" placeholder="Concepto"
+             value="${esc(it ? it.desc : "")}" style="flex:1;min-width:0" oninput="compOnInput()">
+      <input class="inp comp-item-monto" type="number" step="1" placeholder="0"
+             value="${it ? it.monto : ""}" style="width:110px" oninput="compOnInput()">
+      <button class="btn-sm danger" onclick="compQuitarItem('${k}')" title="Quitar">✕</button>
+    </div>`;
+}
+
+function compAgregarItem() {
+  document.getElementById("comp-items")?.insertAdjacentHTML("beforeend", compItemRowHTML(null));
+  compOnInput();
+}
+
+function compQuitarItem(k) {
+  document.getElementById("compitem-" + k)?.remove();
+  compOnInput();
+}
+
+/** Lee los campos del formulario a compData y repinta el documento. */
+function compOnInput() {
+  if (!compData) return;
+  compData.tipoDoc  = document.getElementById("comp-tipo")?.value || "comprobante";
+  compData.numero   = parseInt(document.getElementById("comp-numero")?.value || "0", 10) || 0;
+  compData.fecha    = (document.getElementById("comp-fecha")?.value || "").trim();
+  compData.receptor = (document.getElementById("comp-receptor")?.value || "").trim();
+  compData.periodo  = (document.getElementById("comp-periodo")?.value || "").trim();
+  compData.mensaje  = (document.getElementById("comp-mensaje")?.value || "").trim();
+  compData.items    = [...document.querySelectorAll(".comp-item-row")].map(row => ({
+    desc:  (row.querySelector(".comp-item-desc")?.value || "").trim(),
+    monto: parseFloat(row.querySelector(".comp-item-monto")?.value || "0") || 0,
+  })).filter(it => it.desc || it.monto);
+  compRefreshDoc();
+}
+
+function compRefreshDoc() {
+  const doc = document.getElementById("comprobante-doc");
+  if (!doc || !compData) return;
+  doc.innerHTML = comprobanteDocHTML(compData);
+  compFitPreview();
+}
+
+// El documento se arma siempre a COMP_ANCHO px reales (así la imagen exportada
+// sale igual desde el celular que desde la compu) y se escala solo para la vista previa.
+function compFitPreview() {
+  const wrap = document.getElementById("comp-preview-wrap");
+  const doc  = document.getElementById("comprobante-doc");
+  if (!wrap || !doc) return;
+  doc.style.transform = "none";
+  const s = Math.min(1, (wrap.clientWidth || COMP_ANCHO) / COMP_ANCHO);
+  doc.style.transformOrigin = "top left";
+  doc.style.transform = "scale(" + s + ")";
+  wrap.style.height = Math.ceil(doc.offsetHeight * s) + "px";
+}
+
+// ── El documento en sí: blanco y negro, con escudo y firmas ───
+function comprobanteDocHTML(d) {
+  const esRecibo = d.tipoDoc === "recibo";
+  const total    = (d.items || []).reduce((s, it) => s + Number(it.monto || 0), 0);
+  const escudo   = _escudoBN || "./icon-192.png";
+
+  const items = (d.items || []).length
+    ? d.items.map(it => `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding:4px 0">
+          <span style="font-size:13px;color:#333">${esc(it.desc || "Concepto")}</span>
+          <span style="font-size:13px;color:#000;font-family:var(--mono)">${fmt(it.monto)}</span>
+        </div>`).join("")
+    : `<div style="padding:4px 0;font-size:13px;color:#999">Sin conceptos cargados</div>`;
+
+  const firmas = COMP_FIRMAS.map((f, i) => `
+    <div style="flex:1;text-align:center;padding:0 6px;${i?"border-left:1px solid #ccc":""}">
+      <div style="height:34px;display:flex;align-items:flex-end;justify-content:center">
+        <img src="${f.img}" alt="" style="max-height:34px;max-width:100%;object-fit:contain;">
+      </div>
+      <div style="height:1px;background:#000;margin:3px 8px 4px"></div>
+      <div style="font-size:11px;color:#000">${esc(f.nombre)}</div>
+      <div style="font-size:10px;color:#666">${esc(f.cargo)}</div>
+    </div>`).join("");
+
+  return `
+  <div style="width:${COMP_ANCHO}px;background:#fff;color:#000;font-family:var(--sans, system-ui, sans-serif);border:1px solid #000">
+    <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:2px solid #000">
+      <img src="${escudo}" alt="" style="width:46px;height:46px;object-fit:contain;flex-shrink:0">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;color:#000">Club Deportivo Mitre</div>
+        <div style="font-size:11px;color:#666;margin-top:1px">1951 – 2026 · 75° Aniversario</div>
+        <div style="font-size:10px;letter-spacing:1px;color:#000;margin-top:3px">${esRecibo ? "RECIBO DE ADHESIÓN" : "COMPROBANTE DE PAGO"}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-family:var(--mono);font-size:14px;color:#000">N° ${String(d.numero || 0).padStart(4,"0")}</div>
+        <div style="font-size:11px;color:#666;margin-top:2px">${esc(d.fecha)}</div>
+      </div>
+    </div>
+
+    <div style="padding:14px 18px">
+      <div style="font-size:10px;letter-spacing:1px;color:#666">${esRecibo ? "RECIBIMOS DE" : "RECEPTOR DEL PAGO"}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:4px">
+        <span style="font-size:17px;color:#000">${esc(d.receptor) || "—"}</span>
+        ${d.periodo ? `<span style="font-size:11px;color:#000;border:1px solid #000;border-radius:20px;padding:2px 10px;white-space:nowrap">${esc(d.periodo)}</span>` : ""}
+      </div>
+      <div style="height:1px;background:#ccc;margin:12px 0"></div>
+      ${items}
+      <div style="display:flex;justify-content:space-between;align-items:baseline;padding-top:10px;border-top:2px solid #000;margin-top:8px">
+        <span style="font-size:13px;color:#000">${esRecibo ? "Total recibido" : "Total abonado"}</span>
+        <span style="font-size:22px;color:#000;font-family:var(--mono)">${fmt(total)}</span>
+      </div>
+      ${d.mensaje ? `<div style="margin-top:12px;padding:8px 12px;border-left:3px solid #000;font-size:12px;color:#444;font-style:italic">${esc(d.mensaje)}</div>` : ""}
+    </div>
+
+    <div style="display:flex;padding:12px 18px 10px;border-top:1px solid #ccc">${firmas}</div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 18px;border-top:1px solid #000">
+      <span style="font-size:11px;color:#000;border:1px solid #000;border-radius:20px;padding:2px 10px">${esRecibo ? "Recibido" : "Pagado"}</span>
+      <span style="font-size:10px;color:#666">Emitido el ${esc(d.fecha)}</span>
+    </div>
+  </div>`;
+}
+
+// ── Exportar: imagen JPG → compartir o descargar ──────────────
+const HTML2CANVAS_URL = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+let _h2cPromise = null;
+
+// Se carga recién cuando hace falta, para no pesar en el arranque de la app.
+// El service worker la deja cacheada después del primer uso (cache-first para
+// orígenes externos), así que a partir de ahí anda también sin señal.
+function ensureHtml2Canvas() {
+  if (window.html2canvas) return Promise.resolve(window.html2canvas);
+  if (_h2cPromise) return _h2cPromise;
+  _h2cPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = HTML2CANVAS_URL;
+    s.onload  = () => resolve(window.html2canvas);
+    s.onerror = () => { _h2cPromise = null; reject(new Error("No se pudo cargar el generador de imágenes (sin conexión)")); };
+    document.head.appendChild(s);
+  });
+  return _h2cPromise;
+}
+
+function compNombreArchivo(d) {
+  const recep = (d.receptor || "comprobante").replace(/[^a-zA-Z0-9]/g, "_");
+  return "CDM_" + String(d.numero || 0).padStart(4,"0") + "_" + recep + ".jpg";
+}
+
+/** Renderiza el documento a un Blob JPG con fondo blanco sólido. */
+async function compRenderBlob() {
+  const h2c = await ensureHtml2Canvas();
+  const doc = document.getElementById("comprobante-doc");
+  if (!doc) throw new Error("No hay comprobante para exportar");
+  // Se saca la escala de la vista previa para capturar a tamaño real.
+  const prevTransform = doc.style.transform;
+  doc.style.transform = "none";
+  let canvas;
+  try {
+    canvas = await h2c(doc, {
+      scale: 2, useCORS: true, allowTaint: true,
+      backgroundColor: "#ffffff", logging: false, width: COMP_ANCHO,
+    });
+  } finally {
+    doc.style.transform = prevTransform;
+    compFitPreview();
+  }
+  // Canvas intermedio con blanco sólido: algunos Android ignoran backgroundColor.
+  const flat = document.createElement("canvas");
+  flat.width  = canvas.width;
+  flat.height = canvas.height;
+  const ctx = flat.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, flat.width, flat.height);
+  ctx.drawImage(canvas, 0, 0);
+  return new Promise(res => flat.toBlob(res, "image/jpeg", 0.95));
+}
+
+/** Guarda el número emitido para que el próximo comprobante siga la numeración. */
+async function compConfirmarNumero(n) {
+  if (!n || n <= Number(ultimoComprobante || 0)) return;
+  ultimoComprobante = n;
+  try { await Storage.saveConfig("ultimoComprobante", String(n)); } catch (e) { /* offline: queda local */ }
+}
+
+async function compExportar(modo) {
+  const btnId  = modo === "share" ? "btn-comp-share" : "btn-comp-png";
+  const btn    = document.getElementById(btnId);
+  const status = document.getElementById("comp-status");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  if (status) status.textContent = "Generando imagen…";
+  try {
+    const blob = await compRenderBlob();
+    if (!blob) throw new Error("No se pudo generar la imagen");
+    const nombre = compNombreArchivo(compData);
+    const file   = new File([blob], nombre, { type: "image/jpeg" });
+
+    if (modo === "share" && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "Comprobante Club Deportivo Mitre" });
+      if (status) status.textContent = "¡Compartido!";
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement("a");
+      a.href = url; a.download = nombre; a.click();
+      URL.revokeObjectURL(url);
+      if (status) status.textContent = modo === "share"
+        ? "Tu navegador no permite compartir directo — la imagen se descargó, adjuntala en WhatsApp."
+        : "Imagen descargada ✓";
+    }
+    await compConfirmarNumero(compData.numero);
+  } catch (e) {
+    if (e && e.name === "AbortError") { if (status) status.textContent = ""; }
+    else { if (status) status.textContent = "Error: " + (e.message || "no se pudo generar la imagen"); }
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 // ══════════════════════════════════════════════════════════════
 // ARRANQUE

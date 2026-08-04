@@ -925,7 +925,7 @@ let pagosJugTab   = "partido";
 let pjPartidoSel  = null;
 let pjPartidosSel = null; // null = todavía no inicializado (se precarga con los partidos pendientes)
 let pjMesSel      = null; // null = todavía no inicializado (se precarga con el mes actual); "" = "Sin mes asignado"
-let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", search: "" };
+let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", evento: "", search: "" };
 let F             = buildDefaultF();
 let resumenSubTab     = "mensual";
 let catResExpandido   = new Set();
@@ -2207,7 +2207,7 @@ function renderMovimientos() {
     <div id="kpi-filter-note" class="note" style="margin:-8px 0 14px"></div>
 
     <div class="filter-row">
-      <button class="pill sm ${listFiltros.rubro===""&&listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""&&listFiltros.adherente===""&&listFiltros.jugadorCT===""&&listFiltros.partido===""?"active":""}" onclick="clearListFilters()">Todos</button>
+      <button class="pill sm ${listFiltros.rubro===""&&listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""&&listFiltros.adherente===""&&listFiltros.jugadorCT===""&&listFiltros.partido===""&&listFiltros.evento===""?"active":""}" onclick="clearListFilters()">Todos</button>
       ${tipoPills}
     </div>
     <div class="filter-row" style="gap:8px">
@@ -2251,8 +2251,9 @@ function renderMovimientos() {
       </div>
     </div>
 
-    ${partidos.length ? `
+    ${(partidos.length || eventos.length) ? `
     <div class="filter-row" style="gap:8px">
+      ${partidos.length ? `
       <select class="inp" id="fil-partido" style="flex:1" onchange="listFiltros.partido=this.value; renderMovList()">
         <option value="">— Todos los partidos —</option>
         <option value="__sin__" ${listFiltros.partido==="__sin__"?"selected":""}>Sin partido asignado</option>
@@ -2260,7 +2261,17 @@ function renderMovimientos() {
           const label = p.numeroFecha + " — " + p.rival;
           return `<option value="${esc(p.id)}" ${listFiltros.partido===p.id?"selected":""}>${esc(label)}</option>`;
         }).join("")}
-      </select>
+      </select>` : ""}
+      ${eventos.length ? `
+      <select class="inp" id="fil-evento" style="flex:1" onchange="listFiltros.evento=this.value; renderMovList()">
+        <option value="">— Todos los eventos —</option>
+        <option value="__sin__" ${listFiltros.evento==="__sin__"?"selected":""}>Sin evento asignado</option>
+        ${[...eventos].sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(ev => {
+          const fd = ev.fecha ? ev.fecha.slice(8)+"/"+ev.fecha.slice(5,7)+"/"+ev.fecha.slice(0,4) : "";
+          const label = fd ? `${ev.nombre} · ${fd}` : ev.nombre;
+          return `<option value="${esc(ev.id)}" ${listFiltros.evento===ev.id?"selected":""}>${esc(label)}</option>`;
+        }).join("")}
+      </select>` : ""}
     </div>` : ""}
 
     <div class="search-wrap">
@@ -2368,6 +2379,11 @@ function getMovimientosFiltrados() {
       return m.partidoId === listFiltros.partido;
     })
     .filter(m => {
+      if (!listFiltros.evento) return true;
+      if (listFiltros.evento === "__sin__") return !m.eventoId;
+      return m.eventoId === listFiltros.evento;
+    })
+    .filter(m => {
       const q = normStr(listFiltros.search);
       return !q || normStr(m.concepto).includes(q) || normStr(m.observacion).includes(q);
     });
@@ -2375,7 +2391,7 @@ function getMovimientosFiltrados() {
 
 function listFiltrosActive() {
   return !!(listFiltros.rubro || listFiltros.cat || listFiltros.cuenta || listFiltros.tipo ||
-    listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.search);
+    listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.evento || listFiltros.search);
 }
 
 function renderMovList() {
@@ -2485,7 +2501,7 @@ function setListFilter(key, val) {
   renderMovimientos();
 }
 function clearListFilters() {
-  listFiltros = { rubro: "", cat:"", cuenta:"", tipo:"", adherente:"", jugadorCT:"", partido:"", search:"" };
+  listFiltros = { rubro: "", cat:"", cuenta:"", tipo:"", adherente:"", jugadorCT:"", partido:"", evento:"", search:"" };
   renderMovimientos();
 }
 function changeMes(delta) {

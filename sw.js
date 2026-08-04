@@ -6,7 +6,7 @@
 // se instala, borra el caché viejo y la app avisa "Nueva versión
 // disponible" para que el usuario actualice con un toque.
 // ══════════════════════════════════════════════════════════════
-const SW_VERSION = "48";
+const SW_VERSION = "49";
 const CACHE_NAME = "tesoreria-cache-v" + SW_VERSION;
 
 const APP_SHELL = [
@@ -14,6 +14,7 @@ const APP_SHELL = [
   "./index.html",
   "./manifest.json",
   "./icon-192.png",
+  "./escudo.png",
   "./icon-512.png",
   "./icon-512-maskable.png",
 ];

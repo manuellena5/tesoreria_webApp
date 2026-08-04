@@ -8203,8 +8203,10 @@ function fmtFechaDMY(f) {
   return f.slice(8,10) + "/" + f.slice(5,7) + "/" + f.slice(0,4);
 }
 
-// El escudo se pasa a escala de grises una sola vez y se cachea: html2canvas no
-// soporta el filtro CSS grayscale, así que hay que hornearlo en la imagen.
+// Mismo escudo (75° Aniversario) que usaba la webapp de comprobantes aparte.
+// Se pasa a escala de grises una sola vez y se cachea: html2canvas no soporta
+// el filtro CSS grayscale, así que hay que hornearlo en la imagen.
+const COMP_ESCUDO = "./escudo.png";
 let _escudoBN = null;
 function escudoBN() {
   return new Promise((resolve) => {
@@ -8225,12 +8227,12 @@ function escudoBN() {
         ctx.putImageData(d, 0, 0);
         _escudoBN = c.toDataURL("image/png");
       } catch (e) {
-        _escudoBN = "./icon-192.png"; // canvas contaminado — se usa el original
+        _escudoBN = COMP_ESCUDO; // canvas contaminado — se usa el original
       }
       resolve(_escudoBN);
     };
-    img.onerror = () => { _escudoBN = "./icon-192.png"; resolve(_escudoBN); };
-    img.src = "./icon-192.png";
+    img.onerror = () => { _escudoBN = COMP_ESCUDO; resolve(_escudoBN); };
+    img.src = COMP_ESCUDO;
   });
 }
 
@@ -8249,7 +8251,8 @@ function movToComprobante(mov) {
     receptor: mov.jugadorCT || mov.adherente || mov.concepto || "",
     periodo:  mesLabel(mesKey),
     items:    [{ desc: mov.concepto || mov.rubro || "Concepto", monto }],
-    mensaje:  "Gracias por su colaboración.",
+    // El agradecimiento solo tiene sentido en el recibo de adhesión.
+    mensaje:  esAdh ? "Gracias por su colaboración." : "",
   };
 }
 
@@ -8384,7 +8387,7 @@ function compFitPreview() {
 function comprobanteDocHTML(d) {
   const esRecibo = d.tipoDoc === "recibo";
   const total    = (d.items || []).reduce((s, it) => s + Number(it.monto || 0), 0);
-  const escudo   = _escudoBN || "./icon-192.png";
+  const escudo   = _escudoBN || COMP_ESCUDO;
 
   const items = (d.items || []).length
     ? d.items.map(it => `
@@ -8407,7 +8410,7 @@ function comprobanteDocHTML(d) {
   return `
   <div style="width:${COMP_ANCHO}px;background:#fff;color:#000;font-family:var(--sans, system-ui, sans-serif);border:1px solid #000">
     <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:2px solid #000">
-      <img src="${escudo}" alt="" style="width:46px;height:46px;object-fit:contain;flex-shrink:0">
+      <img src="${escudo}" alt="" style="width:44px;height:56px;object-fit:contain;flex-shrink:0">
       <div style="flex:1;min-width:0">
         <div style="font-size:15px;color:#000">Club Deportivo Mitre</div>
         <div style="font-size:11px;color:#666;margin-top:1px">1951 – 2026 · 75° Aniversario</div>

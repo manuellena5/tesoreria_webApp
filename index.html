@@ -4510,9 +4510,12 @@ function renderAdherentesResumen() {
         </div>
         ${viewToggle}
       </div>
-      <button class="pill sm ${adhResumenSoloPendientesMes?"active":""}" style="margin-bottom:10px" onclick="toggleAdhResumenSoloPendientesMes()">
-        🔴 Solo pendientes de ${esc(mesLabel(pendMes.mesActual))}
-      </button>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="pill sm ${adhResumenSoloPendientesMes?"active":""}" style="margin:0" onclick="toggleAdhResumenSoloPendientesMes()">
+          🔴 Solo pendientes de ${esc(mesLabel(pendMes.mesActual))}
+        </button>
+        <button class="btn-sm accent" onclick="exportAdherentesResExcel()">📥 Exportar a Excel</button>
+      </div>
       ${statCards}
       <p class="note" style="margin-bottom:12px">${totalesLine}</p>
       ${body}
@@ -4630,6 +4633,70 @@ function renderAdherentesTabla(rows, meses) {
       </table>
     </div>
     ${footnote}`;
+}
+
+// Exporta la tabla completa de Resumen > Adherentes (año y "solo pendientes" vigentes),
+// siempre con cuota mensual, todos los meses, prometido, acumulado y resta —
+// independiente de si la pantalla los está ocultando por estar en mobile o vista Cards.
+function exportAdherentesResExcel() {
+  if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
+
+  const movs6All = movimientos.filter(esAporteAdherente);
+  const pendMes = calcPendientesMesActual();
+  let rows = calcAdherentesPorAnio(adherenteAnio)
+    .map(r => ({ ...r, pendienteEsteMes: !!pendMes.pendientePorNombre[r.adherente] }));
+  if (adhResumenSoloPendientesMes) rows = rows.filter(r => r.pendienteEsteMes);
+  if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
+
+  const movs6Anio = movs6All.filter(m => !adherenteAnio || m.fecha.slice(0,4) === adherenteAnio);
+  const meses = [...new Set(movs6Anio.map(m => mesFromRecord(m)))].filter(Boolean).sort();
+
+  const rank = { SIN:0, PARCIAL:1, OK:3 };
+  const sorted = [...rows].sort((a,b) => {
+    const ra = a.estado===null ? 2 : rank[a.estado];
+    const rb = b.estado===null ? 2 : rank[b.estado];
+    if (ra !== rb) return ra - rb;
+    return a.adherente.localeCompare(b.adherente);
+  });
+
+  let totAportado = 0, totCompromiso = 0;
+  const totPorMes = {};
+  const headers = ["Adherente", "Cuota mensual", ...meses.map(mk => mesCortoHeader(mk)), "Prometido", "Acumulado", "Resta"];
+  const dataRows = sorted.map(r => {
+    const tieneCompromiso = r.compromisoAnual > 0;
+    totAportado += r.totalAportado;
+    if (tieneCompromiso) totCompromiso += r.compromisoAnual;
+    const resta = tieneCompromiso ? Math.abs(r.compromisoAnual - r.totalAportado) : "";
+    const mesVals = meses.map(mk => {
+      const monto = r.porMes[mk] || 0;
+      if (monto) totPorMes[mk] = (totPorMes[mk]||0) + monto;
+      return monto || "";
+    });
+    return [
+      r.adherente,
+      r.cuotaMensual > 0 ? r.cuotaMensual : "",
+      ...mesVals,
+      tieneCompromiso ? r.compromisoAnual : "",
+      r.totalAportado || "",
+      resta
+    ];
+  });
+  const totRow = [
+    "TOTALES", "",
+    ...meses.map(mk => totPorMes[mk] || ""),
+    totCompromiso || "",
+    totAportado || "",
+    Math.abs(totCompromiso - totAportado)
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows, totRow]);
+  ws["!cols"] = [24, 14, ...meses.map(() => 10), 14, 14, 14].map(w => ({ wch:w }));
+  XLSX.utils.book_append_sheet(wb, ws, "Adherentes");
+
+  const anioPart = adherenteAnio || "todos";
+  XLSX.writeFile(wb, `adherentes_${anioPart}_${today()}.xlsx`);
+  toast("Excel exportado ✓", "ok");
 }
 
 function renderAdherenteCard(r) {

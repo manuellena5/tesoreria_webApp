@@ -7240,7 +7240,8 @@ function mostrarConfirmacionPagosModal(movimientosCreados) {
       <span class="modal-detail-lbl">${esc(m.jugadorCT)}</span>
       <span class="modal-detail-val">${fmt(m.egreso)}</span>
     </div>
-    <div class="pj-acumulado" style="margin:-6px 0 8px">${esc(m.concepto)} · ${esc(m.cuenta)} · ${esc(m.modoPago)}</div>
+    <div class="pj-acumulado" style="margin:-6px 0 4px">${esc(m.concepto)} · ${esc(m.cuenta)} · ${esc(m.modoPago)}</div>
+    <button class="btn-secondary" style="margin-bottom:10px;width:100%" onclick="abrirComprobanteModal('${m.id}')">🧾 Generar comprobante — ${esc(m.jugadorCT)}</button>
   `).join("");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
@@ -8331,7 +8332,10 @@ function movToComprobante(mov) {
     fecha:    fmtFechaDMY(mov.fecha),
     receptor: mov.jugadorCT || mov.adherente || mov.concepto || "",
     periodo:  mesLabel(mesKey),
-    items:    [{ desc: mov.concepto || mov.rubro || "Concepto", monto }],
+    // Movimientos con desglose (ej. pago de jugador que sumó partido + premios/ajustes)
+    // precargan un ítem por concepto en vez de uno solo con el total.
+    items:    (mov.itemsDetalle && mov.itemsDetalle.length) ? mov.itemsDetalle.map(it => ({ desc: it.desc||"Concepto", monto: Number(it.monto||0) }))
+             : [{ desc: mov.concepto || mov.rubro || "Concepto", monto }],
     // El agradecimiento solo tiene sentido en el recibo de adhesión.
     mensaje:  esAdh ? "Gracias por su colaboración." : "",
   };

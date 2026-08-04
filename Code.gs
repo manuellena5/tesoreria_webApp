@@ -52,8 +52,11 @@ const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
-  "Vinculos"
+  "Vinculos","ItemsDetalle"
 ];
+// ItemsDetalle: JSON de [{desc, monto}, ...] — desglose opcional del movimiento (ej. pago de
+// jugador que suma partido + premios/ajustes) para precargar conceptos en el generador de
+// comprobantes. Vacío en la mayoría de los movimientos, que tienen un único concepto.
 const ADH_COLS = ["ID","Nombre","Activo","CuotaMensual","CuotasAnuales"];
 const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","MovimientoID","timestamp"];
 const JUG_COLS = ["ID","Nombre","Activo"];
@@ -212,6 +215,7 @@ function handleAction(data) {
         partidoId:     String(r[20]||""),
         eventoId:      String(r[21]||""),
         vinculos:      parseVinculosJson(r[22]),
+        itemsDetalle:  parseItemsDetalleJson(r[23]),
       }));
       return { ok: true, movimientos };
     }
@@ -257,7 +261,7 @@ function handleAction(data) {
             m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
             m.jugadorCT||"", m.adherente||"",
             m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", tsOriginal,
-            m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos)
+            m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos), stringifyItemsDetalle(m.itemsDetalle)
           ]]);
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -825,8 +829,13 @@ function handleAction(data) {
     }
 
     // Marca como pagadas todas las filas cuyo ID esté en data.ids, con la misma fecha/medio/cuenta,
-    // y genera un Movimiento (EGRESO) por cada una — un movimiento por partido por jugador, para
-    // poder ver cuánto se gasta de sueldos por partido en Resumen > Por Partido.
+    // y genera UN Movimiento (EGRESO) por jugador+partido, sumando el total de todas sus filas
+    // (base del partido + premios/ajustes sueltos) — así el sueldo y sus premios quedan como un
+    // solo pago, con cada concepto desglosado en Concepto y en ItemsDetalle (para el generador de
+    // comprobantes). Se sigue generando un movimiento por partido por jugador (no uno por lote
+    // entero) para poder ver cuánto se gasta de sueldos por partido en Resumen > Por Partido; los
+    // premios/ajustes sueltos (sin partido) se pliegan en el único partido del jugador en este
+    // lote si hay uno solo — si tiene más de uno, quedan en su propio movimiento aparte.
     case "confirmarPagosJugadores": {
       const sh    = getOrCreateSheet(PJ_SHEET, PJ_COLS);
       const movSh = getOrCreateSheet(MOV_SHEET, MOV_COLS);
@@ -846,42 +855,86 @@ function handleAction(data) {
       }
 
       const all = sh.getDataRange().getValues();
-      let count = 0;
-      const movimientosCreados = [];
+
+      // 1) Junta las filas a confirmar con sus datos y su fila real en la hoja.
+      const filas = [];
       for (let i = 1; i < all.length; i++) {
         if (ids.indexOf(String(all[i][0])) < 0) continue;
-        const jugadorNombre = String(all[i][2]||"");
-        const partidosIncl  = safeParseJSON(String(all[i][3]||"[]"), []);
-        const montoFinal    = Number(all[i][7]||0);
-        const motivoAjuste  = String(all[i][6]||"");
-        const etiqueta      = String(all[i][11]||"");
-        const partidoId     = partidosIncl.length ? partidosIncl[0] : "";
-        const partidoInfo   = partidoId ? partidoById[partidoId] : null;
-        const concepto = partidoInfo
-          ? "Pago jugador " + jugadorNombre + " — " + partidoInfo.numeroFecha + " vs " + partidoInfo.rival
-          : "Pago jugador " + jugadorNombre + (etiqueta ? " — " + etiqueta : "");
+        const partidosIncl = safeParseJSON(String(all[i][3]||"[]"), []);
+        filas.push({
+          rowIndex:      i,
+          jugadorId:     String(all[i][1]),
+          jugadorNombre: String(all[i][2]||""),
+          montoFinal:    Number(all[i][7]||0),
+          motivoAjuste:  String(all[i][6]||""),
+          etiqueta:      String(all[i][11]||""),
+          partidoId:     partidosIncl.length ? partidosIncl[0] : ""
+        });
+      }
+      if (!filas.length) return { ok: false, error: "No se encontraron los pagos a confirmar" };
+
+      // 2) Agrupa por jugador + partido, plegando las filas sueltas (premios/ajustes sin
+      //    partido) dentro del único partido del jugador en este lote, si hay exactamente uno.
+      const grupos = {}; // "jugadorId|partidoId" -> { jugadorId, jugadorNombre, partidoId, filas:[] }
+      for (const f of filas) {
+        const key = f.jugadorId + "|" + f.partidoId;
+        if (!grupos[key]) grupos[key] = { jugadorId: f.jugadorId, jugadorNombre: f.jugadorNombre, partidoId: f.partidoId, filas: [] };
+        grupos[key].filas.push(f);
+      }
+      Object.keys(grupos).forEach(key => {
+        const suelto = grupos[key];
+        if (suelto.partidoId !== "") return;
+        const conPartido = Object.values(grupos).filter(g => g.jugadorId === suelto.jugadorId && g.partidoId !== "");
+        if (conPartido.length === 1) {
+          conPartido[0].filas.push(...suelto.filas);
+          delete grupos[key];
+        }
+      });
+
+      // 3) Un movimiento por grupo, sumando sus filas e itemizando premios/ajustes.
+      let count = 0;
+      const movimientosCreados = [];
+      for (const g of Object.values(grupos)) {
+        const partidoInfo = g.partidoId ? partidoById[g.partidoId] : null;
+        const items = g.filas.map(f => {
+          let desc;
+          if (f.partidoId) {
+            desc = partidoInfo ? (partidoInfo.numeroFecha + " vs " + partidoInfo.rival) : "Pago partido";
+            if (f.motivoAjuste) desc += " — " + f.motivoAjuste;
+          } else {
+            desc = f.etiqueta || "Ajuste";
+          }
+          return { desc, monto: f.montoFinal };
+        });
+        const montoFinal = items.reduce((s, it) => s + Number(it.monto||0), 0);
+        const concepto   = "Pago jugador " + g.jugadorNombre + " — " + items.map(it => it.desc).join(" + ");
+        const observacion = [...new Set(g.filas.map(f => f.motivoAjuste).filter(Boolean))].join(" · ");
 
         const movId = uid_gs();
         const mov = {
           id: movId, mes, fecha: fechaPago, codRubro: "19", rubro: "SUELDO JUGADORES", categoria: "Jugadores y Cuerpo Técnico",
           concepto, egreso: montoFinal, ingreso: 0, montoFinal,
           cuenta, cuentaDestino: "", modoPago: medioPago,
-          jugadorCT: jugadorNombre, adherente: "", observacion: motivoAjuste || "", comprobante: "",
-          seguroReintegro: 0, tipo: "EGRESO", timestamp: ts, partidoId, eventoId: "", vinculos: []
+          jugadorCT: g.jugadorNombre, adherente: "", observacion, comprobante: "",
+          seguroReintegro: 0, tipo: "EGRESO", timestamp: ts, partidoId: g.partidoId, eventoId: "", vinculos: [],
+          itemsDetalle: items
         };
         movSh.appendRow([
           mov.id, mov.mes, mov.fecha, mov.codRubro, mov.rubro, mov.categoria,
           mov.concepto, mov.egreso, mov.ingreso, mov.montoFinal,
           mov.cuenta, mov.cuentaDestino, mov.modoPago,
           mov.jugadorCT, mov.adherente, mov.observacion, mov.comprobante, mov.seguroReintegro,
-          mov.tipo, mov.timestamp, mov.partidoId, mov.eventoId, stringifyVinculos(mov.vinculos)
+          mov.tipo, mov.timestamp, mov.partidoId, mov.eventoId, stringifyVinculos(mov.vinculos),
+          stringifyItemsDetalle(mov.itemsDetalle)
         ]);
         movimientosCreados.push(mov);
 
-        sh.getRange(i + 1, 9, 1, 2).setValues([[ "pagado", fechaPago ]]);
-        sh.getRange(i + 1, 11).setValue(medioPago);
-        sh.getRange(i + 1, 13).setValue(movId);
-        count++;
+        for (const f of g.filas) {
+          sh.getRange(f.rowIndex + 1, 9, 1, 2).setValues([[ "pagado", fechaPago ]]);
+          sh.getRange(f.rowIndex + 1, 11).setValue(medioPago);
+          sh.getRange(f.rowIndex + 1, 13).setValue(movId);
+          count++;
+        }
       }
       return { ok: true, count, movimientos: movimientosCreados };
     }
@@ -1101,6 +1154,18 @@ function parseVinculosJson(raw) {
 function stringifyVinculos(vinculos) {
   if (!vinculos || !Array.isArray(vinculos) || !vinculos.length) return "";
   return JSON.stringify(vinculos);
+}
+
+function parseItemsDetalleJson(raw) {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+function stringifyItemsDetalle(items) {
+  if (!items || !Array.isArray(items) || !items.length) return "";
+  return JSON.stringify(items);
 }
 
 function normalizeMovFields(m) {

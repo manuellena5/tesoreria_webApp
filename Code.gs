@@ -54,9 +54,12 @@ const MOV_COLS = [
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
   "Vinculos","ItemsDetalle"
 ];
-// ItemsDetalle: JSON de [{desc, monto}, ...] — desglose opcional del movimiento (ej. pago de
-// jugador que suma partido + premios/ajustes) para precargar conceptos en el generador de
-// comprobantes. Vacío en la mayoría de los movimientos, que tienen un único concepto.
+// ItemsDetalle: JSON de [{desc, monto, partidoId}, ...] — desglose opcional del movimiento (ej.
+// pago de jugador que suma uno o más partidos + premios/ajustes) para precargar conceptos en el
+// generador de comprobantes y para que Resumen > Por Partido pueda imputar cada ítem a su
+// partido. partidoId es "" para ítems sin partido (premios, ajustes); los ítems viejos que no
+// traen este campo se leen igual como partidoId:"" (ver calcPartidoResumenRows en index.html).
+// Vacío en la mayoría de los movimientos, que tienen un único concepto.
 const ADH_COLS = ["ID","Nombre","Activo","CuotaMensual","CuotasAnuales"];
 const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","MovimientoID","timestamp"];
 const JUG_COLS = ["ID","Nombre","Activo"];
@@ -829,13 +832,12 @@ function handleAction(data) {
     }
 
     // Marca como pagadas todas las filas cuyo ID esté en data.ids, con la misma fecha/medio/cuenta,
-    // y genera UN Movimiento (EGRESO) por jugador+partido, sumando el total de todas sus filas
-    // (base del partido + premios/ajustes sueltos) — así el sueldo y sus premios quedan como un
-    // solo pago, con cada concepto desglosado en Concepto y en ItemsDetalle (para el generador de
-    // comprobantes). Se sigue generando un movimiento por partido por jugador (no uno por lote
-    // entero) para poder ver cuánto se gasta de sueldos por partido en Resumen > Por Partido; los
-    // premios/ajustes sueltos (sin partido) se pliegan en el único partido del jugador en este
-    // lote si hay uno solo — si tiene más de uno, quedan en su propio movimiento aparte.
+    // y genera UN Movimiento (EGRESO) por jugador, sumando el total de todas sus filas del lote
+    // (uno o más partidos, más premios/ajustes sueltos) — en la realidad se hace una sola
+    // transferencia por jugador que cubre todo eso, así que tiene que ser un solo movimiento y un
+    // solo comprobante. Cada partido y cada premio/ajuste queda itemizado en ItemsDetalle (con su
+    // propio partidoId cuando corresponde) para el generador de comprobantes y para que Resumen >
+    // Por Partido pueda seguir imputando cada ítem a su partido en vez de al movimiento entero.
     case "confirmarPagosJugadores": {
       const sh    = getOrCreateSheet(PJ_SHEET, PJ_COLS);
       const movSh = getOrCreateSheet(MOV_SHEET, MOV_COLS);
@@ -851,7 +853,9 @@ function handleAction(data) {
       const parAll = parSh.getDataRange().getValues();
       const partidoById = {};
       for (let i = 1; i < parAll.length; i++) {
-        if (parAll[i][0]) partidoById[String(parAll[i][0])] = { rival: String(parAll[i][2]||""), numeroFecha: String(parAll[i][3]||"") };
+        if (parAll[i][0]) partidoById[String(parAll[i][0])] = {
+          rival: String(parAll[i][2]||""), numeroFecha: String(parAll[i][3]||""), fecha: String(parAll[i][1]||"")
+        };
       }
 
       const all = sh.getDataRange().getValues();
@@ -873,30 +877,22 @@ function handleAction(data) {
       }
       if (!filas.length) return { ok: false, error: "No se encontraron los pagos a confirmar" };
 
-      // 2) Agrupa por jugador + partido, plegando las filas sueltas (premios/ajustes sin
-      //    partido) dentro del único partido del jugador en este lote, si hay exactamente uno.
-      const grupos = {}; // "jugadorId|partidoId" -> { jugadorId, jugadorNombre, partidoId, filas:[] }
+      // 2) Agrupa sólo por jugador: un lote de pago (los partidos elegidos en "Transferencias" +
+      //    los jugadores tildados) es una sola transferencia por jugador, con un ítem por partido
+      //    y uno por cada premio/ajuste suelto (que ya caen en este mismo grupo al no tener partido).
+      const grupos = {}; // jugadorId -> { jugadorId, jugadorNombre, filas:[] }
       for (const f of filas) {
-        const key = f.jugadorId + "|" + f.partidoId;
-        if (!grupos[key]) grupos[key] = { jugadorId: f.jugadorId, jugadorNombre: f.jugadorNombre, partidoId: f.partidoId, filas: [] };
+        const key = f.jugadorId;
+        if (!grupos[key]) grupos[key] = { jugadorId: f.jugadorId, jugadorNombre: f.jugadorNombre, filas: [] };
         grupos[key].filas.push(f);
       }
-      Object.keys(grupos).forEach(key => {
-        const suelto = grupos[key];
-        if (suelto.partidoId !== "") return;
-        const conPartido = Object.values(grupos).filter(g => g.jugadorId === suelto.jugadorId && g.partidoId !== "");
-        if (conPartido.length === 1) {
-          conPartido[0].filas.push(...suelto.filas);
-          delete grupos[key];
-        }
-      });
 
-      // 3) Un movimiento por grupo, sumando sus filas e itemizando premios/ajustes.
+      // 3) Un movimiento por jugador, sumando sus filas e itemizando partidos y premios/ajustes.
       let count = 0;
       const movimientosCreados = [];
       for (const g of Object.values(grupos)) {
-        const partidoInfo = g.partidoId ? partidoById[g.partidoId] : null;
         const items = g.filas.map(f => {
+          const partidoInfo = f.partidoId ? partidoById[f.partidoId] : null;
           let desc;
           if (f.partidoId) {
             desc = partidoInfo ? (partidoInfo.numeroFecha + " vs " + partidoInfo.rival) : "Pago partido";
@@ -904,11 +900,29 @@ function handleAction(data) {
           } else {
             desc = f.etiqueta || "Ajuste";
           }
-          return { desc, monto: f.montoFinal };
+          return { desc, monto: f.montoFinal, partidoId: f.partidoId };
         });
         const montoFinal = items.reduce((s, it) => s + Number(it.monto||0), 0);
-        const concepto   = "Pago jugador " + g.jugadorNombre + " — " + items.map(it => it.desc).join(" + ");
+
+        // Concepto corto: numeroFecha de los partidos incluidos (no el desglose completo, que con
+        // 2+ partidos queda kilométrico), + sufijo "premios" si hay ítems sueltos sin partido.
+        const partidosIds = [...new Set(g.filas.filter(f => f.partidoId).map(f => f.partidoId))];
+        const hayPremios   = g.filas.some(f => !f.partidoId);
+        let concepto;
+        if (partidosIds.length) {
+          const numerosFecha = partidosIds.map(pid => (partidoById[pid]||{}).numeroFecha || "").filter(Boolean);
+          concepto = "Pago jugador " + g.jugadorNombre + " — " + numerosFecha.join(", ") + (hayPremios ? " + premios" : "");
+        } else {
+          concepto = "Pago jugador " + g.jugadorNombre + " — " + items.map(it => it.desc).join(" + ");
+        }
+
         const observacion = [...new Set(g.filas.map(f => f.motivoAjuste).filter(Boolean))].join(" · ");
+
+        // partidoId del movimiento: el más reciente del grupo, sólo por compatibilidad con
+        // filtros/tags viejos — el Resumen por Partido ya no depende de este campo si hay itemsDetalle.
+        const partidoIdMov = partidosIds.length
+          ? partidosIds.reduce((a, b) => ((partidoById[b]||{}).fecha||"") > ((partidoById[a]||{}).fecha||"") ? b : a)
+          : "";
 
         const movId = uid_gs();
         const mov = {
@@ -916,7 +930,7 @@ function handleAction(data) {
           concepto, egreso: montoFinal, ingreso: 0, montoFinal,
           cuenta, cuentaDestino: "", modoPago: medioPago,
           jugadorCT: g.jugadorNombre, adherente: "", observacion, comprobante: "",
-          seguroReintegro: 0, tipo: "EGRESO", timestamp: ts, partidoId: g.partidoId, eventoId: "", vinculos: [],
+          seguroReintegro: 0, tipo: "EGRESO", timestamp: ts, partidoId: partidoIdMov, eventoId: "", vinculos: [],
           itemsDetalle: items
         };
         movSh.appendRow([

@@ -2946,26 +2946,58 @@ function renderResumen() {
 // "Otros Egr." es el catch-all de egresos que no son Buffet (rubro 2) ni
 // Gastos Cancha (rubros 12/13/14b/36): antes se restaban en Total Neto sin
 // mostrarse en ninguna columna, ahora quedan desglosados. ─────────────────
+/** Suma `monto` (ya sea el total del movimiento o la porción imputada a un partido) al acumulador
+ *  `pg` de un partido, clasificando por codRubro del movimiento — los ítems heredan el codRubro
+ *  de su movimiento padre, no tienen uno propio. */
+function sumarMontoAPartido(pg, m, monto) {
+  if (m.tipo === "INGRESO") {
+    pg.ingresos += monto;
+    if (m.codRubro === "2")                             pg.buffetIng   += monto;
+    else if (["1","4"].includes(m.codRubro))             pg.entradas    += monto;
+    else                                                 pg.otrosIng    += monto;
+  } else {
+    pg.egresos += monto;
+    if (m.codRubro === "2")                              pg.buffetEgr    += monto;
+    else if (["12","13","14b","36"].includes(m.codRubro)) pg.gastosCancha += monto;
+    else                                                  pg.otrosEgr     += monto;
+  }
+}
+
 function calcPartidoResumenRows() {
   const movsPartido = movimientos.filter(m =>
-    m.partidoId &&
-    (m.tipo === "INGRESO" || m.tipo === "EGRESO")
+    (m.tipo === "INGRESO" || m.tipo === "EGRESO") &&
+    (m.partidoId || (m.itemsDetalle||[]).some(it => it.partidoId))
   );
   const partidoMap = {};
+  const partidoPg = id => partidoMap[id] || (partidoMap[id] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0, otrosEgr:0 });
+
   for (const m of movsPartido) {
-    if (!partidoMap[m.partidoId]) partidoMap[m.partidoId] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0, otrosEgr:0 };
-    const pg = partidoMap[m.partidoId];
-    if (m.tipo === "INGRESO") {
-      pg.ingresos += m.ingreso;
-      if (m.codRubro === "2")                             pg.buffetIng   += m.ingreso;
-      else if (["1","4"].includes(m.codRubro))             pg.entradas    += m.ingreso;
-      else                                                 pg.otrosIng    += m.ingreso;
-    } else {
-      pg.egresos += m.egreso;
-      if (m.codRubro === "2")                             pg.buffetEgr    += m.egreso;
-      else if (["12","13","14b","36"].includes(m.codRubro)) pg.gastosCancha += m.egreso;
-      else                                                 pg.otrosEgr     += m.egreso;
+    const total = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
+    const itemsConPartido = (m.itemsDetalle||[]).filter(it => it.partidoId);
+
+    if (!itemsConPartido.length) {
+      // Movimiento histórico o cargado a mano: sin desglose por partido, todo a m.partidoId (fallback de siempre).
+      sumarMontoAPartido(partidoPg(m.partidoId), m, total);
+      continue;
     }
+
+    // Movimiento con desglose (ej. pago de jugador que cubrió varios partidos + premios): cada
+    // ítem con partido va al suyo, y los ítems sin partido (premios/ajustes) se prorratean entre
+    // los partidos presentes en el mismo movimiento — la suma imputada siempre cierra con `total`.
+    const partidosDelMov  = [...new Set(itemsConPartido.map(it => it.partidoId))];
+    const sumaConPartido  = itemsConPartido.reduce((s, it) => s + Number(it.monto||0), 0);
+    const resto           = total - sumaConPartido; // premios/ajustes sin partido de este movimiento
+    const porPartido = {};
+    partidosDelMov.forEach(pid => porPartido[pid] = 0);
+    itemsConPartido.forEach(it => porPartido[it.partidoId] += Number(it.monto||0));
+    if (resto !== 0) {
+      if (sumaConPartido !== 0) {
+        partidosDelMov.forEach(pid => porPartido[pid] += resto * (porPartido[pid] / sumaConPartido));
+      } else {
+        partidosDelMov.forEach(pid => porPartido[pid] += resto / partidosDelMov.length);
+      }
+    }
+    partidosDelMov.forEach(pid => sumarMontoAPartido(partidoPg(pid), m, porPartido[pid]));
   }
 
   return partidos
@@ -6955,7 +6987,6 @@ function renderPagoPartido() {
     // Premios / montos sueltos pendientes: viven en filas propias (sin partido) y se
     // cobran junto con el partido, así que suman al total del jugador.
     const premiosPend = pjAcumuladoPendiente(cfg.idJugador);
-    const idsPremios  = pjIdsAcumuladoPendiente(cfg.idJugador);
     if (rol !== "noJugo") {
       totalPartido += final;
       if (estado === "pagado") pagadoPartido += final; else pendientePartido += final;
@@ -6963,12 +6994,11 @@ function renderPagoPartido() {
     totalPartido     += premiosPend;
     pendientePartido += premiosPend;
     const hayPendiente = estado !== "pagado" || premiosPend > 0;
+    // Estado es sólo informativo acá: el pago en sí se hace desde "Transferencias", que junta
+    // partidos + quincenales en una sola transferencia por jugador.
     const badge = !hayPendiente
       ? `<span class="pj-badge pj-badge-pagado">Pagado</span>`
       : `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`;
-    const idsPremiosLit = "[" + idsPremios.map(i => `'${i}'`).join(",") + "]";
-    const marcarBtn = !hayPendiente ? "" :
-      `<button class="btn-sm accent" onclick="abrirMedioPagoModal([${fila?`'${fila.id}'`:"null"}], '${cfg.idJugador}', '${pjPartidoSel}', ${idsPremiosLit})" title="Marcar pagado">✓</button>`;
     const premiosCell = `
       <td class="mono">${premiosPend ? fmt(premiosPend) : "—"}
         <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
@@ -6992,7 +7022,6 @@ function renderPagoPartido() {
       ${premiosCell}
       <td class="mono pj-final">${fmt(final + premiosPend)}</td>
       <td>${badge}</td>
-      <td>${marcarBtn}</td>
     </tr>`;
   }).join("");
 
@@ -7016,7 +7045,6 @@ function renderPagoPartido() {
       </td>
       <td class="mono">${fmt(acumulado)}</td>
       <td>${badge}</td>
-      <td>${hayPendiente ? `<button class="btn-sm accent" onclick="marcarAcumuladoPagado('${cfg.idJugador}')" title="Marcar pagado">✓</button>` : ""}</td>
     </tr>`;
   }).join("");
 
@@ -7033,7 +7061,7 @@ function renderPagoPartido() {
     <div class="pj-table-wrap">
       <table class="pj-table">
         <thead><tr>
-          <th>Jugador</th><th>Rol</th><th>Base</th><th>Ajuste</th><th>Motivo</th><th>Premios</th><th>Final</th><th>Estado</th><th></th>
+          <th>Jugador</th><th>Rol</th><th>Base</th><th>Ajuste</th><th>Motivo</th><th>Premios</th><th>Final</th><th>Estado</th>
         </tr></thead>
         <tbody>${rowsPartido}${rowsPeriodico}</tbody>
       </table>
@@ -7307,15 +7335,7 @@ function aplicarMovimientosCreados(movimientosCreados) {
   updateBadge();
 }
 
-function marcarAcumuladoPagado(jugadorId) {
-  const ids = pagosJugadores
-    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
-    .map(p => p.id);
-  if (!ids.length) return;
-  abrirMedioPagoModal(ids, jugadorId, null);
-}
-
-/** Análoga a marcarAcumuladoPagado() pero sólo para las filas pendientes de un jugador "mensual" en un mes puntual. */
+/** Marca como pagadas las filas pendientes sin partido asociado de un jugador "mensual" en un mes puntual. */
 function marcarMesPagado(jugadorId, mes) {
   const ids = pagosJugadores
     .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0 && (p.mes||"") === mes)
@@ -7579,10 +7599,14 @@ function renderTransferencias() {
     totalTransferir += total;
     const pendiente = info.periodico ? true
       : (Number(info.premios||0) > 0 || Object.values(info.porPartido).some(f => f.estado === "pendiente"));
+    // Premios/ajustes sueltos: para "partido" es info.premios; para periódicos ya están
+    // fundidos dentro del "Acumulado" (no hay desglose propio), así que se muestra "—".
+    const premiosCell = !info.periodico && Number(info.premios||0) > 0 ? fmt(info.premios) : "—";
     return `
     <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-total="${total}">
       <td>${esc(info.nombre)}</td>
       ${cols}
+      <td class="mono">${premiosCell}</td>
       <td class="mono">${fmt(total)}</td>
       <td>${esc(info.alias || "—")}</td>
       <td style="text-align:center"><input type="checkbox" class="pj-transf-cb" value="${jid}" ${pendiente?"checked":""} ${pendiente?"":"disabled"}></td>
@@ -7600,7 +7624,7 @@ function renderTransferencias() {
     </div>
     <div class="pj-table-wrap">
       <table class="pj-table" id="pj-transf-table">
-        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Total</th><th>Alias/CBU</th><th>Incluir</th></tr></thead>
+        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Incluir</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="99" class="note">Sin jugadores pendientes para los partidos seleccionados</td></tr>`}</tbody>
       </table>
     </div>

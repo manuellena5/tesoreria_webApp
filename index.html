@@ -1190,7 +1190,7 @@ const Storage = {
   async renameJugador(id, nombre) { return this._post({ action:"renameJugador", id, nombre }); },
   async deleteJugador(id)   { return this._post({ action:"deleteJugador", id  }); },
   async backfillIds()       { return this._post({ action:"backfillIds"         }); },
-  async checkFks()          { return this._post({ action:"checkFks"            }); },
+  async checkIntegridad()   { return this._post({ action:"checkIntegridad"     }); },
   async listGrupos()        { return this._post({ action:"listGrupos"         }); },
   async saveGrupo(g)        { return this._post({ action:"saveGrupo",    grupo:g  }); },
   async deleteGrupo(id)     { return this._post({ action:"deleteGrupo",  id  }); },
@@ -7945,12 +7945,12 @@ function renderConfig() {
       <div id="backfill-result" style="margin-top:10px"></div>
     </div>
 
-    <!-- Integridad referencial -->
+    <!-- Integridad de datos -->
     <div class="cfg-card">
-      <div class="cfg-title">🧩 Integridad de vínculos</div>
-      <p class="cfg-note" style="margin-bottom:10px">Busca movimientos cuyo ID de jugador o adherente apunta a una entidad borrada. En la hoja no molestan, pero son las filas que rechazaría una base de datos el día que migres.</p>
-      <button class="btn-secondary" id="btn-check-fks" onclick="runCheckFks()">Chequear vínculos</button>
-      <div id="fks-result" style="margin-top:10px"></div>
+      <div class="cfg-title">🧩 Integridad de datos</div>
+      <p class="cfg-note" style="margin-bottom:10px">Busca referencias rotas que fallan en silencio: reintegros vinculados a un gasto borrado, ítems imputados a un partido que ya no está, cuotas o pagos marcados contra un movimiento eliminado, miembros de grupo dados de baja. Corre sólo cuando apretás el botón.</p>
+      <button class="btn-secondary" id="btn-check-integridad" onclick="runCheckIntegridad()">Chequear integridad</button>
+      <div id="integridad-result" style="margin-top:10px"></div>
     </div>
 
     <!-- Atajos de teclado -->
@@ -8000,23 +8000,52 @@ async function runBackfillIds() {
   }
 }
 
-// Movimientos cuyo JugadorID/AdherenteID apunta a una entidad que ya no existe (se borró
-// después de haberla usado). No afectan los totales, pero frenarían un import con FKs.
-async function runCheckFks() {
-  const btnId = "btn-check-fks";
-  const box   = document.getElementById("fks-result");
+// Referencias rotas que la app no valida en ningún otro lado (incluidas las que viven
+// adentro de los JSON de Vinculos, ItemsDetalle, Miembros y PartidosIncluidos). Es un
+// diagnóstico bajo demanda: no corre solo, no afecta la velocidad del uso normal.
+async function runCheckIntegridad() {
+  const btnId = "btn-check-integridad";
+  const box   = document.getElementById("integridad-result");
   setBtnState(btnId, "saving");
+  showOverlay("Revisando…");
   try {
-    const r = await Storage.checkFks();
+    const r = await Storage.checkIntegridad();
     if (!r.ok) throw new Error(r.error || "Error");
+    hideOverlay();
     setBtnState(btnId, "saved");
-    const h = r.huerfanos || [];
-    box.innerHTML = h.length
-      ? `<p class="cfg-note" style="color:var(--warn)">${h.length} vínculo${h.length!==1?"s":""} roto${h.length!==1?"s":""}:</p>`
-        + h.map(x => `<div class="modal-detail-row"><span class="modal-detail-lbl">${fechaCorta(x.fecha)} · ${esc(x.nombre||"—")}</span><span class="modal-detail-val">${esc(x.campo)} inexistente</span></div>`).join("")
-        + `<p class="cfg-note" style="margin-top:8px">Se arreglan reactivando la entidad borrada, o abriendo el movimiento y eligiendo otra.</p>`
-      : `<p class="cfg-note" style="color:var(--green)">Todos los vínculos apuntan a entidades existentes ✓</p>`;
+    const probs = r.problemas || [];
+    if (!probs.length) {
+      box.innerHTML = `<p class="cfg-note" style="color:var(--green)">Sin referencias rotas ✓</p>`;
+      return;
+    }
+    // Agrupado por área, errores primero, para que se lea como una lista de tareas.
+    const porGrupo = {};
+    for (const p of probs) (porGrupo[p.grupo] = porGrupo[p.grupo] || []).push(p);
+    const orden = ["error", "aviso"];
+    const bloques = Object.keys(porGrupo).map(g => {
+      const items = porGrupo[g].sort((a,b) => orden.indexOf(a.nivel) - orden.indexOf(b.nivel));
+      return `
+        <div style="margin-top:12px">
+          <div style="font-weight:600;font-size:13px;margin-bottom:4px">${esc(g)} <span class="badge">${items.length}</span></div>
+          ${items.map(p => `
+            <div class="modal-detail-row" style="align-items:flex-start">
+              <span style="color:var(--${p.nivel==="error"?"red":"warn"});flex:0 0 auto;margin-right:6px">${p.nivel==="error"?"●":"▲"}</span>
+              <span style="flex:1;min-width:0;font-size:12px;line-height:1.45">
+                ${p.ref ? `<b>${esc(p.ref)}</b><br>` : ""}${esc(p.detalle)}
+              </span>
+            </div>`).join("")}
+        </div>`;
+    }).join("");
+    box.innerHTML = `
+      <p class="cfg-note">
+        <span style="color:var(--red)">● ${r.errores} error${r.errores!==1?"es":""}</span>
+        &nbsp;·&nbsp;
+        <span style="color:var(--warn)">▲ ${r.avisos} aviso${r.avisos!==1?"s":""}</span>
+      </p>
+      ${bloques}
+      <p class="cfg-note" style="margin-top:12px">Los <span style="color:var(--red)">errores</span> apuntan a algo que se borró y dejó una referencia colgada — se arreglan volviendo a crear la entidad, o abriendo el registro y reasignándolo. Los <span style="color:var(--warn)">avisos</span> son situaciones válidas que conviene saber que están.</p>`;
   } catch(e) {
+    hideOverlay();
     setBtnState(btnId, "error");
     box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
   }

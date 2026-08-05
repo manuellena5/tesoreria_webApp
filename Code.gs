@@ -495,42 +495,176 @@ function handleAction(data) {
       return { ok: true, jugadores, adherentes };
     }
 
-    // Chequeo de integridad referencial: movimientos cuyo JugadorID o AdherenteID apunta a
-    // una fila que ya no existe (o quedó inactiva). En la hoja no molestan, pero son
-    // exactamente las filas que rechazaría un import a una base con foreign keys.
-    case "checkFks": {
-      const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
-      const all = sh.getDataRange().getValues();
-      if (all.length <= 1) return { ok: true, huerfanos: [] };
+    // ─── CHEQUEO DE INTEGRIDAD ────────────────────────────────
+    //
+    // Diagnóstico bajo demanda (botón en Configuración): NO corre en el uso normal de la
+    // app. Busca referencias colgadas — incluidas las que viven adentro de los JSON de
+    // Vinculos, ItemsDetalle, Miembros y PartidosIncluidos, que hoy no valida nadie y
+    // fallan en silencio (un vínculo a un egreso borrado deja de sumar y el reintegro
+    // queda mostrando de menos; un ítem con partidoId muerto desaparece del resumen por
+    // partido). Una sola pasada por hoja, con sets en memoria: sin búsquedas anidadas.
+    //
+    // Dos niveles, porque no todo lo colgado es un error:
+    //  · "error" → el ID no existe en ninguna fila. Algo se rompió.
+    //  · "aviso" → la fila existe pero está dada de baja (Activo=false). Es normal en el
+    //    historial (un jugador que se fue del club) y no hay nada que arreglar; sólo se
+    //    reporta cuando además implica que algo no se ve en pantalla.
+    case "checkIntegridad": {
+      const problemas = [];
+      const add = (nivel, grupo, detalle, ref) => problemas.push({ nivel, grupo, detalle, ref: ref || "" });
 
-      function idsVivos(sheet, cols, colActivo) {
-        const set = {};
-        const rows = getOrCreateSheet(sheet, cols).getDataRange().getValues();
+      // Índice de una hoja: existe (haya o no sido dada de baja) y si está activa.
+      function indexar(sheet, cols, colActivo, colNombre, grupoDup) {
+        const rows  = getOrCreateSheet(sheet, cols).getDataRange().getValues();
+        const existe = {}, activo = {}, nombre = {}, vistos = {};
         for (let i = 1; i < rows.length; i++) {
-          if (rows[i][0] && String(rows[i][colActivo - 1]) !== "false") set[String(rows[i][0])] = true;
+          const id = String(rows[i][0] || "").trim();
+          if (!id) continue;
+          if (vistos[id] && grupoDup) {
+            add("error", grupoDup, "Hay más de una fila con el ID " + id +
+                " en la hoja \"" + sheet + "\". Corregilo a mano: mientras esté duplicado, editar o borrar esa fila no funciona.");
+          }
+          vistos[id] = true;
+          existe[id] = true;
+          activo[id] = colActivo ? String(rows[i][colActivo - 1]) !== "false" : true;
+          if (colNombre) nombre[id] = String(rows[i][colNombre - 1] || "").trim();
         }
-        return set;
+        return { existe, activo, nombre, rows };
       }
-      const jugIds = idsVivos(JUG_SHEET, JUG_COLS, 3);
-      const grpIds = idsVivos(GRP_SHEET, GRP_COLS, 4);
-      const adhIds = idsVivos(ADH_SHEET, ADH_COLS, 3);
 
-      const huerfanos = [];
-      for (let i = 1; i < all.length; i++) {
-        const id = String(all[i][0] || "");
-        if (!id) continue;
-        const jId = String(all[i][MOV_IX.JUGADOR_ID   - 1] || "").trim();
-        const aId = String(all[i][MOV_IX.ADHERENTE_ID - 1] || "").trim();
-        if (jId && !jugIds[jId] && !grpIds[jId]) {
-          huerfanos.push({ id, fecha: formatFecha(all[i][2]), campo: "JugadorID", valor: jId,
-                           nombre: String(all[i][MOV_IX.JUGADOR_CT - 1] || "") });
+      const MOVX = indexar(MOV_SHEET,  MOV_COLS,  0, 7, "IDs duplicados");
+      const JUG  = indexar(JUG_SHEET,  JUG_COLS,  3, 2, "IDs duplicados");
+      const GRP  = indexar(GRP_SHEET,  GRP_COLS,  4, 2, "IDs duplicados");
+      const ADH  = indexar(ADH_SHEET,  ADH_COLS,  3, 2, "IDs duplicados");
+      const PAR  = indexar(PAR_SHEET,  PAR_COLS,  6, 3, "IDs duplicados");
+      const PJX  = indexar(PJ_SHEET,   PJ_COLS,   0, 3, null);
+
+      const etiquetaMov = r => (formatFecha(r[2]) || "sin fecha") + " · " + (String(r[6] || "").slice(0, 40) || "sin concepto");
+
+      // ── Movimientos: entidades, vínculos de reintegro y desglose por partido ──
+      for (let i = 1; i < MOVX.rows.length; i++) {
+        const r = MOVX.rows[i];
+        if (!String(r[0] || "").trim()) continue;
+        const et = etiquetaMov(r);
+
+        const jId = String(r[MOV_IX.JUGADOR_ID   - 1] || "").trim();
+        const aId = String(r[MOV_IX.ADHERENTE_ID - 1] || "").trim();
+        if (jId && !JUG.existe[jId] && !GRP.existe[jId]) {
+          add("error", "Movimientos", "Apunta a un jugador/grupo que no existe (queda vinculado sólo por el texto \"" +
+              String(r[MOV_IX.JUGADOR_CT - 1] || "") + "\", así que un renombre no lo va a arrastrar).", et);
         }
-        if (aId && !adhIds[aId]) {
-          huerfanos.push({ id, fecha: formatFecha(all[i][2]), campo: "AdherenteID", valor: aId,
-                           nombre: String(all[i][MOV_IX.ADHERENTE - 1] || "") });
+        if (aId && !ADH.existe[aId]) {
+          add("error", "Movimientos", "Apunta a un adherente que no existe (queda vinculado sólo por el texto \"" +
+              String(r[MOV_IX.ADHERENTE - 1] || "") + "\").", et);
+        }
+
+        const vinc = parseVinculosJson(r[MOV_IX.VINCULOS - 1]);
+        for (const v of vinc) {
+          const eid = String((v && v.egresoId) || "").trim();
+          if (!eid) {
+            add("error", "Reintegros", "Tiene un vínculo sin egresoId — ese monto no se está contando contra ningún gasto.", et);
+          } else if (!MOVX.existe[eid]) {
+            add("error", "Reintegros", "Está vinculado a un gasto que se borró (" + eid + "): " + fmtMonto_(v.monto) +
+                " figura como reintegrado pero no se descuenta de ningún egreso.", et);
+          }
+        }
+
+        const items = parseItemsDetalleJson(r[MOV_IX.ITEMS - 1]);
+        for (const it of items) {
+          const pid = String((it && it.partidoId) || "").trim();
+          if (pid && !PAR.existe[pid]) {
+            add("error", "Resumen por partido", "Tiene un ítem de " + fmtMonto_(it.monto) +
+                " imputado a un partido que se borró: ese monto desaparece del resumen por partido.", et);
+          }
+        }
+        const pidMov = String(r[20] || "").trim();
+        if (pidMov && !PAR.existe[pidMov]) {
+          add("error", "Resumen por partido", "Está asignado a un partido que se borró.", et);
         }
       }
-      return { ok: true, huerfanos };
+
+      // ── Grupos: miembros borrados (desaparecen en silencio de la pantalla) ──
+      for (let i = 1; i < GRP.rows.length; i++) {
+        const r = GRP.rows[i];
+        const gid = String(r[0] || "").trim();
+        if (!gid || String(r[3]) === "false") continue;
+        const miembros = safeParseJSON(String(r[2] || "[]"), []);
+        const gn = String(r[1] || "");
+        for (const jid of miembros) {
+          if (!JUG.existe[String(jid)]) {
+            add("error", "Grupos", "El grupo \"" + gn + "\" tiene un miembro que no existe (" + jid + ").");
+          } else if (!JUG.activo[String(jid)]) {
+            add("aviso", "Grupos", "El grupo \"" + gn + "\" incluye a \"" + JUG.nombre[String(jid)] +
+                "\", que está dado de baja: no aparece en la lista de miembros en pantalla.");
+          }
+        }
+      }
+
+      // ── Pagos a jugadores: jugador, partidos incluidos y movimiento de pago ──
+      for (let i = 1; i < PJX.rows.length; i++) {
+        const r = PJX.rows[i];
+        if (!String(r[0] || "").trim()) continue;
+        const quien = String(r[2] || "sin nombre");
+        const jid = String(r[1] || "").trim();
+        if (jid && !JUG.existe[jid]) {
+          add("error", "Pagos a jugadores", "El pago de \"" + quien + "\" apunta a un jugador que no existe.");
+        }
+        for (const pid of safeParseJSON(String(r[3] || "[]"), [])) {
+          if (!PAR.existe[String(pid)]) {
+            add("error", "Pagos a jugadores", "El pago de \"" + quien + "\" incluye un partido que se borró (" + pid + ").");
+          }
+        }
+        const movId = String(r[12] || "").trim();
+        if (movId && !MOVX.existe[movId]) {
+          add("error", "Pagos a jugadores", "El pago de \"" + quien + "\" figura como pagado con un movimiento que se borró: el egreso ya no está en la contabilidad.");
+        }
+      }
+
+      // ── Roster de partidos ──
+      const ROS = getOrCreateSheet(ROS_SHEET, ROS_COLS).getDataRange().getValues();
+      for (let i = 1; i < ROS.length; i++) {
+        const pid = String(ROS[i][0] || "").trim();
+        const jid = String(ROS[i][1] || "").trim();
+        if (pid && !PAR.existe[pid]) add("error", "Roster de partidos", "Hay una convocatoria de un partido que se borró (" + pid + ").");
+        if (jid && !JUG.existe[jid]) add("error", "Roster de partidos", "Hay una convocatoria de un jugador que no existe (" + String(ROS[i][2] || jid) + ").");
+      }
+
+      // ── Config Jugadores ──
+      const CFGJ = getOrCreateSheet(CFGJ_SHEET, CFGJ_COLS).getDataRange().getValues();
+      for (let i = 1; i < CFGJ.length; i++) {
+        const jid = String(CFGJ[i][0] || "").trim();
+        if (!jid || String(CFGJ[i][7]) === "false") continue;
+        if (!JUG.existe[jid]) {
+          add("error", "Config de jugadores", "Hay montos configurados para \"" + String(CFGJ[i][1] || jid) + "\", que no existe en la lista de jugadores.");
+        }
+      }
+
+      // ── Cuotas de adherentes ──
+      const PAG = getOrCreateSheet(PAG_SHEET, PAG_COLS).getDataRange().getValues();
+      for (let i = 1; i < PAG.length; i++) {
+        const aid   = String(PAG[i][1] || "").trim();
+        const quien = String(PAG[i][2] || aid);
+        const movId = String(PAG[i][5] || "").trim();
+        if (aid && !ADH.existe[aid]) {
+          add("error", "Cuotas de adherentes", "Hay cuotas de \"" + quien + "\", que no existe en la lista de adherentes.");
+        }
+        if (movId && !MOVX.existe[movId]) {
+          add("error", "Cuotas de adherentes", "La cuota " + String(PAG[i][3] || "") + " de \"" + quien +
+              "\" está marcada como pagada contra un movimiento que se borró.");
+        }
+      }
+
+      // ── Reservas de granos ──
+      const RES = getOrCreateSheet(RES_SHEET, RES_COLS).getDataRange().getValues();
+      for (let i = 1; i < RES.length; i++) {
+        const movId = String(RES[i][6] || "").trim();
+        if (movId && !MOVX.existe[movId]) {
+          add("error", "Reserva de granos", "El registro del " + formatFecha(RES[i][1]) + " apunta a un movimiento que se borró.");
+        }
+      }
+
+      const errores = problemas.filter(p => p.nivel === "error").length;
+      return { ok: true, errores, avisos: problemas.length - errores, problemas };
     }
 
     case "deleteJugador": {
@@ -1830,4 +1964,21 @@ function formatFecha(val) {
 
 function safeParseJSON(str, fallback) {
   try { return JSON.parse(str); } catch (e) { return fallback; }
+}
+
+/**
+ * Monto en pesos para los mensajes del chequeo de integridad. Separador de miles a mano:
+ * los datos de locale de Apps Script no son confiables como para depender de toLocaleString.
+ */
+function fmtMonto_(n) {
+  const v = Number(n || 0);
+  if (isNaN(v)) return "$0";
+  const neg = v < 0;
+  const ent = String(Math.abs(Math.round(v)));
+  let out = "";
+  for (let i = 0; i < ent.length; i++) {
+    if (i > 0 && (ent.length - i) % 3 === 0) out += ".";
+    out += ent.charAt(i);
+  }
+  return (neg ? "-$" : "$") + out;
 }

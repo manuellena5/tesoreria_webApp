@@ -1191,6 +1191,7 @@ const Storage = {
   async deleteJugador(id)   { return this._post({ action:"deleteJugador", id  }); },
   async backfillIds()       { return this._post({ action:"backfillIds"         }); },
   async checkIntegridad()   { return this._post({ action:"checkIntegridad"     }); },
+  async repararPagosHuerfanos() { return this._post({ action:"repararPagosHuerfanos" }); },
   async listGrupos()        { return this._post({ action:"listGrupos"         }); },
   async saveGrupo(g)        { return this._post({ action:"saveGrupo",    grupo:g  }); },
   async deleteGrupo(id)     { return this._post({ action:"deleteGrupo",  id  }); },
@@ -2606,6 +2607,28 @@ async function deleteMovimiento(id) {
     renderMovimientos();
     return;
   }
+  // Si el movimiento es la contrapartida de pagos ya confirmados, borrarlo los devuelve a
+  // pendiente (el backend lo hace en cascada). Avisamos antes con nombre y apellido, porque
+  // deshace bastante más de lo que se ve en la fila que el usuario está mirando.
+  const pjAfectados  = (pagosJugadores || []).filter(p => p.movimientoId === id);
+  const cuotasAfect  = (pagos || []).filter(p => p.movimientoId === id);
+  if (pjAfectados.length || cuotasAfect.length) {
+    const partes = [];
+    if (pjAfectados.length) {
+      const nombres = [...new Set(pjAfectados.map(p => p.jugadorNombre).filter(Boolean))];
+      partes.push(`${pjAfectados.length} pago${pjAfectados.length!==1?"s":""} a jugadores (${nombres.join(", ")})`);
+    }
+    if (cuotasAfect.length) {
+      const nombres = [...new Set(cuotasAfect.map(p => p.adherenteNombre).filter(Boolean))];
+      partes.push(`${cuotasAfect.length} cuota${cuotasAfect.length!==1?"s":""} de adherentes (${nombres.join(", ")})`);
+    }
+    if (!confirm(
+      "Este movimiento respalda " + partes.join(" y ") + ".\n\n" +
+      "Si lo borrás, todo eso vuelve a quedar PENDIENTE y lo vas a poder incluir de nuevo en una transferencia.\n\n" +
+      "¿Confirmás?"
+    )) return;
+  }
+
   showOverlay("Eliminando…");
   try {
     const r = await Storage.deleteMov(id);
@@ -2626,9 +2649,28 @@ async function deleteMovimiento(id) {
     if (!r.ok) throw new Error(r.error || "Error al eliminar");
     movimientos = movimientos.filter(m => m.id !== id);
     removePendingMov(id); // por las dudas quedara encolado de una edición offline previa
+
+    // Espejo local de lo que el backend revirtió, para que Transferencias y el estado de
+    // cuotas queden al día sin tener que recargar todo.
+    const rev = r.revertido || { jugadores: [], cuotas: [] };
+    if ((rev.jugadores || []).length) {
+      pagosJugadores.forEach(p => {
+        if (p.movimientoId === id) { p.estado = "pendiente"; p.fechaPago = ""; p.medioPago = ""; p.movimientoId = ""; }
+      });
+    }
+    if ((rev.cuotas || []).length) {
+      pagos.forEach(p => {
+        if (p.movimientoId === id) { p.estado = "PENDIENTE"; p.movimientoId = ""; }
+      });
+    }
     updateBadge();
     saveSnapshotToCache();
-    toast("Movimiento eliminado", "ok");
+    const nJ = (rev.jugadores || []).length, nC = (rev.cuotas || []).length;
+    const detalle = [
+      nJ ? `${nJ} pago${nJ!==1?"s":""} a jugadores` : "",
+      nC ? `${nC} cuota${nC!==1?"s":""}` : ""
+    ].filter(Boolean).join(" y ");
+    toast(detalle ? `Movimiento eliminado — ${detalle} volvió a pendiente` : "Movimiento eliminado", "ok");
     renderMovimientos();
   } catch(e) { toast("Error: " + e.message, "err"); }
   finally { hideOverlay(); }
@@ -7751,6 +7793,11 @@ function renderTransferencias() {
       <div class="stat-card"><div class="stat-label">Total a transferir</div><div class="stat-val egr">${fmt(totalTransferir)}</div></div>
       <div class="stat-card"><div class="stat-label">Partidos incluidos</div><div class="stat-val">${partidosSel.length}</div></div>
     </div>
+    ${jugadorIds.length ? `
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn-sm" onclick="pjMarcarTodos(true)">Tildar todos</button>
+        <button class="btn-sm" onclick="pjMarcarTodos(false)">Destildar todos</button>
+      </div>` : ""}
     <div class="pj-table-wrap">
       <table class="pj-table" id="pj-transf-table">
         <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Incluir</th></tr></thead>
@@ -7760,6 +7807,14 @@ function renderTransferencias() {
     <button class="btn-export" style="margin-bottom:10px" onclick="exportarTransferencias()">📋 Exportar lista de transferencias</button>
     <button class="btn-main" id="btn-confirmar-transf" onclick="confirmarPagosSeleccionados()">Confirmar pagos seleccionados</button>
   `;
+}
+
+// Tilda o destilda todas las filas de la tabla de transferencias. Ignora los checkbox
+// deshabilitados (jugadores sin nada pendiente): esos no se pueden incluir en un pago.
+function pjMarcarTodos(valor) {
+  const cbs = [...document.querySelectorAll("#pj-transf-table .pj-transf-cb:not(:disabled)")];
+  cbs.forEach(cb => cb.checked = valor);
+  if (!cbs.length) toast("No hay filas para " + (valor ? "tildar" : "destildar"), "err");
 }
 
 function pjToggleChip(partidoId) {
@@ -8043,7 +8098,47 @@ async function runCheckIntegridad() {
         <span style="color:var(--warn)">▲ ${r.avisos} aviso${r.avisos!==1?"s":""}</span>
       </p>
       ${bloques}
+      ${r.reparables ? `
+        <div style="margin-top:14px;padding:10px;border:1px solid var(--warn);border-radius:8px">
+          <p class="cfg-note" style="margin-bottom:8px">${r.reparables} de esos quedaron marcados como pagados contra un movimiento que se borró. Se pueden devolver a <b>pendiente</b> automáticamente para volver a incluirlos en una transferencia.</p>
+          <button class="btn-secondary" id="btn-reparar-pagos" onclick="runRepararPagosHuerfanos()">Devolver a pendiente</button>
+          <div id="reparar-result" style="margin-top:8px"></div>
+        </div>` : ""}
       <p class="cfg-note" style="margin-top:12px">Los <span style="color:var(--red)">errores</span> apuntan a algo que se borró y dejó una referencia colgada — se arreglan volviendo a crear la entidad, o abriendo el registro y reasignándolo. Los <span style="color:var(--warn)">avisos</span> son situaciones válidas que conviene saber que están.</p>`;
+  } catch(e) {
+    hideOverlay();
+    setBtnState(btnId, "error");
+    box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+// Devuelve a pendiente los pagos que quedaron confirmados contra un movimiento borrado.
+// Es el arreglo del estado que dejaban las versiones anteriores al cascade de deleteMov.
+async function runRepararPagosHuerfanos() {
+  const btnId = "btn-reparar-pagos";
+  const box   = document.getElementById("reparar-result");
+  if (!confirm("Las filas que quedaron pagadas contra un movimiento inexistente vuelven a PENDIENTE.\n\n¿Confirmás?")) return;
+  setBtnState(btnId, "saving");
+  showOverlay("Reparando…");
+  try {
+    const r = await Storage.repararPagosHuerfanos();
+    if (!r.ok) throw new Error(r.error || "Error");
+    const rj = await Storage.listPagosJugadores();
+    if (rj.ok) pagosJugadores = rj.pagosJugadores || [];
+    const rp = await Storage.listPagos();
+    if (rp.ok) pagos = rp.pagos || [];
+    saveSnapshotToCache();
+    hideOverlay();
+    setBtnState(btnId, "saved");
+    const j = r.jugadores || [], c = r.cuotas || [];
+    box.innerHTML = (j.length || c.length)
+      ? `<p class="cfg-note" style="color:var(--green)">
+           ${j.length ? `${j.length} pago${j.length!==1?"s":""} a jugadores (${esc([...new Set(j)].join(", "))})` : ""}
+           ${j.length && c.length ? " · " : ""}
+           ${c.length ? `${c.length} cuota${c.length!==1?"s":""}` : ""}
+           de vuelta en pendiente ✓ — ya los podés incluir en una transferencia.
+         </p>`
+      : `<p class="cfg-note">No había nada para reparar.</p>`;
   } catch(e) {
     hideOverlay();
     setBtnState(btnId, "error");

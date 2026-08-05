@@ -346,8 +346,15 @@ function handleAction(data) {
       if (filas.length > 1) {
         return { ok: false, error: "Hay " + filas.length + " movimientos con el mismo ID (" + data.id + "). No se borró nada — corregilo a mano en la hoja antes de eliminar." };
       }
+      // Un movimiento puede ser la contrapartida de un pago: el egreso que generó
+      // "Confirmar pagos seleccionados" (filas de Pagos Jugadores) o el ingreso que marcó
+      // una cuota de adherente. Si se borra el movimiento y no se revierte eso, la fila
+      // queda en "pagado" apuntando a un movimiento que no existe — el jugador figura
+      // cobrado sin egreso en la contabilidad, y la pantalla de Transferencias no lo deja
+      // volver a incluir. Borrar el movimiento ES el deshacer, así que revierte primero.
+      const revertido = revertirPagosDeMovimiento_(String(data.id));
       sh.deleteRow(filas[0]);
-      return { ok: true };
+      return { ok: true, revertido };
     }
 
     // ─── JUGADORES ───────────────────────────────────────────
@@ -664,7 +671,47 @@ function handleAction(data) {
       }
 
       const errores = problemas.filter(p => p.nivel === "error").length;
-      return { ok: true, errores, avisos: problemas.length - errores, problemas };
+      // Cuántos de esos problemas se pueden arreglar solos con "repararPagosHuerfanos".
+      const reparables = problemas.filter(p => p.detalle.indexOf("movimiento que se borró") >= 0).length;
+      return { ok: true, errores, avisos: problemas.length - errores, reparables, problemas };
+    }
+
+    // Repara el estado que queda cuando se borró un movimiento de pago con una versión de
+    // la app anterior al cascade de deleteMov: filas de Pagos Jugadores o cuotas de
+    // adherentes marcadas como pagadas contra un movimiento que ya no existe. Las devuelve
+    // a "pendiente" para poder volver a incluirlas en una transferencia.
+    case "repararPagosHuerfanos": {
+      const movIds = {};
+      const movAll = getOrCreateSheet(MOV_SHEET, MOV_COLS).getDataRange().getValues();
+      for (let i = 1; i < movAll.length; i++) {
+        const id = String(movAll[i][0] || "").trim();
+        if (id) movIds[id] = true;
+      }
+
+      const jugadores = [], cuotas = [];
+
+      const pjSh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const pjAll = pjSh.getDataRange().getValues();
+      for (let i = 1; i < pjAll.length; i++) {
+        const movId = String(pjAll[i][12] || "").trim();
+        if (!movId || movIds[movId]) continue;
+        pjSh.getRange(i + 1, 9,  1, 3).setValues([["pendiente", "", ""]]);
+        pjSh.getRange(i + 1, 13).setValue("");
+        jugadores.push(String(pjAll[i][2] || "jugador"));
+      }
+
+      const pagSh  = getOrCreateSheet(PAG_SHEET, PAG_COLS);
+      const pagAll = pagSh.getDataRange().getValues();
+      for (let i = 1; i < pagAll.length; i++) {
+        const movId = String(pagAll[i][5] || "").trim();
+        if (!movId || movIds[movId]) continue;
+        pagSh.getRange(i + 1, 5).setValue("PENDIENTE");
+        pagSh.getRange(i + 1, 6).setValue("");
+        pagSh.getRange(i + 1, 7).setValue(nowTsLocal());
+        cuotas.push(String(pagAll[i][2] || "adherente") + " " + String(pagAll[i][3] || ""));
+      }
+
+      return { ok: true, jugadores, cuotas };
     }
 
     case "deleteJugador": {
@@ -1964,6 +2011,38 @@ function formatFecha(val) {
 
 function safeParseJSON(str, fallback) {
   try { return JSON.parse(str); } catch (e) { return fallback; }
+}
+
+/**
+ * Devuelve a "pendiente" todo lo que un movimiento había marcado como pagado:
+ * filas de Pagos Jugadores y cuotas de Pagos_Adh cuyo MovimientoID sea `movId`.
+ * Limpia además fecha y medio de pago, para que la fila quede como antes de confirmarla.
+ * Se usa al borrar el movimiento (deleteMov) y al reparar pagos huérfanos.
+ * Devuelve { jugadores:[nombres], cuotas:[etiquetas] } para poder avisar qué se revirtió.
+ */
+function revertirPagosDeMovimiento_(movId) {
+  const out = { jugadores: [], cuotas: [] };
+  if (!movId) return out;
+
+  const pjSh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+  const pjAll = pjSh.getDataRange().getValues();
+  for (let i = 1; i < pjAll.length; i++) {
+    if (String(pjAll[i][12] || "").trim() !== movId) continue;
+    pjSh.getRange(i + 1, 9,  1, 3).setValues([["pendiente", "", ""]]); // Estado, FechaPago, MedioPago
+    pjSh.getRange(i + 1, 13).setValue("");                              // MovimientoID
+    out.jugadores.push(String(pjAll[i][2] || "jugador"));
+  }
+
+  const pagSh  = getOrCreateSheet(PAG_SHEET, PAG_COLS);
+  const pagAll = pagSh.getDataRange().getValues();
+  for (let i = 1; i < pagAll.length; i++) {
+    if (String(pagAll[i][5] || "").trim() !== movId) continue;
+    pagSh.getRange(i + 1, 5).setValue("PENDIENTE");
+    pagSh.getRange(i + 1, 6).setValue("");
+    pagSh.getRange(i + 1, 7).setValue(nowTsLocal());
+    out.cuotas.push(String(pagAll[i][2] || "adherente") + " " + String(pagAll[i][3] || ""));
+  }
+  return out;
 }
 
 /**

@@ -1092,6 +1092,13 @@ function entidadIdPorNombre(nombre) {
   const g = grupos.find(x => normStr(x.nombre) === n);
   return g ? g.id : "";
 }
+// Ídem para el campo Adherente de un movimiento.
+function adherenteIdPorNombre(nombre) {
+  const n = normStr(nombre);
+  if (!n) return "";
+  const a = adherentes.find(x => normStr(x.nombre) === n);
+  return a ? a.id : "";
+}
 const DIAS_SEMANA = ["Dom","Lun","Mar","Mi\u00e9","Jue","Vie","S\u00e1b"];
 // "2026-06-23" \u2192 "Mar 23/06"
 function fechaCorta(fecha) {
@@ -1182,7 +1189,8 @@ const Storage = {
   async saveJugador(j)      { return this._post({ action:"saveJugador",   jugador:j }); },
   async renameJugador(id, nombre) { return this._post({ action:"renameJugador", id, nombre }); },
   async deleteJugador(id)   { return this._post({ action:"deleteJugador", id  }); },
-  async backfillJugadorIds(){ return this._post({ action:"backfillJugadorIds"  }); },
+  async backfillIds()       { return this._post({ action:"backfillIds"         }); },
+  async checkFks()          { return this._post({ action:"checkFks"            }); },
   async listGrupos()        { return this._post({ action:"listGrupos"         }); },
   async saveGrupo(g)        { return this._post({ action:"saveGrupo",    grupo:g  }); },
   async deleteGrupo(id)     { return this._post({ action:"deleteGrupo",  id  }); },
@@ -2017,7 +2025,7 @@ async function saveMovimiento() {
       cuenta: F.cuenta, cuentaDestino: F.cuentaDestino || "",
       modoPago: F.modoPago,
       jugadorCT: F.jugadorCT || "", jugadorId: entidadIdPorNombre(F.jugadorCT),
-      adherente: F.adherente || "",
+      adherente: F.adherente || "", adherenteId: adherenteIdPorNombre(F.adherente),
       observacion: F.observacion || "", comprobante: F.comprobante || "",
       seguroReintegro: F.seguroReintegro || 0,
       tipo: F.tipo,
@@ -6878,6 +6886,7 @@ function openAdherenteModal(adherenteId) {
           </div>
           <p class="note" id="adh-compromiso-preview"></p>
         </div>
+        ${a ? `<p class="cfg-note">Se conservan sus ${movimientos.filter(m => m.adherenteId ? m.adherenteId === a.id : normStr(m.adherente) === normStr(a.nombre)).length} movimientos y sus cuotas: si cambiás el nombre, se actualiza en todos.</p>` : ""}
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
           <button class="btn-main" style="flex:1" id="btn-guardar-adherente" onclick="saveAdherenteModal('${adherenteId||""}')">Guardar</button>
@@ -6912,7 +6921,10 @@ async function saveAdherenteModal(adherenteId) {
   const adherente = adherenteId
     ? { id:adherenteId, nombre, cuotaMensual, cuotasAnuales }
     : { nombre, cuotaMensual, cuotasAnuales };
+  const nombreViejo = adherenteId ? (adherentes.find(a => a.id === adherenteId)?.nombre || "") : "";
+  const cambioNombre = adherenteId && nombreViejo && nombreViejo !== nombre;
   setBtnState(btnId, "saving");
+  if (cambioNombre) showOverlay("Actualizando movimientos…");
   try {
     const r = await Storage.saveAdherente(adherente);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -6922,11 +6934,27 @@ async function saveAdherenteModal(adherenteId) {
     } else {
       adherentes.push({ id:r.id, nombre, cuotaMensual, cuotasAnuales });
     }
+    // Espejo local del rename en cascada del backend, para no recargar todo.
+    if (cambioNombre) {
+      movimientos.forEach(m => {
+        if (m.adherenteId === adherenteId ||
+            (!m.adherenteId && normStr(m.adherente) === normStr(nombreViejo))) {
+          m.adherenteId = adherenteId;
+          m.adherente   = nombre;
+        }
+      });
+      pagos.forEach(p => { if (p.adherenteId === adherenteId) p.adherenteNombre = nombre; });
+      saveSnapshotToCache();
+    }
+    hideOverlay();
     setBtnState(btnId, "saved");
-    toast(adherenteId ? "Adherente actualizado ✓" : "Adherente agregado ✓", "ok");
+    const nMovs = (r.actualizados || {}).movimientos || 0;
+    toast(adherenteId
+      ? `Adherente actualizado ✓${nMovs ? " — " + nMovs + " movimiento" + (nMovs!==1?"s":"") + " actualizado" + (nMovs!==1?"s":"") : ""}`
+      : "Adherente agregado ✓", "ok");
     closeModal();
     renderEntidades();
-  } catch(e) { handleSaveError(btnId, e); }
+  } catch(e) { hideOverlay(); handleSaveError(btnId, e); }
 }
 
 function confirmDeleteAdherente(id) {
@@ -7911,10 +7939,18 @@ function renderConfig() {
 
     <!-- Vincular movimientos por ID -->
     <div class="cfg-card">
-      <div class="cfg-title">🔗 Vincular movimientos a jugadores</div>
-      <p class="cfg-note" style="margin-bottom:10px">Completa el ID de jugador/grupo en los movimientos históricos, matcheando por nombre. Hace falta una sola vez: a partir de ahí, renombrar un jugador no le desarma la historia. Se puede volver a correr sin riesgo.</p>
-      <button class="btn-secondary" id="btn-backfill-jug" onclick="runBackfillJugadorIds()">Vincular ahora</button>
+      <div class="cfg-title">🔗 Vincular movimientos por ID</div>
+      <p class="cfg-note" style="margin-bottom:10px">Completa el ID de jugador/grupo y de adherente en los movimientos históricos, matcheando por nombre. Hace falta una sola vez: a partir de ahí, renombrar una entidad no le desarma la historia. Se puede volver a correr sin riesgo — sólo toca los que están vacíos.</p>
+      <button class="btn-secondary" id="btn-backfill-ids" onclick="runBackfillIds()">Vincular ahora</button>
       <div id="backfill-result" style="margin-top:10px"></div>
+    </div>
+
+    <!-- Integridad referencial -->
+    <div class="cfg-card">
+      <div class="cfg-title">🧩 Integridad de vínculos</div>
+      <p class="cfg-note" style="margin-bottom:10px">Busca movimientos cuyo ID de jugador o adherente apunta a una entidad borrada. En la hoja no molestan, pero son las filas que rechazaría una base de datos el día que migres.</p>
+      <button class="btn-secondary" id="btn-check-fks" onclick="runCheckFks()">Chequear vínculos</button>
+      <div id="fks-result" style="margin-top:10px"></div>
     </div>
 
     <!-- Atajos de teclado -->
@@ -7927,16 +7963,16 @@ function renderConfig() {
   `);
 }
 
-// Completa JugadorID en los movimientos que sólo tienen el nombre. Los que no matchean
-// ninguna entidad se listan para revisarlos a mano (nombres sueltos de importaciones viejas):
-// esos siguen vinculados sólo por texto y un rename no los va a arrastrar.
-async function runBackfillJugadorIds() {
-  const btnId = "btn-backfill-jug";
+// Completa JugadorID y AdherenteID en los movimientos que sólo tienen el nombre. Los que no
+// matchean ninguna entidad se listan para revisarlos a mano (nombres sueltos de importaciones
+// viejas): esos siguen vinculados sólo por texto y un rename no los va a arrastrar.
+async function runBackfillIds() {
+  const btnId = "btn-backfill-ids";
   const box   = document.getElementById("backfill-result");
   setBtnState(btnId, "saving");
   showOverlay("Vinculando movimientos…");
   try {
-    const r = await Storage.backfillJugadorIds();
+    const r = await Storage.backfillIds();
     if (!r.ok) throw new Error(r.error || "Error");
     const rMov = await Storage.listMov();
     if (rMov.ok) {
@@ -7945,15 +7981,42 @@ async function runBackfillJugadorIds() {
     }
     hideOverlay();
     setBtnState(btnId, "saved");
-    const sinMatch = r.sinMatch || [];
-    box.innerHTML = `
-      <p class="cfg-note">${r.completados} movimiento${r.completados!==1?"s":""} vinculado${r.completados!==1?"s":""}.</p>
-      ${sinMatch.length ? `
-        <p class="cfg-note" style="margin-top:8px">Sin coincidencia en Jugadores ni Grupos (${sinMatch.length} nombre${sinMatch.length!==1?"s":""}):</p>
-        ${sinMatch.map(s => `<div class="modal-detail-row"><span class="modal-detail-lbl">${esc(s.nombre)}</span><span class="modal-detail-val">${s.movimientos} mov.</span></div>`).join("")}
-      ` : ""}`;
+
+    const bloque = (titulo, res, dondeBuscar) => {
+      const sm = res.sinMatch || [];
+      return `
+        <p class="cfg-note" style="margin-top:8px"><b>${titulo}:</b> ${res.completados} movimiento${res.completados!==1?"s":""} vinculado${res.completados!==1?"s":""}.</p>
+        ${sm.length ? `
+          <p class="cfg-note">Sin coincidencia en ${dondeBuscar} (${sm.length} nombre${sm.length!==1?"s":""}):</p>
+          ${sm.map(s => `<div class="modal-detail-row"><span class="modal-detail-lbl">${esc(s.nombre)}</span><span class="modal-detail-val">${s.movimientos} mov.</span></div>`).join("")}
+        ` : ""}`;
+    };
+    box.innerHTML = bloque("Jugadores", r.jugadores || {completados:0}, "Jugadores ni Grupos")
+                  + bloque("Adherentes", r.adherentes || {completados:0}, "Adherentes");
   } catch(e) {
     hideOverlay();
+    setBtnState(btnId, "error");
+    box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+// Movimientos cuyo JugadorID/AdherenteID apunta a una entidad que ya no existe (se borró
+// después de haberla usado). No afectan los totales, pero frenarían un import con FKs.
+async function runCheckFks() {
+  const btnId = "btn-check-fks";
+  const box   = document.getElementById("fks-result");
+  setBtnState(btnId, "saving");
+  try {
+    const r = await Storage.checkFks();
+    if (!r.ok) throw new Error(r.error || "Error");
+    setBtnState(btnId, "saved");
+    const h = r.huerfanos || [];
+    box.innerHTML = h.length
+      ? `<p class="cfg-note" style="color:var(--warn)">${h.length} vínculo${h.length!==1?"s":""} roto${h.length!==1?"s":""}:</p>`
+        + h.map(x => `<div class="modal-detail-row"><span class="modal-detail-lbl">${fechaCorta(x.fecha)} · ${esc(x.nombre||"—")}</span><span class="modal-detail-val">${esc(x.campo)} inexistente</span></div>`).join("")
+        + `<p class="cfg-note" style="margin-top:8px">Se arreglan reactivando la entidad borrada, o abriendo el movimiento y eligiendo otra.</p>`
+      : `<p class="cfg-note" style="color:var(--green)">Todos los vínculos apuntan a entidades existentes ✓</p>`;
+  } catch(e) {
     setBtnState(btnId, "error");
     box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
   }

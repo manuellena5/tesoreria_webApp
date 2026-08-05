@@ -52,21 +52,24 @@ const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
-  "Vinculos","ItemsDetalle","JugadorID"
+  "Vinculos","ItemsDetalle","JugadorID","AdherenteID"
 ];
 // Índices de columna (1-based) de MOV_COLS que se escriben o leen sueltos. Están acá
 // para que agregar una columna nueva al final no vuelva a desalinear una escritura
 // puntual (setVinculos escribía en MOV_COLS.length, que ya apuntaba a ItemsDetalle).
 const MOV_IX = {
-  JUGADOR_CT: 14,
-  VINCULOS:   23,
-  ITEMS:      24,
-  JUGADOR_ID: 25
+  JUGADOR_CT:   14,
+  ADHERENTE:    15,
+  VINCULOS:     23,
+  ITEMS:        24,
+  JUGADOR_ID:   25,
+  ADHERENTE_ID: 26
 };
-// JugadorID: ID de la entidad elegida en JugadorCT — puede ser un jugador (hoja Jugadores)
-// o un grupo (hoja Grupos), los IDs son únicos entre ambas. Es el vínculo durable: JugadorCT
-// queda como copia legible del nombre, y renameJugador/renameGrupo la reescriben en cascada
-// usando este ID. Movimientos viejos lo tienen vacío hasta correr backfillJugadorIds.
+// JugadorID / AdherenteID: el vínculo durable de un movimiento con su entidad. Las columnas
+// de texto (JugadorCT, Adherente) quedan como copia legible del nombre — cómoda para leer la
+// hoja a ojo, pero NO son la referencia: renombrar reescribe el texto en cascada usando el ID.
+// JugadorID puede apuntar a un jugador (hoja Jugadores) o a un grupo (hoja Grupos); los IDs
+// son únicos entre ambas. Los movimientos viejos los tienen vacíos hasta correr backfillIds.
 // ItemsDetalle: JSON de [{desc, monto, partidoId}, ...] — desglose opcional del movimiento (ej.
 // pago de jugador que suma uno o más partidos + premios/ajustes) para precargar conceptos en el
 // generador de comprobantes y para que Resumen > Por Partido pueda imputar cada ítem a su
@@ -233,6 +236,7 @@ function handleAction(data) {
         vinculos:      parseVinculosJson(r[22]),
         itemsDetalle:  parseItemsDetalleJson(r[23]),
         jugadorId:     String(r[24]||""),
+        adherenteId:   String(r[25]||""),
       }));
       return { ok: true, movimientos };
     }
@@ -256,7 +260,7 @@ function handleAction(data) {
         m.jugadorCT||"", m.adherente||"",
         m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts,
         m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
-        stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||""
+        stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||""
       ]);
       if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -280,7 +284,7 @@ function handleAction(data) {
             m.jugadorCT||"", m.adherente||"",
             m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", tsOriginal,
             m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos), stringifyItemsDetalle(m.itemsDetalle),
-            m.jugadorId||""
+            m.jugadorId||"", m.adherenteId||""
           ]]);
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -318,7 +322,7 @@ function handleAction(data) {
           m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo,
           tsToIsoLocal(m.timestamp) || nowTsLocal(),
           m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
-          stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||""
+          stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||""
         ]);
         if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
           autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -439,42 +443,94 @@ function handleAction(data) {
 
     // (El rename de grupos va dentro de saveGrupo, que ya recibe el nombre nuevo.)
 
-    // Completa Movimientos.JugadorID en las filas históricas, matcheando JugadorCT contra
-    // los nombres de Jugadores y Grupos. Idempotente: sólo toca filas con el ID vacío.
-    // Devuelve además los nombres que no matchearon con ninguna entidad, para revisarlos.
-    case "backfillJugadorIds": {
+    // Completa JugadorID y AdherenteID en las filas históricas, matcheando las columnas de
+    // texto contra los nombres de las entidades. Idempotente: sólo toca filas con el ID vacío,
+    // así que se puede volver a correr después de dar de alta entidades que faltaban.
+    // Devuelve los nombres que no matchearon con nada, para revisarlos a mano.
+    case "backfillIds": {
       const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
       const all = sh.getDataRange().getValues();
-      if (all.length <= 1) return { ok: true, completados: 0, sinMatch: [] };
+      const vacio = { completados: 0, sinMatch: [] };
+      if (all.length <= 1) return { ok: true, jugadores: vacio, adherentes: vacio };
 
-      const porNombre = {};
-      const jugAll = getOrCreateSheet(JUG_SHEET, JUG_COLS).getDataRange().getValues();
-      for (let i = 1; i < jugAll.length; i++) {
-        if (jugAll[i][0] && jugAll[i][1]) porNombre[normStr_gs(String(jugAll[i][1]))] = String(jugAll[i][0]);
-      }
-      const grpAll = getOrCreateSheet(GRP_SHEET, GRP_COLS).getDataRange().getValues();
-      for (let i = 1; i < grpAll.length; i++) {
-        if (grpAll[i][0] && grpAll[i][1]) porNombre[normStr_gs(String(grpAll[i][1]))] = String(grpAll[i][0]);
+      function indicePorNombre(hojas) {
+        const ix = {};
+        for (const h of hojas) {
+          const rows = getOrCreateSheet(h.sheet, h.cols).getDataRange().getValues();
+          for (let i = 1; i < rows.length; i++) {
+            if (rows[i][0] && rows[i][1]) ix[normStr_gs(String(rows[i][1]))] = String(rows[i][0]);
+          }
+        }
+        return ix;
       }
 
-      const ixId = MOV_IX.JUGADOR_ID - 1, ixCt = MOV_IX.JUGADOR_CT - 1;
-      const col = [];
-      let completados = 0;
-      const sinMatch = {};
+      // Escribe una columna de IDs entera de una sola llamada (setValues es caro en Apps
+      // Script: hacerlo fila por fila sobre 500+ movimientos se pasa del límite de tiempo).
+      function completarCol(colId, colNombre, porNombre) {
+        const ixId = colId - 1, ixNom = colNombre - 1;
+        const col = [];
+        let completados = 0;
+        const sinMatch = {};
+        for (let i = 1; i < all.length; i++) {
+          const actual = String(all[i][ixId]  || "").trim();
+          const nom    = String(all[i][ixNom] || "").trim();
+          if (actual || !nom) { col.push([actual]); continue; }
+          const id = porNombre[normStr_gs(nom)];
+          if (id) { col.push([id]); completados++; }
+          else    { col.push([""]); sinMatch[nom] = (sinMatch[nom] || 0) + 1; }
+        }
+        if (col.length) sh.getRange(2, colId, col.length, 1).setValues(col);
+        return {
+          completados,
+          sinMatch: Object.keys(sinMatch).map(n => ({ nombre: n, movimientos: sinMatch[n] }))
+                          .sort((a,b) => b.movimientos - a.movimientos)
+        };
+      }
+
+      const jugadores = completarCol(MOV_IX.JUGADOR_ID, MOV_IX.JUGADOR_CT,
+        indicePorNombre([{ sheet: JUG_SHEET, cols: JUG_COLS }, { sheet: GRP_SHEET, cols: GRP_COLS }]));
+      const adherentes = completarCol(MOV_IX.ADHERENTE_ID, MOV_IX.ADHERENTE,
+        indicePorNombre([{ sheet: ADH_SHEET, cols: ADH_COLS }]));
+
+      return { ok: true, jugadores, adherentes };
+    }
+
+    // Chequeo de integridad referencial: movimientos cuyo JugadorID o AdherenteID apunta a
+    // una fila que ya no existe (o quedó inactiva). En la hoja no molestan, pero son
+    // exactamente las filas que rechazaría un import a una base con foreign keys.
+    case "checkFks": {
+      const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, huerfanos: [] };
+
+      function idsVivos(sheet, cols, colActivo) {
+        const set = {};
+        const rows = getOrCreateSheet(sheet, cols).getDataRange().getValues();
+        for (let i = 1; i < rows.length; i++) {
+          if (rows[i][0] && String(rows[i][colActivo - 1]) !== "false") set[String(rows[i][0])] = true;
+        }
+        return set;
+      }
+      const jugIds = idsVivos(JUG_SHEET, JUG_COLS, 3);
+      const grpIds = idsVivos(GRP_SHEET, GRP_COLS, 4);
+      const adhIds = idsVivos(ADH_SHEET, ADH_COLS, 3);
+
+      const huerfanos = [];
       for (let i = 1; i < all.length; i++) {
-        const actual = String(all[i][ixId] || "").trim();
-        const nom    = String(all[i][ixCt] || "").trim();
-        if (actual || !nom) { col.push([actual]); continue; }
-        const id = porNombre[normStr_gs(nom)];
-        if (id) { col.push([id]); completados++; }
-        else    { col.push([""]); sinMatch[nom] = (sinMatch[nom] || 0) + 1; }
+        const id = String(all[i][0] || "");
+        if (!id) continue;
+        const jId = String(all[i][MOV_IX.JUGADOR_ID   - 1] || "").trim();
+        const aId = String(all[i][MOV_IX.ADHERENTE_ID - 1] || "").trim();
+        if (jId && !jugIds[jId] && !grpIds[jId]) {
+          huerfanos.push({ id, fecha: formatFecha(all[i][2]), campo: "JugadorID", valor: jId,
+                           nombre: String(all[i][MOV_IX.JUGADOR_CT - 1] || "") });
+        }
+        if (aId && !adhIds[aId]) {
+          huerfanos.push({ id, fecha: formatFecha(all[i][2]), campo: "AdherenteID", valor: aId,
+                           nombre: String(all[i][MOV_IX.ADHERENTE - 1] || "") });
+        }
       }
-      if (col.length) sh.getRange(2, MOV_IX.JUGADOR_ID, col.length, 1).setValues(col);
-      return {
-        ok: true,
-        completados,
-        sinMatch: Object.keys(sinMatch).map(n => ({ nombre: n, movimientos: sinMatch[n] })).sort((a,b) => b.movimientos - a.movimientos)
-      };
+      return { ok: true, huerfanos };
     }
 
     case "deleteJugador": {
@@ -565,18 +621,40 @@ function handleAction(data) {
       const sh  = getOrCreateSheet(ADH_SHEET, ADH_COLS);
       const a   = data.adherente;
       const all = sh.getDataRange().getValues();
+      const nombreNuevo = String(a.nombre || "").trim();
+      if (!nombreNuevo) return { ok: false, error: "El nombre no puede quedar vacío" };
+      // Nombres repetidos romperían el match por texto de los movimientos que todavía no
+      // tienen AdherenteID, y el de autoUpsertPago (que busca el adherente por nombre).
+      for (let i = 1; i < all.length; i++) {
+        if (a.id && String(all[i][0]) === String(a.id)) continue;
+        if (String(all[i][2]) === "false") continue;
+        if (normStr_gs(String(all[i][1] || "")) === normStr_gs(nombreNuevo)) {
+          return { ok: false, error: "Ya existe otro adherente llamado \"" + String(all[i][1]).trim() + "\"" };
+        }
+      }
+
       if (a.id) {
         for (let i = 1; i < all.length; i++) {
           if (String(all[i][0]) === String(a.id)) {
+            // El adherente conserva su ID y su historial: si cambió el nombre, se reescribe
+            // en cascada en Movimientos.Adherente y en Pagos_Adh.AdherenteNombre en vez de
+            // dejar el historial apuntando al nombre viejo. Ver el comentario de MOV_IX.
+            const nombreViejo = String(all[i][1] || "").trim();
             sh.getRange(i + 1, 2, 1, 4).setValues([[
-              a.nombre, "true", Number(a.cuotaMensual||0), Number(a.cuotasAnuales||0)
+              nombreNuevo, "true", Number(a.cuotaMensual||0), Number(a.cuotasAnuales||0)
             ]]);
-            return { ok: true, id: a.id };
+            const actualizados = { movimientos: 0, cuotas: 0 };
+            if (nombreViejo && nombreViejo !== nombreNuevo) {
+              actualizados.movimientos = cascadeNombre_(MOV_SHEET, MOV_COLS, MOV_IX.ADHERENTE_ID, MOV_IX.ADHERENTE,
+                                                        a.id, nombreViejo, nombreNuevo);
+              actualizados.cuotas      = cascadeNombre_(PAG_SHEET, PAG_COLS, 2, 3, a.id, nombreViejo, nombreNuevo);
+            }
+            return { ok: true, id: a.id, nombreViejo, actualizados };
           }
         }
       }
       const id = uid_gs();
-      sh.appendRow([id, a.nombre, "true", Number(a.cuotaMensual||0), Number(a.cuotasAnuales||0)]);
+      sh.appendRow([id, nombreNuevo, "true", Number(a.cuotaMensual||0), Number(a.cuotasAnuales||0)]);
       return { ok: true, id };
     }
 
@@ -1066,7 +1144,7 @@ function handleAction(data) {
           mov.cuenta, mov.cuentaDestino, mov.modoPago,
           mov.jugadorCT, mov.adherente, mov.observacion, mov.comprobante, mov.seguroReintegro,
           mov.tipo, mov.timestamp, mov.partidoId, mov.eventoId, stringifyVinculos(mov.vinculos),
-          stringifyItemsDetalle(mov.itemsDetalle), mov.jugadorId || ""
+          stringifyItemsDetalle(mov.itemsDetalle), mov.jugadorId || "", ""
         ]);
         movimientosCreados.push(mov);
 

@@ -52,8 +52,21 @@ const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
-  "Vinculos","ItemsDetalle"
+  "Vinculos","ItemsDetalle","JugadorID"
 ];
+// Índices de columna (1-based) de MOV_COLS que se escriben o leen sueltos. Están acá
+// para que agregar una columna nueva al final no vuelva a desalinear una escritura
+// puntual (setVinculos escribía en MOV_COLS.length, que ya apuntaba a ItemsDetalle).
+const MOV_IX = {
+  JUGADOR_CT: 14,
+  VINCULOS:   23,
+  ITEMS:      24,
+  JUGADOR_ID: 25
+};
+// JugadorID: ID de la entidad elegida en JugadorCT — puede ser un jugador (hoja Jugadores)
+// o un grupo (hoja Grupos), los IDs son únicos entre ambas. Es el vínculo durable: JugadorCT
+// queda como copia legible del nombre, y renameJugador/renameGrupo la reescriben en cascada
+// usando este ID. Movimientos viejos lo tienen vacío hasta correr backfillJugadorIds.
 // ItemsDetalle: JSON de [{desc, monto, partidoId}, ...] — desglose opcional del movimiento (ej.
 // pago de jugador que suma uno o más partidos + premios/ajustes) para precargar conceptos en el
 // generador de comprobantes y para que Resumen > Por Partido pueda imputar cada ítem a su
@@ -219,6 +232,7 @@ function handleAction(data) {
         eventoId:      String(r[21]||""),
         vinculos:      parseVinculosJson(r[22]),
         itemsDetalle:  parseItemsDetalleJson(r[23]),
+        jugadorId:     String(r[24]||""),
       }));
       return { ok: true, movimientos };
     }
@@ -241,7 +255,8 @@ function handleAction(data) {
         m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
         m.jugadorCT||"", m.adherente||"",
         m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts,
-        m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos)
+        m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
+        stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||""
       ]);
       if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -264,7 +279,8 @@ function handleAction(data) {
             m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
             m.jugadorCT||"", m.adherente||"",
             m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", tsOriginal,
-            m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos), stringifyItemsDetalle(m.itemsDetalle)
+            m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos), stringifyItemsDetalle(m.itemsDetalle),
+            m.jugadorId||""
           ]]);
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -282,7 +298,7 @@ function handleAction(data) {
       const all = sh.getDataRange().getValues();
       for (let i = 1; i < all.length; i++) {
         if (String(all[i][0]) === String(data.id)) {
-          sh.getRange(i + 1, MOV_COLS.length).setValue(stringifyVinculos(data.vinculos));
+          sh.getRange(i + 1, MOV_IX.VINCULOS).setValue(stringifyVinculos(data.vinculos));
           return { ok: true };
         }
       }
@@ -301,7 +317,8 @@ function handleAction(data) {
           m.jugadorCT || "", m.adherente || "", m.observacion || "",
           m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo,
           tsToIsoLocal(m.timestamp) || nowTsLocal(),
-          m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos)
+          m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
+          stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||""
         ]);
         if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
           autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -349,7 +366,18 @@ function handleAction(data) {
       if (j.id) {
         for (let i = 1; i < all.length; i++) {
           if (String(all[i][0]) === String(j.id)) {
-            sh.getRange(i + 1, 2).setValue(j.nombre);
+            // Renombrar por acá no valida duplicados ni informa cuántas filas tocó —
+            // la pantalla de Entidades usa "renameJugador". Igual cascadeamos el nombre
+            // para que ningún camino deje los movimientos apuntando al nombre viejo.
+            const nombreViejo = String(all[i][1] || "").trim();
+            const nombreNuevo = String(j.nombre || "").trim();
+            sh.getRange(i + 1, 2).setValue(nombreNuevo);
+            if (nombreViejo && nombreViejo !== nombreNuevo) {
+              cascadeNombre_(MOV_SHEET,  MOV_COLS,  MOV_IX.JUGADOR_ID, MOV_IX.JUGADOR_CT, j.id, nombreViejo, nombreNuevo);
+              cascadeNombre_(PJ_SHEET,   PJ_COLS,   2, 3, j.id, nombreViejo, nombreNuevo);
+              cascadeNombre_(ROS_SHEET,  ROS_COLS,  2, 3, j.id, nombreViejo, nombreNuevo);
+              cascadeNombre_(CFGJ_SHEET, CFGJ_COLS, 1, 2, j.id, nombreViejo, nombreNuevo);
+            }
             return { ok: true, id: j.id };
           }
         }
@@ -357,6 +385,96 @@ function handleAction(data) {
       const id = uid_gs();
       sh.appendRow([id, j.nombre, "true"]);
       return { ok: true, id };
+    }
+
+    // Renombra un jugador SIN perder su historia: la fila de Jugadores conserva el ID,
+    // y el nombre nuevo se reescribe en cascada en todas las hojas que guardan una copia
+    // legible del nombre (Movimientos.JugadorCT, Pagos Jugadores, Roster, Config Jugadores).
+    // El match es por ID, no por texto. En Movimientos, las filas viejas que todavía no
+    // tienen JugadorID se adoptan por nombre exacto (normalizado) y de paso se les completa
+    // el ID, así el próximo rename ya no depende del texto.
+    case "renameJugador": {
+      const sh     = getOrCreateSheet(JUG_SHEET, JUG_COLS);
+      const jugId  = String(data.id || "");
+      const nombre = String(data.nombre || "").trim();
+      if (!jugId)  return { ok: false, error: "Falta el ID del jugador" };
+      if (!nombre) return { ok: false, error: "El nombre no puede quedar vacío" };
+
+      const all = sh.getDataRange().getValues();
+      let fila = -1, nombreViejo = "";
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === jugId) { fila = i; nombreViejo = String(all[i][1] || "").trim(); break; }
+      }
+      if (fila < 0) return { ok: false, error: "Jugador no encontrado: " + jugId };
+
+      // Un nombre repetido rompería el match por texto de los movimientos viejos y las
+      // pantallas que todavía agrupan por nombre, así que no se permite.
+      for (let i = 1; i < all.length; i++) {
+        if (i === fila) continue;
+        if (String(all[i][2]) === "false") continue;
+        if (normStr_gs(String(all[i][1] || "")) === normStr_gs(nombre)) {
+          return { ok: false, error: "Ya existe otro jugador llamado \"" + String(all[i][1]).trim() + "\"" };
+        }
+      }
+      const grpSh  = getOrCreateSheet(GRP_SHEET, GRP_COLS);
+      const grpAll = grpSh.getDataRange().getValues();
+      for (let i = 1; i < grpAll.length; i++) {
+        if (String(grpAll[i][3]) === "false") continue;
+        if (normStr_gs(String(grpAll[i][1] || "")) === normStr_gs(nombre)) {
+          return { ok: false, error: "Ya existe un grupo llamado \"" + String(grpAll[i][1]).trim() + "\" — los nombres no pueden repetirse entre jugadores y grupos" };
+        }
+      }
+
+      if (nombreViejo === nombre) return { ok: true, id: jugId, nombre, actualizados: {} };
+      sh.getRange(fila + 1, 2).setValue(nombre);
+
+      const actualizados = {
+        movimientos:    cascadeNombre_(MOV_SHEET,  MOV_COLS,  MOV_IX.JUGADOR_ID, MOV_IX.JUGADOR_CT, jugId, nombreViejo, nombre),
+        pagosJugadores: cascadeNombre_(PJ_SHEET,   PJ_COLS,   2, 3, jugId, nombreViejo, nombre),
+        roster:         cascadeNombre_(ROS_SHEET,  ROS_COLS,  2, 3, jugId, nombreViejo, nombre),
+        configJugador:  cascadeNombre_(CFGJ_SHEET, CFGJ_COLS, 1, 2, jugId, nombreViejo, nombre)
+      };
+      return { ok: true, id: jugId, nombre, nombreViejo, actualizados };
+    }
+
+    // (El rename de grupos va dentro de saveGrupo, que ya recibe el nombre nuevo.)
+
+    // Completa Movimientos.JugadorID en las filas históricas, matcheando JugadorCT contra
+    // los nombres de Jugadores y Grupos. Idempotente: sólo toca filas con el ID vacío.
+    // Devuelve además los nombres que no matchearon con ninguna entidad, para revisarlos.
+    case "backfillJugadorIds": {
+      const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, completados: 0, sinMatch: [] };
+
+      const porNombre = {};
+      const jugAll = getOrCreateSheet(JUG_SHEET, JUG_COLS).getDataRange().getValues();
+      for (let i = 1; i < jugAll.length; i++) {
+        if (jugAll[i][0] && jugAll[i][1]) porNombre[normStr_gs(String(jugAll[i][1]))] = String(jugAll[i][0]);
+      }
+      const grpAll = getOrCreateSheet(GRP_SHEET, GRP_COLS).getDataRange().getValues();
+      for (let i = 1; i < grpAll.length; i++) {
+        if (grpAll[i][0] && grpAll[i][1]) porNombre[normStr_gs(String(grpAll[i][1]))] = String(grpAll[i][0]);
+      }
+
+      const ixId = MOV_IX.JUGADOR_ID - 1, ixCt = MOV_IX.JUGADOR_CT - 1;
+      const col = [];
+      let completados = 0;
+      const sinMatch = {};
+      for (let i = 1; i < all.length; i++) {
+        const actual = String(all[i][ixId] || "").trim();
+        const nom    = String(all[i][ixCt] || "").trim();
+        if (actual || !nom) { col.push([actual]); continue; }
+        const id = porNombre[normStr_gs(nom)];
+        if (id) { col.push([id]); completados++; }
+        else    { col.push([""]); sinMatch[nom] = (sinMatch[nom] || 0) + 1; }
+      }
+      if (col.length) sh.getRange(2, MOV_IX.JUGADOR_ID, col.length, 1).setValues(col);
+      return {
+        ok: true,
+        completados,
+        sinMatch: Object.keys(sinMatch).map(n => ({ nombre: n, movimientos: sinMatch[n] })).sort((a,b) => b.movimientos - a.movimientos)
+      };
     }
 
     case "deleteJugador": {
@@ -396,8 +514,17 @@ function handleAction(data) {
       if (g.id) {
         for (let i = 1; i < all.length; i++) {
           if (String(all[i][0]) === String(g.id)) {
+            // Movimientos.JugadorCT guarda el nombre del grupo como texto, así que si el
+            // nombre cambia hay que reescribirlo en cascada o los movimientos históricos
+            // quedan apuntando a un grupo que ya no existe con ese nombre.
+            const nombreViejo = String(all[i][1] || "").trim();
             sh.getRange(i + 1, 1, 1, 4).setValues([[g.id, g.nombre, miembros, "true"]]);
-            return { ok: true, id: g.id };
+            let movsActualizados = 0;
+            if (nombreViejo && nombreViejo !== String(g.nombre || "").trim()) {
+              movsActualizados = cascadeNombre_(MOV_SHEET, MOV_COLS, MOV_IX.JUGADOR_ID, MOV_IX.JUGADOR_CT,
+                                                g.id, nombreViejo, String(g.nombre || "").trim());
+            }
+            return { ok: true, id: g.id, movsActualizados };
           }
         }
       }
@@ -929,7 +1056,7 @@ function handleAction(data) {
           id: movId, mes, fecha: fechaPago, codRubro: "19", rubro: "SUELDO JUGADORES", categoria: "Jugadores y Cuerpo Técnico",
           concepto, egreso: montoFinal, ingreso: 0, montoFinal,
           cuenta, cuentaDestino: "", modoPago: medioPago,
-          jugadorCT: g.jugadorNombre, adherente: "", observacion, comprobante: "",
+          jugadorCT: g.jugadorNombre, jugadorId: g.jugadorId, adherente: "", observacion, comprobante: "",
           seguroReintegro: 0, tipo: "EGRESO", timestamp: ts, partidoId: partidoIdMov, eventoId: "", vinculos: [],
           itemsDetalle: items
         };
@@ -939,7 +1066,7 @@ function handleAction(data) {
           mov.cuenta, mov.cuentaDestino, mov.modoPago,
           mov.jugadorCT, mov.adherente, mov.observacion, mov.comprobante, mov.seguroReintegro,
           mov.tipo, mov.timestamp, mov.partidoId, mov.eventoId, stringifyVinculos(mov.vinculos),
-          stringifyItemsDetalle(mov.itemsDetalle)
+          stringifyItemsDetalle(mov.itemsDetalle), mov.jugadorId || ""
         ]);
         movimientosCreados.push(mov);
 
@@ -1116,6 +1243,50 @@ function handleAction(data) {
 // ════════════════════════════════════════════════════════════
 // HELPERS
 // ════════════════════════════════════════════════════════════
+
+/**
+ * Normaliza un nombre para comparar: sin acentos, sin mayúsculas, sin espacios de sobra.
+ * Equivalente al normStr() de index.html — se compara nombres tipeados a mano, donde
+ * "GONZÁLEZ " y "gonzalez" tienen que ser la misma persona.
+ */
+function normStr_gs(s) {
+  return String(s || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * Reescribe el nombre de una entidad en una hoja que guarda ID + copia del nombre.
+ * Escribe la columna del nombre en las filas cuyo ID coincide, y además "adopta" las
+ * filas viejas que tienen el ID vacío pero el nombre viejo exacto, completándoles el ID.
+ * colId / colNombre son 1-based. Devuelve cuántas filas se tocaron.
+ */
+function cascadeNombre_(sheetName, cols, colId, colNombre, id, nombreViejo, nombreNuevo) {
+  const sh  = getOrCreateSheet(sheetName, cols);
+  const all = sh.getDataRange().getValues();
+  if (all.length <= 1) return 0;
+  const ixId = colId - 1, ixNom = colNombre - 1;
+  const viejoNorm = normStr_gs(nombreViejo);
+  const colsId = [], colsNom = [];
+  let tocadas = 0;
+  for (let i = 1; i < all.length; i++) {
+    const rowId  = String(all[i][ixId]  || "").trim();
+    const rowNom = String(all[i][ixNom] || "").trim();
+    const esMio  = rowId === String(id) || (!rowId && viejoNorm && normStr_gs(rowNom) === viejoNorm);
+    if (esMio) {
+      colsId.push([String(id)]);
+      colsNom.push([nombreNuevo]);
+      tocadas++;
+    } else {
+      colsId.push([rowId]);
+      colsNom.push([all[i][ixNom]]);
+    }
+  }
+  if (!tocadas) return 0;
+  sh.getRange(2, colId,     colsId.length,  1).setValues(colsId);
+  sh.getRange(2, colNombre, colsNom.length, 1).setValues(colsNom);
+  return tocadas;
+}
 
 /**
  * Auto-genera IDs para filas que tienen datos pero ID vacío.

@@ -1081,6 +1081,17 @@ function normStr(s) {
 function stripGrpPrefix(s) {
   return String(s||"").replace(/^GRP:/i, "").trim();
 }
+// El campo JugadorCT de un movimiento puede referirse a un jugador o a un grupo. Devuelve el
+// ID de la entidad que coincide con ese nombre, o "" si es texto libre que no está en ninguna
+// lista (movimientos importados con nombres sueltos). Ese ID es lo que sobrevive a un rename.
+function entidadIdPorNombre(nombre) {
+  const n = normStr(stripGrpPrefix(nombre));
+  if (!n) return "";
+  const j = jugadores.find(x => normStr(x.nombre) === n);
+  if (j) return j.id;
+  const g = grupos.find(x => normStr(x.nombre) === n);
+  return g ? g.id : "";
+}
 const DIAS_SEMANA = ["Dom","Lun","Mar","Mi\u00e9","Jue","Vie","S\u00e1b"];
 // "2026-06-23" \u2192 "Mar 23/06"
 function fechaCorta(fecha) {
@@ -1169,7 +1180,9 @@ const Storage = {
   async deleteMov(id)       { return this._post({ action:"deleteMov",    id  }); },
   async listJugadores()     { return this._post({ action:"listJugadores"      }); },
   async saveJugador(j)      { return this._post({ action:"saveJugador",   jugador:j }); },
+  async renameJugador(id, nombre) { return this._post({ action:"renameJugador", id, nombre }); },
   async deleteJugador(id)   { return this._post({ action:"deleteJugador", id  }); },
+  async backfillJugadorIds(){ return this._post({ action:"backfillJugadorIds"  }); },
   async listGrupos()        { return this._post({ action:"listGrupos"         }); },
   async saveGrupo(g)        { return this._post({ action:"saveGrupo",    grupo:g  }); },
   async deleteGrupo(id)     { return this._post({ action:"deleteGrupo",  id  }); },
@@ -2003,7 +2016,8 @@ async function saveMovimiento() {
       montoFinal: monto,
       cuenta: F.cuenta, cuentaDestino: F.cuentaDestino || "",
       modoPago: F.modoPago,
-      jugadorCT: F.jugadorCT || "", adherente: F.adherente || "",
+      jugadorCT: F.jugadorCT || "", jugadorId: entidadIdPorNombre(F.jugadorCT),
+      adherente: F.adherente || "",
       observacion: F.observacion || "", comprobante: F.comprobante || "",
       seguroReintegro: F.seguroReintegro || 0,
       tipo: F.tipo,
@@ -6350,17 +6364,101 @@ async function deleteReserva(id) {
 // ── Jugadores ─────────────────────────────────────────────────
 function renderJugadores() {
   const sorted = [...jugadores].sort((a,b) => a.nombre.localeCompare(b.nombre));
-  const list = sorted.map(j => `
+  const list = sorted.map(j => {
+    const nMovs = movimientos.filter(m => movEsDeEntidad(m, j)).length;
+    return `
     <div class="entity-item" id="jug-${j.id}">
-      <span class="entity-name">${esc(j.nombre)}</span>
+      <div style="flex:1;min-width:0">
+        <div class="entity-name">${esc(j.nombre)}</div>
+        ${nMovs ? `<div class="entity-sub">${nMovs} movimiento${nMovs!==1?"s":""}</div>` : ""}
+      </div>
+      <button class="btn-sm accent" onclick="openJugadorModal('${j.id}')">✏️</button>
       <button class="btn-sm danger" id="jdel-${j.id}" onclick="confirmDeleteJugador('${j.id}')">✕</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   return `
     <div class="add-row">
       <input class="inp" id="new-jug-input" type="text" placeholder="Nombre del jugador / CT…">
       <button class="btn-sm accent" id="btn-agregar-jugador" onclick="addJugador()">+ Agregar</button>
     </div>
     ${list || '<p class="note">Sin jugadores registrados</p>'}`;
+}
+
+// Un movimiento pertenece a la entidad si su JugadorID coincide, o —para los movimientos
+// viejos que todavía no tienen ID— si el nombre guardado en JugadorCT coincide.
+function movEsDeEntidad(m, ent) {
+  if (m.jugadorId) return m.jugadorId === ent.id;
+  return normStr(stripGrpPrefix(m.jugadorCT)) === normStr(ent.nombre);
+}
+
+function openJugadorModal(jugadorId) {
+  const j = jugadores.find(x => x.id === jugadorId);
+  if (!j) return;
+  const nMovs = movimientos.filter(m => movEsDeEntidad(m, j)).length;
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Editar jugador / CT</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Nombre</label>
+            <input class="inp" id="jug-nombre" type="text" value="${esc(j.nombre)}"
+                   onkeydown="if(event.key==='Enter') saveJugadorNombre('${escJs(j.id)}')">
+          </div>
+        </div>
+        <p class="cfg-note">Se conservan sus ${nMovs} movimiento${nMovs!==1?"s":""}, pagos y partidos: el nombre nuevo se actualiza en todos.</p>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-jugador" onclick="saveJugadorNombre('${escJs(j.id)}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById("jug-nombre")?.focus(), 50);
+}
+
+async function saveJugadorNombre(jugadorId) {
+  const btnId = "btn-guardar-jugador";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
+  const j = jugadores.find(x => x.id === jugadorId);
+  if (!j) return;
+  const nombre = (document.getElementById("jug-nombre")?.value || "").trim();
+  if (!nombre) { toast("Ingresá un nombre", "err"); return; }
+  if (nombre === j.nombre) { closeModal(); return; }
+  if (jugadores.some(x => x.id !== jugadorId && normStr(x.nombre) === normStr(nombre))) {
+    toast("Ya existe un jugador con ese nombre", "err"); return;
+  }
+  if (grupos.some(g => normStr(g.nombre) === normStr(nombre))) {
+    toast("Ya existe un grupo con ese nombre", "err"); return;
+  }
+  setBtnState(btnId, "saving");
+  showOverlay("Actualizando movimientos…");
+  const nombreViejo = j.nombre;
+  try {
+    const r = await Storage.renameJugador(jugadorId, nombre);
+    if (!r.ok) throw new Error(r.error || "Error");
+
+    // Espejo local del rename en cascada del backend, para no tener que recargar todo.
+    j.nombre = nombre;
+    movimientos.forEach(m => {
+      if (m.jugadorId === jugadorId ||
+          (!m.jugadorId && normStr(stripGrpPrefix(m.jugadorCT)) === normStr(nombreViejo))) {
+        m.jugadorId = jugadorId;
+        m.jugadorCT = nombre;
+      }
+    });
+    const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+    if (cfg) cfg.nombre = nombre;
+    (pagosJugadores || []).forEach(p => { if (p.jugadorId === jugadorId) p.jugadorNombre = nombre; });
+
+    saveSnapshotToCache();
+    hideOverlay();
+    setBtnState(btnId, "saved");
+    const nMovs = (r.actualizados || {}).movimientos || 0;
+    toast(`Renombrado ✓${nMovs ? " — " + nMovs + " movimiento" + (nMovs!==1?"s":"") + " actualizado" + (nMovs!==1?"s":"") : ""}`, "ok");
+    closeModal();
+    renderEntidades();
+  } catch(e) { hideOverlay(); handleSaveError(btnId, e); }
 }
 
 async function addJugador() {
@@ -7811,6 +7909,14 @@ function renderConfig() {
       <div id="audit-result" style="margin-top:10px"></div>
     </div>
 
+    <!-- Vincular movimientos por ID -->
+    <div class="cfg-card">
+      <div class="cfg-title">🔗 Vincular movimientos a jugadores</div>
+      <p class="cfg-note" style="margin-bottom:10px">Completa el ID de jugador/grupo en los movimientos históricos, matcheando por nombre. Hace falta una sola vez: a partir de ahí, renombrar un jugador no le desarma la historia. Se puede volver a correr sin riesgo.</p>
+      <button class="btn-secondary" id="btn-backfill-jug" onclick="runBackfillJugadorIds()">Vincular ahora</button>
+      <div id="backfill-result" style="margin-top:10px"></div>
+    </div>
+
     <!-- Atajos de teclado -->
     <div class="cfg-card">
       <div class="cfg-title">⌨️ Atajos de teclado (PC)</div>
@@ -7819,6 +7925,38 @@ function renderConfig() {
       <div class="modal-detail-row"><span class="modal-detail-lbl">Ctrl + Alt + 1…5</span><span class="modal-detail-val">Ir a Nuevo / Movim. / Resumen / Entidades / Config</span></div>
     </div>
   `);
+}
+
+// Completa JugadorID en los movimientos que sólo tienen el nombre. Los que no matchean
+// ninguna entidad se listan para revisarlos a mano (nombres sueltos de importaciones viejas):
+// esos siguen vinculados sólo por texto y un rename no los va a arrastrar.
+async function runBackfillJugadorIds() {
+  const btnId = "btn-backfill-jug";
+  const box   = document.getElementById("backfill-result");
+  setBtnState(btnId, "saving");
+  showOverlay("Vinculando movimientos…");
+  try {
+    const r = await Storage.backfillJugadorIds();
+    if (!r.ok) throw new Error(r.error || "Error");
+    const rMov = await Storage.listMov();
+    if (rMov.ok) {
+      movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
+      saveSnapshotToCache();
+    }
+    hideOverlay();
+    setBtnState(btnId, "saved");
+    const sinMatch = r.sinMatch || [];
+    box.innerHTML = `
+      <p class="cfg-note">${r.completados} movimiento${r.completados!==1?"s":""} vinculado${r.completados!==1?"s":""}.</p>
+      ${sinMatch.length ? `
+        <p class="cfg-note" style="margin-top:8px">Sin coincidencia en Jugadores ni Grupos (${sinMatch.length} nombre${sinMatch.length!==1?"s":""}):</p>
+        ${sinMatch.map(s => `<div class="modal-detail-row"><span class="modal-detail-lbl">${esc(s.nombre)}</span><span class="modal-detail-val">${s.movimientos} mov.</span></div>`).join("")}
+      ` : ""}`;
+  } catch(e) {
+    hideOverlay();
+    setBtnState(btnId, "error");
+    box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
+  }
 }
 
 // ── Auditoría de movimientos (Tarea 7) ───────────────────────────

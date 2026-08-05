@@ -423,6 +423,12 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 .pj-badge-pagado    { background:var(--green-bg); color:var(--green); }
 .pj-chip-row { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
 .pj-acumulado { font-size:11px; color:var(--text3); }
+/* Cada premio pendiente es una línea tildable adentro de la celda "Premios/Ajustes". */
+.pj-table td.pj-premios-cell { min-width:190px; }
+.pj-premio-lbl { display:flex; align-items:center; gap:5px; white-space:nowrap; cursor:pointer; padding:1px 0; }
+.pj-premio-lbl .mono { font-family:var(--mono); }
+.pj-desc-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); }
+.pj-desc-item:last-child { border-bottom:0; }
 
 /* ── Config sections ── */
 .cfg-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:16px; margin-bottom:12px; }
@@ -1065,6 +1071,12 @@ function fmt(n) {
   const v = Math.round(Math.abs(+n || 0));
   return "$" + v.toLocaleString("es-AR");
 }
+// fmt() muestra siempre el valor absoluto (el signo lo da el color y el tipo del movimiento).
+// Donde un negativo significa algo distinto que un positivo — descuentos sobre el sueldo, netos
+// a transferir — hay que mostrarlo, o un descuento de $8.000 se lee como un cobro de $8.000.
+function fmtSigned(n) {
+  return (Math.round(+n || 0) < 0 ? "−" : "") + fmt(n);
+}
 function esc(s) {
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/\|/g,"&#124;");
 }
@@ -1227,6 +1239,7 @@ const Storage = {
   async deletePagoJugador(id)      { return this._post({ action:"deletePagoJugador", id           }); },
   async confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago, cuenta }); },
   async aplicarPremios(lista)      { return this._post({ action:"aplicarPremios", premios:lista  }); },
+  async backfillTipoPagos()        { return this._post({ action:"backfillTipoPagos"              }); },
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -1640,8 +1653,15 @@ function setContent(html) {
 // TAB 1 — NUEVO MOVIMIENTO
 // ══════════════════════════════════════════════════════════════
 
+/** Medio de pago que corresponde por default a una cuenta. Es un default, no un candado:
+ *  la plata que sale de la caja se entrega en mano, el resto se transfiere — pero el usuario
+ *  puede cambiarlo (ej. un cheque contra una cuenta bancaria). */
+function medioPagoPorCuenta(cuenta) {
+  return cuenta === "EFECTIVO" ? "EFECTIVO" : "TRANSFERENCIA";
+}
+
 function autoSetModoPago() {
-  const mp = F.cuenta === "EFECTIVO" ? "EFECTIVO" : "TRANSFERENCIA";
+  const mp = medioPagoPorCuenta(F.cuenta);
   F.modoPago = mp;
   const el = document.getElementById("f-metodo");
   if (el) el.value = mp;
@@ -7100,6 +7120,9 @@ function renderPagosJugadores() {
     <div class="entity-tabs">${tabBtns}</div>
     <div id="pagosjug-content">${inner}</div>
   `);
+  // Los totales de Transferencias dependen de qué está tildado (los premios se eligen uno por
+  // uno), así que se calculan recién con la tabla ya en el DOM.
+  if (pagosJugTab === "transferencias") pjTransfRecalc();
 }
 
 function setPagosJugTab(tab) { pagosJugTab = tab; renderPagosJugadores(); }
@@ -7111,24 +7134,53 @@ function pjMontoRol(cfg, rol) {
   return 0;
 }
 
-/** Fila de "Pagos Jugadores" pendiente de un jugador para un partido puntual (partidosIncluidos=[partidoId]). */
+/** Tipo de una fila de "Pagos Jugadores": "partido" | "premio" | "periodico" | "descuento".
+ *  Las filas cargadas antes de la columna Tipo lo traen vacío y se clasifican con el criterio
+ *  viejo (PartidosIncluidos.length + la frecuencia del jugador) — que es exactamente lo que hace
+ *  backfillTipoPagos en el backend. El fallback no se puede sacar hasta que el usuario lo corra. */
+function pjTipoFila(p) {
+  if (p.tipo) return p.tipo;
+  if (p.partidosIncluidos.length) return "partido";
+  const cfg = configJugadores.find(c => c.idJugador === p.jugadorId);
+  return cfg && cfg.frecuencia === "partido" ? "premio" : "periodico";
+}
+
+/** Fila de "Pagos Jugadores" de un jugador para un partido puntual (partidosIncluidos=[partidoId]). */
 function pjFilaPartido(jugadorId, partidoId) {
-  return pagosJugadores.find(p => p.jugadorId === jugadorId
+  return pagosJugadores.find(p => p.jugadorId === jugadorId && pjTipoFila(p) === "partido"
     && p.partidosIncluidos.length === 1 && p.partidosIncluidos[0] === partidoId);
 }
 
-/** Suma de lo acumulado pendiente (quincenal/mensual) de un jugador — filas sin partido asociado. */
-function pjAcumuladoPendiente(jugadorId) {
-  return pagosJugadores
-    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
-    .reduce((s,p) => s + Number(p.montoFinal||0), 0);
+/** Filas pendientes de un jugador que no son el pago de un partido: premios, sueldos
+ *  periódicos y descuentos (estos últimos con montoFinal negativo, así restan solos). */
+function pjFilasAcumuladoPendiente(jugadorId) {
+  return pagosJugadores.filter(p => p.jugadorId === jugadorId && p.estado === "pendiente"
+    && pjTipoFila(p) !== "partido");
 }
 
-/** IDs de las filas pendientes sin partido asociado de un jugador (premios y montos sueltos). */
-function pjIdsAcumuladoPendiente(jugadorId) {
-  return pagosJugadores
-    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
-    .map(p => p.id);
+/** Suma de lo acumulado pendiente (quincenal/mensual + premios − descuentos) de un jugador. */
+function pjAcumuladoPendiente(jugadorId) {
+  return pjFilasAcumuladoPendiente(jugadorId).reduce((s,p) => s + Number(p.montoFinal||0), 0);
+}
+
+/** Premios pendientes de un jugador. Van aparte del resto porque se eligen uno por uno en
+ *  Transferencias: tildar a un jugador para pagarle el partido no tiene que arrastrarle los premios. */
+function pjPremiosPendientes(jugadorId) {
+  return pagosJugadores.filter(p => p.jugadorId === jugadorId && p.estado === "pendiente"
+    && pjTipoFila(p) === "premio");
+}
+
+/** Lo acumulado pendiente que NO son premios (sueldo periódico neto de descuentos). */
+function pjFilasSueldoPendiente(jugadorId) {
+  return pjFilasAcumuladoPendiente(jugadorId).filter(p => pjTipoFila(p) !== "premio");
+}
+
+/** Etiqueta corta del partido de un premio ("—" si no tiene ninguno asociado). */
+function pjPartidoLabel(partidoId) {
+  if (!partidoId) return "—";
+  const p = partidos.find(x => x.id === partidoId);
+  if (!p) return "partido borrado";
+  return (p.numeroFecha ? p.numeroFecha + " · " : "") + p.rival;
 }
 
 function renderPagoPartido() {
@@ -7241,10 +7293,11 @@ function renderPagoPartido() {
   `;
 }
 
-/** Filas de "Pagos Jugadores" acumuladas (sin partido asociado) de un jugador para un mes puntual ("" = sin mes asignado). */
+/** Filas de "Pagos Jugadores" acumuladas (todo lo que no es el pago de un partido: sueldo,
+ *  premios y descuentos) de un jugador para un mes puntual ("" = sin mes asignado). */
 function pjFilasMes(jugadorId, mes) {
   return pagosJugadores.filter(p =>
-    p.jugadorId === jugadorId && p.partidosIncluidos.length === 0 && (p.mes||"") === mes
+    p.jugadorId === jugadorId && pjTipoFila(p) !== "partido" && (p.mes||"") === mes
   );
 }
 
@@ -7263,7 +7316,7 @@ function renderPagoMensual() {
     return selectorMes + '<p class="note">Todavía no hay jugadores con frecuencia "mensual" (Entidades → Config Jugadores).</p>';
   }
 
-  let totalMes = 0, pagadoMes = 0, pendienteMes = 0;
+  let totalMes = 0, pagadoMes = 0, pendienteMes = 0, descuentosMes = 0;
   const rows = cfgMensual.map(cfg => {
     const filas       = pjFilasMes(cfg.idJugador, pjMesSel);
     const pendientes  = filas.filter(p => p.estado === "pendiente");
@@ -7272,9 +7325,16 @@ function renderPagoMensual() {
     const totalPagado = pagados.reduce((s,p) => s + Number(p.montoFinal||0), 0);
     const totalNeto   = totalPend + totalPagado;
     totalMes += totalNeto; pagadoMes += totalPagado; pendienteMes += totalPend;
+    descuentosMes += filas.filter(p => pjTipoFila(p) === "descuento").reduce((s,p) => s + Number(p.montoFinal||0), 0);
 
+    // Los descuentos se muestran aparte y con su ✕ para poder quitarlos mientras estén pendientes.
     const detalle = filas.length
-      ? filas.map(p => `${esc(p.etiqueta || "Monto")}: ${fmt(p.montoFinal)}${p.estado==='pagado'?' ✓':''}`).join(" · ")
+      ? filas.map(p => {
+          const esDesc = pjTipoFila(p) === "descuento";
+          const quitar = (esDesc && p.estado === "pendiente")
+            ? ` <button class="btn-sm danger" style="padding:0 5px" title="Quitar descuento" onclick="quitarDescuento('${p.id}')">✕</button>` : "";
+          return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${quitar}`;
+        }).join(" · ")
       : `<span class="pj-acumulado">Sin cargos este mes</span>`;
 
     const badge = !filas.length ? ""
@@ -7290,11 +7350,12 @@ function renderPagoMensual() {
     <tr>
       <td>${esc(cfg.nombre)}</td>
       <td class="pj-acumulado">${detalle}</td>
-      <td colspan="2" style="text-align:center">
+      <td colspan="2" style="text-align:center;white-space:nowrap">
         <button class="btn-sm" onclick="abrirAgregarMontoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${pjMesSel}')">+ Agregar monto</button>
+        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${pjMesSel}')" title="Cargar descuento">− Descuento</button>
         <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}','${pjMesSel}')" title="Agregar premios">🏆</button>
       </td>
-      <td class="mono">${fmt(totalNeto)}</td>
+      <td class="mono" style="${totalNeto<0?'color:var(--red)':''}">${fmtSigned(totalNeto)}</td>
       <td>${badge}</td>
       <td>${marcarBtn}</td>
     </tr>`;
@@ -7302,20 +7363,105 @@ function renderPagoMensual() {
 
   return `
     ${selectorMes}
-    <div class="sum-grid three">
-      <div class="stat-card"><div class="stat-label">Total del mes</div><div class="stat-val acc">${fmt(totalMes)}</div></div>
+    <div class="sum-grid">
+      <div class="stat-card"><div class="stat-label">Total del mes</div><div class="stat-val acc">${fmtSigned(totalMes)}</div></div>
+      <div class="stat-card"><div class="stat-label">Descuentos</div><div class="stat-val egr">${fmtSigned(descuentosMes)}</div></div>
       <div class="stat-card"><div class="stat-label">Ya pagado</div><div class="stat-val ing">${fmt(pagadoMes)}</div></div>
-      <div class="stat-card"><div class="stat-label">Pendiente</div><div class="stat-val egr">${fmt(pendienteMes)}</div></div>
+      <div class="stat-card"><div class="stat-label">Neto a pagar</div><div class="stat-val egr">${fmtSigned(pendienteMes)}</div></div>
     </div>
     <div class="pj-table-wrap">
       <table class="pj-table">
         <thead><tr>
-          <th>Jugador</th><th>Detalle</th><th colspan="2"></th><th>Total</th><th>Estado</th><th></th>
+          <th>Jugador</th><th>Detalle</th><th colspan="2"></th><th>Total neto</th><th>Estado</th><th></th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
+    <p class="note">Los descuentos (multas, adelantos ya entregados) quedan pendientes como el resto y se netean contra el sueldo al confirmar el pago. El "Neto a pagar" ya los tiene descontados.</p>
   `;
+}
+
+// ── Descuentos sobre el sueldo mensual ────────────────────────
+// Se guardan como una fila más de Pagos Jugadores, con Tipo "descuento" y MontoFinal NEGATIVO:
+// así restan de cualquier suma existente sin lógica especial, y viajan en el mismo lote de
+// confirmarPagosJugadores que el sueldo del mes.
+function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault) {
+  const mesSel = mesDefault || nowMes();
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Cargar descuento — ${esc(jugadorNombre)}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Monto a descontar</label>
+            <input class="inp" id="pj-desc-monto" type="number" step="1" min="0" placeholder="0">
+          </div>
+          <div class="field">
+            <label>Mes</label>
+            <select class="inp" id="pj-desc-mes">${generarOpcionesMes(mesSel)}</select>
+          </div>
+          <div class="field">
+            <label>Motivo</label>
+            <input class="inp" id="pj-desc-motivo" type="text" placeholder="Multa, adelanto entregado…">
+          </div>
+        </div>
+        <p class="note">Se descuenta del sueldo del mes cuando se confirme el pago. Queda pendiente hasta entonces y se puede quitar.</p>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-descuento" onclick="guardarDescuento('${jugadorId}','${esc(jugadorNombre)}')">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function guardarDescuento(jugadorId, jugadorNombre) {
+  const btnId = "btn-guardar-descuento";
+  if (document.getElementById(btnId)?.disabled) return;
+  const monto  = Math.abs(parseFloat(document.getElementById("pj-desc-monto")?.value || "0") || 0);
+  const mes    = document.getElementById("pj-desc-mes")?.value || "";
+  const motivo = (document.getElementById("pj-desc-motivo")?.value || "").trim();
+  if (!monto)  { toast("Ingresá el monto a descontar", "err"); return; }
+  if (!motivo) { toast("Poné el motivo del descuento", "err"); return; }
+  setBtnState(btnId, "saving");
+  try {
+    // El monto se guarda negativo — es lo que hace que reste sin tocar ninguna suma existente.
+    const pago = {
+      jugadorId, jugadorNombre, partidosIncluidos: [],
+      montoBase: -monto, ajuste: 0, motivoAjuste: "", montoFinal: -monto,
+      estado: "pendiente", etiqueta: motivo, mes, tipo: "descuento", partidoId: ""
+    };
+    const r = await Storage.savePagoJugador(pago);
+    if (!r.ok) throw new Error(r.error || "Error");
+    pagosJugadores.push({ id: r.id, ...pago, fechaPago: "", medioPago: "", movimientoId: "" });
+    saveSnapshotToCache();
+    setBtnState(btnId, "saved");
+    toast("Descuento cargado ✓", "ok");
+    closeModal();
+    renderPagosJugadores();
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+/** Quita un descuento pendiente. deletePagoJugador sólo deja borrar filas en "pendiente",
+ *  así que un descuento ya cobrado no se puede hacer desaparecer del movimiento. */
+async function quitarDescuento(id) {
+  const p = pagosJugadores.find(x => x.id === id);
+  if (!p) return;
+  if (!confirm("¿Quitar el descuento \"" + (p.etiqueta || "sin motivo") + "\" de " + fmt(Math.abs(p.montoFinal)) + "?")) return;
+  showOverlay("Quitando…");
+  try {
+    const r = await Storage.deletePagoJugador(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    const idx = pagosJugadores.findIndex(x => x.id === id);
+    if (idx >= 0) pagosJugadores.splice(idx, 1);
+    saveSnapshotToCache();
+    hideOverlay();
+    toast("Descuento quitado ✓", "ok");
+    renderPagosJugadores();
+  } catch(e) {
+    hideOverlay();
+    toast("Error: " + e.message, "err");
+  }
 }
 
 /** Monto base de una fila de la tabla "Por partido" según el rol elegido. */
@@ -7414,19 +7560,35 @@ function abrirMedioPagoModalGenerico(titulo, onConfirm) {
         <div class="modal-title">${esc(titulo)}</div>
         <div class="field">
           <label>Cuenta</label>
-          <select class="inp" id="pj-cuenta">${opcionesCuenta}</select>
+          <select class="inp" id="pj-cuenta" onchange="pjAutoMedioPago()">${opcionesCuenta}</select>
         </div>
         <div class="field">
           <label>Medio de pago</label>
           <select class="inp" id="pj-medio-pago">${opcionesMedio}</select>
         </div>
-        <p class="note">Se va a generar un movimiento de egreso por cada pago confirmado (rubro "SUELDO JUGADORES").</p>
+        <div class="field">
+          <label>Fecha de pago</label>
+          <input class="inp" id="pj-fecha-pago" type="date" value="${today()}">
+        </div>
+        <p class="note">Se va a generar un movimiento de egreso por cada pago confirmado (rubro "SUELDO JUGADORES"), con la fecha que pongas acá.</p>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
           <button class="btn-main" style="flex:1" id="btn-confirmar-mediopago" onclick="confirmarMedioPagoModal()">Confirmar pago</button>
         </div>
       </div>
     </div>`;
+  pjAutoMedioPago(); // también al abrir, no sólo al cambiar la cuenta
+}
+
+/** Default del medio de pago según la cuenta elegida (misma regla que el form de movimientos).
+ *  Es un default: si el usuario ya lo cambió a mano, esto lo vuelve a pisar sólo cuando cambia
+ *  la cuenta, que es cuando el default deja de tener sentido. */
+function pjAutoMedioPago() {
+  const cuenta = document.getElementById("pj-cuenta")?.value || "";
+  const el     = document.getElementById("pj-medio-pago");
+  if (!el) return;
+  const mp = medioPagoPorCuenta(cuenta);
+  if ([...el.options].some(o => o.value === mp)) el.value = mp;
 }
 
 async function confirmarMedioPagoModal() {
@@ -7434,12 +7596,16 @@ async function confirmarMedioPagoModal() {
   if (document.getElementById(btnId)?.disabled) return;
   const medioPago = document.getElementById("pj-medio-pago")?.value || "";
   const cuenta    = document.getElementById("pj-cuenta")?.value || "";
+  const fechaPago = document.getElementById("pj-fecha-pago")?.value || "";
   if (!cuenta) { toast("Elegí una cuenta", "err"); return; }
+  if (!fechaPago) { toast("Poné la fecha del pago", "err"); return; }
+  // Mismo criterio que guardarMovimiento: una fecha futura suele ser un error de tipeo.
+  if (fechaPago > today() && !confirm("La fecha (" + fechaPago + ") es posterior a hoy. ¿Confirmás que es correcta?")) return;
   setBtnState(btnId, "saving");
   try {
     // El callback deja el modal-root con la pantalla de confirmación (o lo cierra si falta algo
     // que guardar antes) — no lo pisamos acá con un closeModal() automático.
-    await pjMedioPagoCallback(medioPago, cuenta);
+    await pjMedioPagoCallback(medioPago, cuenta, fechaPago);
     setBtnState(btnId, "saved");
   } catch(e) { handleSaveError(btnId, e); }
 }
@@ -7475,7 +7641,7 @@ function mostrarConfirmacionPagosModal(movimientosCreados) {
 }
 
 function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId, idsExtra) {
-  abrirMedioPagoModalGenerico("Confirmar pago", async (medioPago, cuenta) => {
+  abrirMedioPagoModalGenerico("Confirmar pago", async (medioPago, cuenta, fechaPago) => {
     let ids = (idsIniciales || []).filter(Boolean);
     const extra = (idsExtra || []).filter(Boolean);
     if (partidoId && !ids.length) {
@@ -7487,11 +7653,11 @@ function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId, idsExtra) {
     // Los premios (filas sin partido) se cobran junto con el resto.
     ids = [...new Set([...ids, ...extra])];
     if (!ids.length) throw new Error("Guardá el roster antes de marcar como pagado");
-    const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago, cuenta);
+    const r = await Storage.confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta);
     if (!r.ok) throw new Error(r.error || "Error");
     ids.forEach(id => {
       const p = pagosJugadores.find(x => x.id === id);
-      if (p) { p.estado = "pagado"; p.fechaPago = today(); p.medioPago = medioPago; }
+      if (p) { p.estado = "pagado"; p.fechaPago = fechaPago; p.medioPago = medioPago; }
     });
     aplicarMovimientosCreados(r.movimientos);
     saveSnapshotToCache();
@@ -7506,12 +7672,17 @@ function aplicarMovimientosCreados(movimientosCreados) {
   updateBadge();
 }
 
-/** Marca como pagadas las filas pendientes sin partido asociado de un jugador "mensual" en un mes puntual. */
+/** Marca como pagadas las filas pendientes de un jugador "mensual" en un mes puntual: sueldo,
+ *  premios y descuentos del mes van en la misma transferencia, neteados. */
 function marcarMesPagado(jugadorId, mes) {
-  const ids = pagosJugadores
-    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && p.partidosIncluidos.length === 0 && (p.mes||"") === mes)
-    .map(p => p.id);
-  if (!ids.length) return;
+  const filas = pjFilasMes(jugadorId, mes).filter(p => p.estado === "pendiente");
+  if (!filas.length) return;
+  const ids = filas.map(p => p.id);
+  const negativo = pjJugadorConNetoNegativo(ids);
+  if (negativo) {
+    toast("Los descuentos de " + negativo.nombre + " superan el sueldo del mes (" + fmtSigned(negativo.neto) + "). Ajustalos antes de confirmar.", "err");
+    return;
+  }
   abrirMedioPagoModal(ids, jugadorId, null);
 }
 
@@ -7557,10 +7728,12 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
   const formPrevio = pjSnapshotFormPartido();
   setBtnState(btnId, "saving");
   try {
+    // Un monto suelto es el sueldo del período (para un descuento con motivo propio está
+    // "− Descuento" en la pantalla Mensual, que además lo tipa como tal).
     const pago = {
       jugadorId, jugadorNombre, partidosIncluidos: [],
       montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
-      estado: "pendiente", etiqueta, mes
+      estado: "pendiente", etiqueta, mes, tipo: "periodico", partidoId: ""
     };
     const r = await Storage.savePagoJugador(pago);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -7583,8 +7756,11 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
 /** Filas pendientes (sin partido) de un jugador que corresponden a un premio dado,
  *  matcheando por descripción (la etiqueta guardada es "desc" o "desc xN"). */
 function pjPremioExistente(jugadorId, descripcion) {
+  // Matchea por etiqueta sobre cualquier fila pendiente que no sea de un partido: las filas
+  // viejas sin Tipo de un jugador mensual se clasifican como "periodico", y aun así son el
+  // premio que este modal cargó en su momento.
   return pagosJugadores.filter(p => p.jugadorId === jugadorId && p.estado === "pendiente"
-    && p.partidosIncluidos.length === 0
+    && pjTipoFila(p) !== "partido"
     && (p.etiqueta === descripcion || p.etiqueta.startsWith(descripcion + " x")));
 }
 
@@ -7596,6 +7772,16 @@ function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
     return;
   }
   const mesSel = mesDefault || nowMes();
+  // Partido del premio: si el modal se abre desde "Por partido" ya sabemos cuál es, así que se
+  // propone ese. Queda editable y se puede dejar vacío: hay premios que no son de un partido.
+  const yaCargado = lista.map(p => pjPremioExistente(jugadorId, p.descripcion))
+    .reduce((a,b) => a.concat(b), []).find(p => p.partidoId);
+  const partidoSel = yaCargado ? yaCargado.partidoId : (pagosJugTab === "partido" ? pjPartidoSel : "");
+  const opcionesPartido = `<option value="">— Sin partido —</option>` +
+    [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha)).map(p => {
+      const fd = p.fecha ? p.fecha.slice(8)+"/"+p.fecha.slice(5,7)+"/"+p.fecha.slice(0,4) : "";
+      return `<option value="${p.id}" ${p.id===partidoSel?"selected":""}>${esc(p.rival)} — ${fd}</option>`;
+    }).join("");
   const filas = lista.map((p, i) => {
     const existentes = pjPremioExistente(jugadorId, p.descripcion);
     const existingIds = existentes.map(r => r.id);
@@ -7617,9 +7803,15 @@ function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
       <div class="modal-card" onclick="event.stopPropagation()">
         <div class="modal-handle"></div>
         <div class="modal-title">Premios — ${esc(jugadorNombre)}</div>
-        <div class="field">
-          <label>Mes</label>
-          <select class="inp" id="premios-mes">${generarOpcionesMes(mesSel)}</select>
+        <div class="fgrid">
+          <div class="field">
+            <label>Mes</label>
+            <select class="inp" id="premios-mes">${generarOpcionesMes(mesSel)}</select>
+          </div>
+          <div class="field">
+            <label>Partido</label>
+            <select class="inp" id="premios-partido">${opcionesPartido}</select>
+          </div>
         </div>
         ${filas}
         <p class="note" style="margin:4px 0 0">Poné la cantidad en 0 para quitar un premio ya cargado.</p>
@@ -7646,7 +7838,8 @@ function premiosRecalcTotal() {
 async function guardarPremiosJugador(jugadorId, jugadorNombre) {
   const btnId = "btn-aplicar-premios";
   if (document.getElementById(btnId)?.disabled) return;
-  const mes = document.getElementById("premios-mes")?.value || "";
+  const mes       = document.getElementById("premios-mes")?.value || "";
+  const partidoId = document.getElementById("premios-partido")?.value || "";
   // Por cada tipo de premio: cant 0 con filas existentes -> quitarlas; cant > 0 ->
   // actualiza la primera fila existente (o crea una nueva) y borra duplicados sueltos.
   const aBorrar = [];
@@ -7666,7 +7859,7 @@ async function guardarPremiosJugador(jugadorId, jugadorNombre) {
       id: keepId || "", jugadorId, jugadorNombre,
       montoFinal: monto * cant,
       etiqueta:   desc + (cant > 1 ? " x" + cant : ""),
-      mes
+      mes, partidoId
     });
   });
   if (!aBorrar.length && !aGuardar.length) { toast("Poné al menos una cantidad", "err"); return; }
@@ -7682,19 +7875,18 @@ async function guardarPremiosJugador(jugadorId, jugadorNombre) {
       if (idx >= 0) pagosJugadores.splice(idx, 1);
     }
     for (const p of aGuardar) {
-      const r = await Storage.savePagoJugador({
-        id: p.id, jugadorId: p.jugadorId, jugadorNombre: p.jugadorNombre,
+      // partidosIncluidos sigue vacío: el partido de un premio va en su propia columna. Meterlo
+      // acá haría que pjFilaPartido lo devuelva como si fuera el pago del partido.
+      const campos = {
+        jugadorId: p.jugadorId, jugadorNombre: p.jugadorNombre,
         partidosIncluidos: [], montoBase: p.montoFinal, ajuste: 0, motivoAjuste: "",
         montoFinal: p.montoFinal, estado: "pendiente", fechaPago: "", medioPago: "",
-        etiqueta: p.etiqueta, movimientoId: "", mes: p.mes
-      });
-      if (!r.ok) throw new Error(r.error || "Error");
-      const fila = {
-        id: r.id, jugadorId: p.jugadorId, jugadorNombre: p.jugadorNombre,
-        partidosIncluidos: [], montoBase: p.montoFinal, ajuste: 0, motivoAjuste: "",
-        montoFinal: p.montoFinal, estado: "pendiente", fechaPago: "", medioPago: "",
-        etiqueta: p.etiqueta, movimientoId: "", mes: p.mes
+        etiqueta: p.etiqueta, movimientoId: "", mes: p.mes,
+        tipo: "premio", partidoId: p.partidoId || ""
       };
+      const r = await Storage.savePagoJugador({ id: p.id, ...campos });
+      if (!r.ok) throw new Error(r.error || "Error");
+      const fila = { id: r.id, ...campos };
       const idx = pagosJugadores.findIndex(x => x.id === r.id);
       if (idx >= 0) pagosJugadores[idx] = fila; else pagosJugadores.push(fila);
     }
@@ -7711,7 +7903,7 @@ function renderTransferencias() {
   if (pjPartidosSel === null) {
     // Precarga: partidos que tienen al menos una fila pendiente.
     const idsConPendiente = new Set(
-      pagosJugadores.filter(p => p.estado === "pendiente" && p.partidosIncluidos.length === 1)
+      pagosJugadores.filter(p => p.estado === "pendiente" && pjTipoFila(p) === "partido" && p.partidosIncluidos.length === 1)
         .map(p => p.partidosIncluidos[0])
     );
     pjPartidosSel = partidos.filter(p => idsConPendiente.has(p.id)).map(p => p.id);
@@ -7727,60 +7919,69 @@ function renderTransferencias() {
 
   const partidosSel = sorted.filter(p => pjPartidosSel.includes(p.id));
 
-  // Jugadores relevantes: por-partido con fila en algún partido seleccionado, o periódicos con acumulado pendiente.
-  const filasPorJugador = {}; // idJugador -> { nombre, alias, porPartido:{partidoId:fila}, periodico:bool, acumulado }
+  // Jugadores relevantes: por-partido con fila en algún partido seleccionado, o cualquiera con
+  // sueldo/premios pendientes. Los premios van aparte del resto: tienen checkbox propio.
+  const filasPorJugador = {}; // idJugador -> { nombre, alias, porPartido, periodico, sueldo:[filas], premios:[filas] }
   configJugadores.forEach(cfg => {
+    const porPartido = {};
+    let tienePartido = false;
     if (cfg.frecuencia === "partido") {
-      const porPartido = {};
-      let tieneAlgo = false;
       partidosSel.forEach(p => {
         const fila = pjFilaPartido(cfg.idJugador, p.id);
-        if (fila) { porPartido[p.id] = fila; tieneAlgo = true; }
+        if (fila) { porPartido[p.id] = fila; tienePartido = true; }
       });
-      // Premios / montos sueltos pendientes: se transfieren junto con lo del partido.
-      const premiosPend = pjAcumuladoPendiente(cfg.idJugador);
-      if (tieneAlgo || premiosPend > 0) {
-        filasPorJugador[cfg.idJugador] = { nombre:cfg.nombre, alias:cfg.alias, porPartido, periodico:false, premios:premiosPend };
-      }
-    } else {
-      const acumulado = pjAcumuladoPendiente(cfg.idJugador);
-      if (acumulado > 0) filasPorJugador[cfg.idJugador] = { nombre:cfg.nombre, alias:cfg.alias, periodico:true, acumulado };
+    }
+    // "sueldo" = lo periódico + los descuentos (montoFinal negativo, netean solos).
+    const sueldo  = pjFilasSueldoPendiente(cfg.idJugador);
+    const premios = pjPremiosPendientes(cfg.idJugador);
+    if (tienePartido || sueldo.length || premios.length) {
+      filasPorJugador[cfg.idJugador] = {
+        nombre: cfg.nombre, alias: cfg.alias, porPartido,
+        periodico: cfg.frecuencia !== "partido", sueldo, premios
+      };
     }
   });
 
   const jugadorIds = Object.keys(filasPorJugador).sort((a,b) => filasPorJugador[a].nombre.localeCompare(filasPorJugador[b].nombre));
 
-  let totalTransferir = 0;
   const rows = jugadorIds.map(jid => {
     const info = filasPorJugador[jid];
-    let total = 0;
+    const sueldoNeto = info.sueldo.reduce((s,p) => s + Number(p.montoFinal||0), 0);
+    // "base" = lo que arrastra el checkbox principal del jugador: los partidos pendientes de la
+    // selección + su sueldo/descuentos. Los premios NO entran acá (ver premiosCell).
+    let base = sueldoNeto;
     let cols;
     if (info.periodico) {
-      cols = `<td class="mono" colspan="${partidosSel.length||1}">Acumulado</td>`;
-      total = info.acumulado;
+      cols = `<td class="mono" colspan="${partidosSel.length||1}">${fmtSigned(sueldoNeto)} <span class="pj-acumulado">acumulado</span></td>`;
     } else {
       cols = partidosSel.map(p => {
         const fila = info.porPartido[p.id];
         if (!fila) return `<td class="mono">—</td>`;
-        total += Number(fila.montoFinal||0);
+        if (fila.estado === "pendiente") base += Number(fila.montoFinal||0);
         return `<td class="mono">${fmt(fila.montoFinal)}${fila.estado==='pagado'?' <span class="pj-badge pj-badge-pagado" style="padding:1px 5px">✓</span>':''}</td>`;
       }).join("");
-      total += Number(info.premios || 0);
     }
-    totalTransferir += total;
-    const pendiente = info.periodico ? true
-      : (Number(info.premios||0) > 0 || Object.values(info.porPartido).some(f => f.estado === "pendiente"));
-    // Premios/ajustes sueltos: para "partido" es info.premios; para periódicos ya están
-    // fundidos dentro del "Acumulado" (no hay desglose propio), así que se muestra "—".
-    const premiosCell = !info.periodico && Number(info.premios||0) > 0 ? fmt(info.premios) : "—";
+    const hayBase = info.sueldo.length > 0 ||
+      Object.values(info.porPartido).some(f => f.estado === "pendiente");
+    // Un checkbox por premio: tildar al jugador para pagarle el partido no le tiene que arrastrar
+    // los premios (antes se colaban solos y desaparecían de la pantalla sin que nadie los eligiera).
+    const premiosCell = info.premios.length
+      ? info.premios.map(p => `
+          <label class="pj-premio-lbl">
+            <input type="checkbox" class="pj-premio-cb" value="${p.id}" data-monto="${Number(p.montoFinal||0)}" onchange="pjTransfRecalc()">
+            <span class="mono">${fmtSigned(p.montoFinal)}</span>
+            <span>${esc(p.etiqueta || "Premio")}</span>
+            <span class="pj-acumulado">${esc(pjPartidoLabel(p.partidoId))}</span>
+          </label>`).join("")
+      : "—";
     return `
-    <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-total="${total}">
+    <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-base="${base}" data-total="0">
       <td>${esc(info.nombre)}</td>
       ${cols}
-      <td class="mono">${premiosCell}</td>
-      <td class="mono">${fmt(total)}</td>
+      <td class="pj-premios-cell">${premiosCell}</td>
+      <td class="mono pj-total-cell">${fmt(0)}</td>
       <td>${esc(info.alias || "—")}</td>
-      <td style="text-align:center"><input type="checkbox" class="pj-transf-cb" value="${jid}" ${pendiente?"checked":""} ${pendiente?"":"disabled"}></td>
+      <td style="text-align:center"><input type="checkbox" class="pj-transf-cb" value="${jid}" onchange="pjTransfRecalc()" ${hayBase?"checked":""} ${hayBase?"":"disabled"}></td>
     </tr>`;
   }).join("");
 
@@ -7789,8 +7990,8 @@ function renderTransferencias() {
   return `
     <div class="pj-chip-row">${chips}</div>
     <div class="sum-grid three">
-      <div class="stat-card"><div class="stat-label">Jugadores a pagar</div><div class="stat-val acc">${jugadorIds.length}</div></div>
-      <div class="stat-card"><div class="stat-label">Total a transferir</div><div class="stat-val egr">${fmt(totalTransferir)}</div></div>
+      <div class="stat-card"><div class="stat-label">Jugadores a pagar</div><div class="stat-val acc" id="pj-jugadores-pagar">0</div></div>
+      <div class="stat-card"><div class="stat-label">Total a transferir</div><div class="stat-val egr" id="pj-total-transferir">${fmt(0)}</div></div>
       <div class="stat-card"><div class="stat-label">Partidos incluidos</div><div class="stat-val">${partidosSel.length}</div></div>
     </div>
     ${jugadorIds.length ? `
@@ -7809,12 +8010,38 @@ function renderTransferencias() {
   `;
 }
 
-// Tilda o destilda todas las filas de la tabla de transferencias. Ignora los checkbox
-// deshabilitados (jugadores sin nada pendiente): esos no se pueden incluir en un pago.
+// Tilda o destilda todas las filas de la tabla de transferencias, incluidos los checkbox
+// de premios. Ignora los deshabilitados (jugadores sin nada pendiente): esos no se pueden
+// incluir en un pago.
 function pjMarcarTodos(valor) {
-  const cbs = [...document.querySelectorAll("#pj-transf-table .pj-transf-cb:not(:disabled)")];
+  const cbs = [...document.querySelectorAll("#pj-transf-table .pj-transf-cb:not(:disabled), #pj-transf-table .pj-premio-cb:not(:disabled)")];
   cbs.forEach(cb => cb.checked = valor);
+  pjTransfRecalc();
   if (!cbs.length) toast("No hay filas para " + (valor ? "tildar" : "destildar"), "err");
+}
+
+/** Recalcula el total de cada fila y los totales de arriba a partir de lo que está tildado.
+ *  Los premios se eligen uno por uno, así que el monto a transferir depende de la selección
+ *  y no se puede dejar fijo en el HTML (el CSV de transferencias sale de estos totales). */
+function pjTransfRecalc() {
+  let totalGeneral = 0, jugadores = 0;
+  document.querySelectorAll("#pj-transf-table tbody tr[data-jug]").forEach(tr => {
+    const main = tr.querySelector(".pj-transf-cb");
+    let total = (main && main.checked && !main.disabled) ? Number(tr.dataset.base || 0) : 0;
+    tr.querySelectorAll(".pj-premio-cb:checked").forEach(cb => total += Number(cb.dataset.monto || 0));
+    tr.dataset.total = total;
+    const cell = tr.querySelector(".pj-total-cell");
+    if (cell) {
+      cell.textContent = fmtSigned(total);
+      cell.style.color = total < 0 ? "var(--red)" : "";
+    }
+    if (total !== 0) jugadores++;
+    totalGeneral += total;
+  });
+  const elT = document.getElementById("pj-total-transferir");
+  if (elT) elT.textContent = fmtSigned(totalGeneral);
+  const elJ = document.getElementById("pj-jugadores-pagar");
+  if (elJ) elJ.textContent = jugadores;
 }
 
 function pjToggleChip(partidoId) {
@@ -7823,36 +8050,51 @@ function pjToggleChip(partidoId) {
   renderPagosJugadores();
 }
 
+// IDs de las filas de "Pagos Jugadores" que entran en el pago. El checkbox del jugador arrastra
+// sus partidos pendientes y su sueldo/descuentos; los premios entran SÓLO si están tildados uno
+// por uno, que es el punto de tener checkbox propio.
 function pjFilasSeleccionadas() {
-  const checks = [...document.querySelectorAll("#pj-transf-table .pj-transf-cb:checked")];
-  const jugadorIds = checks.map(c => c.value);
   const partidosSel = [...partidos].filter(p => pjPartidosSel.includes(p.id));
   const ids = [];
-  jugadorIds.forEach(jid => {
-    const cfg = configJugadores.find(c => c.idJugador === jid);
-    if (!cfg) return;
-    if (cfg.frecuencia === "partido") {
-      partidosSel.forEach(p => {
-        const fila = pjFilaPartido(jid, p.id);
-        if (fila && fila.estado === "pendiente") ids.push(fila.id);
-      });
-      // Premios / montos sueltos pendientes (filas sin partido) del mismo jugador.
-      pjIdsAcumuladoPendiente(jid).forEach(id => ids.push(id));
-    } else {
-      pagosJugadores.filter(p => p.jugadorId === jid && p.estado === "pendiente" && p.partidosIncluidos.length === 0)
-        .forEach(p => ids.push(p.id));
+  document.querySelectorAll("#pj-transf-table tbody tr[data-jug]").forEach(tr => {
+    const jid  = tr.dataset.jug;
+    const main = tr.querySelector(".pj-transf-cb");
+    if (main && main.checked && !main.disabled) {
+      const cfg = configJugadores.find(c => c.idJugador === jid);
+      if (cfg && cfg.frecuencia === "partido") {
+        partidosSel.forEach(p => {
+          const fila = pjFilaPartido(jid, p.id);
+          if (fila && fila.estado === "pendiente") ids.push(fila.id);
+        });
+      }
+      pjFilasSueldoPendiente(jid).forEach(p => ids.push(p.id));
     }
+    tr.querySelectorAll(".pj-premio-cb:checked").forEach(cb => ids.push(cb.value));
   });
-  return ids;
+  return [...new Set(ids)];
+}
+
+/** Primer jugador del lote cuyo neto (sueldo + premios − descuentos) da negativo, o null.
+ *  Un neto negativo no es un egreso: es plata que el jugador le debe al club, y generar el
+ *  movimiento igual rompería las sumas. El backend también lo corta, esto es para avisar antes. */
+function pjJugadorConNetoNegativo(ids) {
+  const porJugador = {};
+  ids.forEach(id => {
+    const p = pagosJugadores.find(x => x.id === id);
+    if (!p) return;
+    porJugador[p.jugadorId] = porJugador[p.jugadorId] || { nombre: p.jugadorNombre || "jugador", neto: 0 };
+    porJugador[p.jugadorId].neto += Number(p.montoFinal || 0);
+  });
+  return Object.values(porJugador).find(g => g.neto < 0) || null;
 }
 
 function exportarTransferencias() {
-  const checks = [...document.querySelectorAll("#pj-transf-table .pj-transf-cb:checked")];
-  if (!checks.length) { toast("No hay filas seleccionadas para exportar", "err"); return; }
-  const lineas = checks.map(c => {
-    const tr = c.closest("tr");
-    return `${tr.dataset.alias},${tr.dataset.total}`;
-  });
+  // Sale lo que efectivamente se va a transferir (data-total, que ya descuenta los premios
+  // destildados), no todo lo pendiente del jugador.
+  const filas = [...document.querySelectorAll("#pj-transf-table tbody tr[data-jug]")]
+    .filter(tr => Number(tr.dataset.total || 0) !== 0);
+  if (!filas.length) { toast("No hay filas seleccionadas para exportar", "err"); return; }
+  const lineas = filas.map(tr => `${tr.dataset.alias},${tr.dataset.total}`);
   const texto = "Alias/CBU,Monto\n" + lineas.join("\n");
   const blob = new Blob([texto], { type:"text/csv;charset=utf-8" });
   const url  = URL.createObjectURL(blob);
@@ -7865,12 +8107,17 @@ function exportarTransferencias() {
 function confirmarPagosSeleccionados() {
   const ids = pjFilasSeleccionadas();
   if (!ids.length) { toast("No hay pagos pendientes seleccionados", "err"); return; }
-  abrirMedioPagoModalGenerico("Confirmar " + ids.length + " pago" + (ids.length!==1?"s":""), async (medioPago, cuenta) => {
-    const r = await Storage.confirmarPagosJugadores(ids, today(), medioPago, cuenta);
+  const negativo = pjJugadorConNetoNegativo(ids);
+  if (negativo) {
+    toast("Los descuentos de " + negativo.nombre + " superan lo que se le debe (" + fmtSigned(negativo.neto) + "). Ajustalo antes de confirmar.", "err");
+    return;
+  }
+  abrirMedioPagoModalGenerico("Confirmar " + ids.length + " pago" + (ids.length!==1?"s":""), async (medioPago, cuenta, fechaPago) => {
+    const r = await Storage.confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta);
     if (!r.ok) throw new Error(r.error || "Error");
     ids.forEach(id => {
       const p = pagosJugadores.find(x => x.id === id);
-      if (p) { p.estado = "pagado"; p.fechaPago = today(); p.medioPago = medioPago; }
+      if (p) { p.estado = "pagado"; p.fechaPago = fechaPago; p.medioPago = medioPago; }
     });
     aplicarMovimientosCreados(r.movimientos);
     saveSnapshotToCache();
@@ -8000,6 +8247,14 @@ function renderConfig() {
       <div id="backfill-result" style="margin-top:10px"></div>
     </div>
 
+    <!-- Completar tipo de los pagos a jugadores -->
+    <div class="cfg-card">
+      <div class="cfg-title">🏷️ Completar tipo de pagos a jugadores</div>
+      <p class="cfg-note" style="margin-bottom:10px">Marca cada fila de "Pagos Jugadores" como pago de partido, premio o sueldo periódico. Sin eso, un premio y un sueldo mensual son indistinguibles entre sí y hay que adivinar por la frecuencia del jugador. Hace falta una sola vez y se puede volver a correr sin riesgo: sólo toca las filas que todavía no tienen tipo.</p>
+      <button class="btn-secondary" id="btn-backfill-tipo" onclick="runBackfillTipoPagos()">Completar tipos</button>
+      <div id="backfill-tipo-result" style="margin-top:10px"></div>
+    </div>
+
     <!-- Integridad de datos -->
     <div class="cfg-card">
       <div class="cfg-title">🧩 Integridad de datos</div>
@@ -8048,6 +8303,34 @@ async function runBackfillIds() {
     };
     box.innerHTML = bloque("Jugadores", r.jugadores || {completados:0}, "Jugadores ni Grupos")
                   + bloque("Adherentes", r.adherentes || {completados:0}, "Adherentes");
+  } catch(e) {
+    hideOverlay();
+    setBtnState(btnId, "error");
+    box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+// Completa la columna Tipo de "Pagos Jugadores" en las filas cargadas antes de que existiera.
+// Mientras no se corra, la app clasifica esas filas al vuelo con la lógica vieja (pjTipoFila),
+// así que esto no es urgente — pero deja de depender de la frecuencia del jugador para saber
+// si una fila es un premio o un sueldo.
+async function runBackfillTipoPagos() {
+  const btnId = "btn-backfill-tipo";
+  const box   = document.getElementById("backfill-tipo-result");
+  setBtnState(btnId, "saving");
+  showOverlay("Completando tipos…");
+  try {
+    const r = await Storage.backfillTipoPagos();
+    if (!r.ok) throw new Error(r.error || "Error");
+    const rj = await Storage.listPagosJugadores();
+    if (rj.ok) { pagosJugadores = rj.pagosJugadores || []; saveSnapshotToCache(); }
+    hideOverlay();
+    setBtnState(btnId, "saved");
+    const t = r.porTipo || {};
+    box.innerHTML = r.completados
+      ? `<p class="cfg-note" style="color:var(--green)">${r.completados} fila${r.completados!==1?"s":""} completada${r.completados!==1?"s":""} ✓
+           <br>Pagos de partido: ${t.partido||0} · Premios: ${t.premio||0} · Sueldos periódicos: ${t.periodico||0}</p>`
+      : `<p class="cfg-note">Ya estaban todas tipadas — no había nada para completar.</p>`;
   } catch(e) {
     hideOverlay();
     setBtnState(btnId, "error");

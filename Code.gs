@@ -38,11 +38,29 @@ const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","M
 // Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
 // independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
 const PJ_SHEET = "Pagos Jugadores";
-const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes"];
+const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes","Tipo","PartidoID"];
 // PartidosIncluidos: JSON de un array de IDs de partido ("[]" para filas quincenales/mensuales agregadas a mano)
 // Estado: "pendiente" | "pagado"
 // Mes: "YYYY-MM" (mismo formato que nowMes()/mesLabel() en index.html — NO el "YYYYMM" de MOV_COLS.MES),
 // sólo relevante para filas de jugadores "mensual" (partidosIncluidos:[]). Filas viejas pueden tenerlo vacío.
+// Tipo: "partido" | "premio" | "periodico" | "descuento". Antes de existir esta columna el tipo se
+// deducía de PartidosIncluidos.length, que no distingue un premio de un sueldo periódico (los dos
+// van con "[]"): funcionaba de casualidad porque un jugador es o "partido" o periódico, nunca los dos.
+// Las filas cargadas antes de la columna lo tienen vacío hasta correr "backfillTipoPagos" — todo lo
+// que lea Tipo tiene que tolerar el vacío y caer en la lógica vieja (ver pjTipoFila en index.html).
+// PartidoID: partido al que se imputa la fila cuando no viene de un roster — hoy sólo los premios
+// (un premio por un gol pertenece al partido en que se hizo). Vacío = sin partido asociado.
+// Para las filas de tipo "partido" la fuente de verdad sigue siendo PartidosIncluidos.
+// Descuento: fila con MontoFinal NEGATIVO, para que reste del acumulado sin lógica especial en
+// ninguna suma existente. Se netea contra el sueldo al confirmar el pago.
+const PJ_IX = {
+  ESTADO:        9,
+  FECHA_PAGO:   10,
+  MEDIO_PAGO:   11,
+  MOVIMIENTO_ID:13,
+  TIPO:         15,
+  PARTIDO_ID:   16
+};
 const ROS_SHEET = "Roster Partidos";
 const ROS_COLS  = ["IdPartido","JugadorId","JugadorNombre","Rol"];
 // Rol: "titular" | "suplenteConMin" | "suplente" | "noJugo"
@@ -621,6 +639,12 @@ function handleAction(data) {
             add("error", "Pagos a jugadores", "El pago de \"" + quien + "\" incluye un partido que se borró (" + pid + ").");
           }
         }
+        // PartidoID (premios): si el partido no está, el premio deja de imputarse en Resumen > Por Partido.
+        const pidFila = String(r[PJ_IX.PARTIDO_ID - 1] || "").trim();
+        if (pidFila && !PAR.existe[pidFila]) {
+          add("error", "Pagos a jugadores", "El premio \"" + String(r[11] || "sin etiqueta") + "\" de \"" + quien +
+              "\" está asociado a un partido que se borró: ese monto no se imputa a ningún partido.");
+        }
         const movId = String(r[12] || "").trim();
         if (movId && !MOVX.existe[movId]) {
           add("error", "Pagos a jugadores", "El pago de \"" + quien + "\" figura como pagado con un movimiento que se borró: el egreso ya no está en la contabilidad.");
@@ -1070,14 +1094,15 @@ function handleAction(data) {
     // pendiente en Pagos Jugadores (sin partido asociado) que se cobra junto al resto.
     case "aplicarPremios": {
       const sh    = getOrCreateSheet(PJ_SHEET, PJ_COLS);
-      const lista = data.premios || []; // [{jugadorId, jugadorNombre, montoFinal, etiqueta, mes}]
+      const lista = data.premios || []; // [{jugadorId, jugadorNombre, montoFinal, etiqueta, mes, partidoId}]
       const creados = [];
       for (const p of lista) {
         const id = uid_gs();
         sh.appendRow([
           id, p.jugadorId, p.jugadorNombre||"", "[]",
           Number(p.montoFinal||0), 0, "", Number(p.montoFinal||0),
-          "pendiente", "", "", p.etiqueta||"", "", p.mes||""
+          "pendiente", "", "", p.etiqueta||"", "", p.mes||"",
+          "premio", p.partidoId||""
         ]);
         creados.push({ id, ...p });
       }
@@ -1130,6 +1155,9 @@ function handleAction(data) {
               Number(r.montoBase||0), Number(r.ajuste||0), r.motivoAjuste||"", Number(r.montoFinal||0)
             ]]);
             pjSh.getRange(i + 1, 14).setValue(r.mes||"");
+            // Tipo/PartidoID de una fila vieja que se vuelve a guardar: se completan acá para no
+            // depender de que el usuario haya corrido el backfill.
+            pjSh.getRange(i + 1, PJ_IX.TIPO, 1, 2).setValues([["partido", partidoId]]);
             found = true;
             break;
           }
@@ -1138,7 +1166,8 @@ function handleAction(data) {
           pjSh.appendRow([
             uid_gs(), r.jugadorId, r.jugadorNombre||"", partidosStr,
             Number(r.montoBase||0), Number(r.ajuste||0), r.motivoAjuste||"", Number(r.montoFinal||0),
-            "pendiente", "", "", "", "", r.mes||""
+            "pendiente", "", "", "", "", r.mes||"",
+            "partido", partidoId
           ]);
         }
       }
@@ -1167,13 +1196,16 @@ function handleAction(data) {
           medioPago:         String(r[10]||""),
           etiqueta:          String(r[11]||""),
           movimientoId:      String(r[12]||""),
-          mes:               String(r[13]||"")
+          mes:               String(r[13]||""),
+          tipo:              String(r[14]||""),  // "" en las filas anteriores al backfill
+          partidoId:         String(r[15]||"")
         }));
       return { ok: true, pagosJugadores };
     }
 
-    // Upsert genérico de una fila de Pagos Jugadores (ajuste manual, o alta de monto
-    // quincenal/mensual con partidosIncluidos:[] y etiqueta de período).
+    // Upsert genérico de una fila de Pagos Jugadores (ajuste manual, premio, descuento, o alta de
+    // monto quincenal/mensual con partidosIncluidos:[] y etiqueta de período).
+    // El default de Tipo es "periodico": es lo que era esta acción antes de que existiera la columna.
     case "savePagoJugador": {
       const sh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
       const p   = data.pago;
@@ -1184,7 +1216,8 @@ function handleAction(data) {
             sh.getRange(i + 1, 1, 1, PJ_COLS.length).setValues([[
               p.id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
               Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
-              p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||"", p.mes||""
+              p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||"", p.mes||"",
+              p.tipo||"periodico", p.partidoId||""
             ]]);
             return { ok: true, id: p.id };
           }
@@ -1194,9 +1227,60 @@ function handleAction(data) {
       sh.appendRow([
         id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
         Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
-        p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", "", p.mes||""
+        p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", "", p.mes||"",
+        p.tipo||"periodico", p.partidoId||""
       ]);
       return { ok: true, id };
+    }
+
+    // Completa la columna Tipo (y PartidoID cuando se puede deducir) en las filas cargadas antes
+    // de que existieran. Idempotente: sólo toca filas con Tipo vacío, así que se puede correr las
+    // veces que haga falta. Escribe las dos columnas de una sola llamada — fila por fila sobre
+    // cientos de registros se pasa del límite de tiempo de Apps Script.
+    case "backfillTipoPagos": {
+      const sh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+      const all = sh.getDataRange().getValues();
+      if (all.length <= 1) return { ok: true, completados: 0, porTipo: {} };
+
+      // Frecuencia de cada jugador: es lo único que distingue un premio de un sueldo periódico
+      // en las filas viejas (las dos van con PartidosIncluidos "[]").
+      const frecuencia = {};
+      const cfgAll = getOrCreateSheet(CFGJ_SHEET, CFGJ_COLS).getDataRange().getValues();
+      for (let i = 1; i < cfgAll.length; i++) {
+        const jid = String(cfgAll[i][0] || "").trim();
+        if (jid) frecuencia[jid] = String(cfgAll[i][5] || "");
+      }
+
+      const col = []; // [[Tipo, PartidoID], …] para todas las filas de datos, en orden
+      const porTipo = { partido: 0, premio: 0, periodico: 0 };
+      let completados = 0;
+      for (let i = 1; i < all.length; i++) {
+        const tipoActual = String(all[i][14] || "").trim();
+        if (!String(all[i][0] || "").trim() || tipoActual) {
+          col.push([tipoActual, String(all[i][15] || "")]);
+          continue;
+        }
+        const partidosIncl = safeParseJSON(String(all[i][3] || "[]"), []);
+        let tipo, partidoId = String(all[i][15] || "");
+        if (partidosIncl.length === 1) {
+          tipo = "partido";
+          partidoId = partidoId || String(partidosIncl[0]);
+        } else if (partidosIncl.length > 1) {
+          // Fila que cubre varios partidos: sigue siendo un pago de partidos, pero no hay
+          // un único PartidoID que la represente — PartidosIncluidos manda.
+          tipo = "partido";
+        } else {
+          // Sin partidos: premio si el jugador cobra por partido, sueldo acumulado si es periódico.
+          // Un jugador que ya no está en Config Jugadores cae en "periodico", que es como se
+          // venía comportando la fila (entra en el acumulado).
+          tipo = frecuencia[String(all[i][1] || "").trim()] === "partido" ? "premio" : "periodico";
+        }
+        col.push([tipo, partidoId]);
+        porTipo[tipo] = (porTipo[tipo] || 0) + 1;
+        completados++;
+      }
+      if (completados) sh.getRange(2, PJ_IX.TIPO, col.length, 2).setValues(col);
+      return { ok: true, completados, porTipo };
     }
 
     // Borra una fila pendiente de Pagos Jugadores (ej. premio que el usuario quitó
@@ -1251,6 +1335,10 @@ function handleAction(data) {
       for (let i = 1; i < all.length; i++) {
         if (ids.indexOf(String(all[i][0])) < 0) continue;
         const partidosIncl = safeParseJSON(String(all[i][3]||"[]"), []);
+        const tipo = String(all[i][14]||"").trim();
+        // Fallback para las filas anteriores a la columna Tipo: el discriminador viejo era
+        // PartidosIncluidos.length (mismo criterio que backfillTipoPagos).
+        const esPartido = tipo ? tipo === "partido" : partidosIncl.length > 0;
         filas.push({
           rowIndex:      i,
           jugadorId:     String(all[i][1]),
@@ -1258,7 +1346,12 @@ function handleAction(data) {
           montoFinal:    Number(all[i][7]||0),
           motivoAjuste:  String(all[i][6]||""),
           etiqueta:      String(all[i][11]||""),
-          partidoId:     partidosIncl.length ? partidosIncl[0] : ""
+          esPartido,
+          esPremio:      tipo === "premio",
+          // Un premio se imputa al partido de su columna PartidoID; un pago de partido, al que
+          // dice PartidosIncluidos (que es lo que escribe saveRoster desde siempre).
+          partidoId:     esPartido ? (partidosIncl.length ? String(partidosIncl[0]) : String(all[i][15]||""))
+                                   : String(all[i][15]||"")
         });
       }
       if (!filas.length) return { ok: false, error: "No se encontraron los pagos a confirmar" };
@@ -1273,19 +1366,33 @@ function handleAction(data) {
         grupos[key].filas.push(f);
       }
 
-      // 3) Un movimiento por jugador, sumando sus filas e itemizando partidos y premios/ajustes.
+      // 3) Un lote que netea descuentos contra el sueldo puede dar negativo: eso no es un egreso,
+      //    es plata que el jugador le debe al club. Se corta antes de escribir nada — si se
+      //    validara adentro del loop de abajo, los jugadores ya procesados quedarían pagados
+      //    y el lote a medio confirmar.
+      for (const g of Object.values(grupos)) {
+        const neto = g.filas.reduce((s, f) => s + Number(f.montoFinal||0), 0);
+        if (neto < 0) {
+          return { ok: false, error: "Los descuentos de " + g.jugadorNombre + " (neto " + fmtMonto_(neto) +
+                   ") superan lo que se le debe. Ajustá el descuento o dejalo pendiente para el mes que viene." };
+        }
+      }
+
+      // 4) Un movimiento por jugador, sumando sus filas e itemizando partidos y premios/ajustes.
       let count = 0;
       const movimientosCreados = [];
       for (const g of Object.values(grupos)) {
         const items = g.filas.map(f => {
           const partidoInfo = f.partidoId ? partidoById[f.partidoId] : null;
           let desc;
-          if (f.partidoId) {
+          if (f.esPartido) {
             desc = partidoInfo ? (partidoInfo.numeroFecha + " vs " + partidoInfo.rival) : "Pago partido";
             if (f.motivoAjuste) desc += " — " + f.motivoAjuste;
           } else {
             desc = f.etiqueta || "Ajuste";
           }
+          // partidoId también en los premios: así Resumen > Por Partido los imputa al partido en
+          // que se ganaron en vez de prorratearlos entre los partidos del movimiento.
           return { desc, monto: f.montoFinal, partidoId: f.partidoId };
         });
         const montoFinal = items.reduce((s, it) => s + Number(it.monto||0), 0);
@@ -1293,7 +1400,7 @@ function handleAction(data) {
         // Concepto corto: numeroFecha de los partidos incluidos (no el desglose completo, que con
         // 2+ partidos queda kilométrico), + sufijo "premios" si hay ítems sueltos sin partido.
         const partidosIds = [...new Set(g.filas.filter(f => f.partidoId).map(f => f.partidoId))];
-        const hayPremios   = g.filas.some(f => !f.partidoId);
+        const hayPremios   = g.filas.some(f => !f.esPartido);
         let concepto;
         if (partidosIds.length) {
           const numerosFecha = partidosIds.map(pid => (partidoById[pid]||{}).numeroFecha || "").filter(Boolean);
@@ -1302,7 +1409,17 @@ function handleAction(data) {
           concepto = "Pago jugador " + g.jugadorNombre + " — " + items.map(it => it.desc).join(" + ");
         }
 
-        const observacion = [...new Set(g.filas.map(f => f.motivoAjuste).filter(Boolean))].join(" · ");
+        // Observación: motivos de ajuste + desglose legible de los premios/ajustes sueltos. El
+        // Concepto sólo dice "+ premios"; acá va qué premio y por cuánto, que es lo que el tesorero
+        // necesita para justificar la diferencia contra el monto del partido. Se concatena: los
+        // motivos de ajuste ya venían escribiéndose en este campo y no se pisan.
+        const partes = [...new Set(g.filas.map(f => f.motivoAjuste).filter(Boolean))];
+        const premios = g.filas.filter(f => !f.esPartido);
+        if (premios.length) {
+          partes.push("Premios/ajustes: " +
+            premios.map(f => (f.etiqueta || "Ajuste") + " " + fmtMonto_(f.montoFinal)).join(", "));
+        }
+        const observacion = partes.join(" · ");
 
         // partidoId del movimiento: el más reciente del grupo, sólo por compatibilidad con
         // filtros/tags viejos — el Resumen por Partido ya no depende de este campo si hay itemsDetalle.
@@ -1330,9 +1447,9 @@ function handleAction(data) {
         movimientosCreados.push(mov);
 
         for (const f of g.filas) {
-          sh.getRange(f.rowIndex + 1, 9, 1, 2).setValues([[ "pagado", fechaPago ]]);
-          sh.getRange(f.rowIndex + 1, 11).setValue(medioPago);
-          sh.getRange(f.rowIndex + 1, 13).setValue(movId);
+          sh.getRange(f.rowIndex + 1, PJ_IX.ESTADO, 1, 2).setValues([[ "pagado", fechaPago ]]);
+          sh.getRange(f.rowIndex + 1, PJ_IX.MEDIO_PAGO).setValue(medioPago);
+          sh.getRange(f.rowIndex + 1, PJ_IX.MOVIMIENTO_ID).setValue(movId);
           count++;
         }
       }
@@ -2028,8 +2145,8 @@ function revertirPagosDeMovimiento_(movId) {
   const pjAll = pjSh.getDataRange().getValues();
   for (let i = 1; i < pjAll.length; i++) {
     if (String(pjAll[i][12] || "").trim() !== movId) continue;
-    pjSh.getRange(i + 1, 9,  1, 3).setValues([["pendiente", "", ""]]); // Estado, FechaPago, MedioPago
-    pjSh.getRange(i + 1, 13).setValue("");                              // MovimientoID
+    pjSh.getRange(i + 1, PJ_IX.ESTADO, 1, 3).setValues([["pendiente", "", ""]]); // Estado, FechaPago, MedioPago
+    pjSh.getRange(i + 1, PJ_IX.MOVIMIENTO_ID).setValue("");
     out.jugadores.push(String(pjAll[i][2] || "jugador"));
   }
 

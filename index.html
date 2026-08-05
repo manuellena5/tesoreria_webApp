@@ -2963,9 +2963,12 @@ function sumarMontoAPartido(pg, m, monto) {
   }
 }
 
+const PARTIDO_RES_CATS_EXCLUIDAS = ["Movilidad", "Jugadores y Cuerpo Técnico"];
+
 function calcPartidoResumenRows() {
   const movsPartido = movimientos.filter(m =>
     (m.tipo === "INGRESO" || m.tipo === "EGRESO") &&
+    !PARTIDO_RES_CATS_EXCLUIDAS.includes(m.categoria) &&
     (m.partidoId || (m.itemsDetalle||[]).some(it => it.partidoId))
   );
   const partidoMap = {};

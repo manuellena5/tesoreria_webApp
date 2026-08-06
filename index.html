@@ -8276,6 +8276,14 @@ function renderConfig() {
       <div id="backfill-tipo-result" style="margin-top:10px"></div>
     </div>
 
+    <!-- Diagnóstico de arranque -->
+    <div class="cfg-card">
+      <div class="cfg-title">⏱️ Diagnóstico de arranque</div>
+      <p class="cfg-note" style="margin-bottom:10px">Mide cuánto tarda cada consulta que la app hace al abrirse, y cuánto pesa cada respuesta. Sirve para saber si la demora está en una consulta puntual o en la cantidad de idas y vueltas al servidor. Hace unas 25 consultas, así que puede tardar un rato.</p>
+      <button class="btn-secondary" id="btn-diag-arranque" onclick="runDiagArranque()">Medir arranque</button>
+      <div id="diag-result" style="margin-top:10px"></div>
+    </div>
+
     <!-- Integridad de datos -->
     <div class="cfg-card">
       <div class="cfg-title">🧩 Integridad de datos</div>
@@ -8354,6 +8362,89 @@ async function runBackfillTipoPagos() {
       : `<p class="cfg-note">Ya estaban todas tipadas — no había nada para completar.</p>`;
   } catch(e) {
     hideOverlay();
+    setBtnState(btnId, "error");
+    box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+// ── Diagnóstico de arranque ──────────────────────────────────
+// Las 12 consultas que hace initApp() están en dos Promise.all, así que en el navegador
+// salen "en paralelo" — pero Apps Script serializa las ejecuciones de un mismo usuario y
+// cada una vuelve a abrir la planilla, así que en el servidor se hacen una atrás de otra.
+// Esto mide las dos cosas por separado: el costo individual de cada consulta y el costo
+// real del lote entero, para distinguir "una consulta pesada" de "demasiadas idas y vueltas".
+const DIAG_ACCIONES = [
+  ["listMov",             () => Storage.listMov(),             "movimientos"],
+  ["listJugadores",       () => Storage.listJugadores(),       "jugadores"],
+  ["listGrupos",          () => Storage.listGrupos(),          "grupos"],
+  ["listAdherentes",      () => Storage.listAdherentes(),      "adherentes"],
+  ["listPagos",           () => Storage.listPagos(),           "pagos"],
+  ["getConfig",           () => Storage.getConfig(),           "config"],
+  ["listPartidos",        () => Storage.listPartidos(),        "partidos"],
+  ["listReservas",        () => Storage.listReservas(),        "reservas"],
+  ["listEventos",         () => Storage.listEventos(),         "eventos"],
+  ["listConfigJugadores", () => Storage.listConfigJugadores(), "configJugadores"],
+  ["listRoster",          () => Storage.listRoster(),          "roster"],
+  ["listPagosJugadores",  () => Storage.listPagosJugadores(),  "pagosJugadores"],
+];
+
+async function runDiagArranque() {
+  const btnId = "btn-diag-arranque";
+  const box   = document.getElementById("diag-result");
+  if (!getScriptUrl()) { toast("Configurá primero la URL del script", "err"); return; }
+  setBtnState(btnId, "saving");
+  box.innerHTML = `<p class="cfg-note">Midiendo…</p>`;
+  try {
+    // 1) Una consulta suelta primero, para separar el "cold start" de Apps Script (la primera
+    //    llamada después de un rato despierta el proyecto y puede tardar varios segundos).
+    const t0 = performance.now();
+    await Storage.getConfig();
+    const cold = performance.now() - t0;
+
+    // 2) Cada acción por separado, en serie: da el costo real de una ida y vuelta.
+    const filas = [];
+    for (const [nombre, fn, clave] of DIAG_ACCIONES) {
+      const t = performance.now();
+      let ms, peso = 0, items = null, err = "";
+      try {
+        const r = await fn();
+        ms   = performance.now() - t;
+        peso = JSON.stringify(r || {}).length;
+        const arr = r && r[clave];
+        items = Array.isArray(arr) ? arr.length : null;
+      } catch (e) { ms = performance.now() - t; err = e.message; }
+      filas.push({ nombre, ms, peso, items, err });
+    }
+
+    // 3) El lote completo como lo hace initApp, para ver cuánto se gana (o no) en paralelo.
+    const tLote = performance.now();
+    await Promise.all(DIAG_ACCIONES.map(([, fn]) => fn().catch(() => null)));
+    const lote = performance.now() - tLote;
+
+    const suma = filas.reduce((s, f) => s + f.ms, 0);
+    const pesoTotal = filas.reduce((s, f) => s + f.peso, 0);
+    filas.sort((a, b) => b.ms - a.ms);
+    const seg = ms => (ms / 1000).toFixed(2) + " s";
+    const kb  = b  => (b / 1024).toFixed(0) + " KB";
+
+    box.innerHTML = `
+      <div class="modal-detail-row"><span class="modal-detail-lbl">Primera consulta (arranque en frío)</span><span class="modal-detail-val">${seg(cold)}</span></div>
+      <div class="modal-detail-row"><span class="modal-detail-lbl">Las 12 consultas en serie</span><span class="modal-detail-val">${seg(suma)}</span></div>
+      <div class="modal-detail-row"><span class="modal-detail-lbl">Las 12 juntas (como hace la app hoy)</span><span class="modal-detail-val"><b>${seg(lote)}</b></span></div>
+      <div class="modal-detail-row"><span class="modal-detail-lbl">Datos descargados</span><span class="modal-detail-val">${kb(pesoTotal)}</span></div>
+      <p class="cfg-note" style="margin-top:10px">Si el lote junto tarda casi lo mismo que las 12 en serie, el cuello de botella es la <b>cantidad</b> de consultas, no su peso: el servidor las atiende de a una.</p>
+      <table class="pj-table" style="margin-top:8px">
+        <thead><tr><th>Consulta</th><th>Tiempo</th><th>Filas</th><th>Peso</th></tr></thead>
+        <tbody>${filas.map(f => `
+          <tr>
+            <td>${esc(f.nombre)}${f.err ? ` <span style="color:var(--red)">(${esc(f.err)})</span>` : ""}</td>
+            <td class="mono" style="${f.ms > 2000 ? "color:var(--warn)" : ""}">${seg(f.ms)}</td>
+            <td class="mono">${f.items === null ? "—" : f.items}</td>
+            <td class="mono">${kb(f.peso)}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+    setBtnState(btnId, "saved");
+  } catch (e) {
     setBtnState(btnId, "error");
     box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
   }

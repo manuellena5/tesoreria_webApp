@@ -1193,6 +1193,7 @@ const Storage = {
     if (!url) throw new Error("Sin URL configurada. Configurá el script en la pestaña ⚙️ Config.");
     return post(url, data);
   },
+  async bootstrap()         { return this._post({ action:"bootstrap"         }); },
   async listMov(mes)        { return this._post({ action:"listMov",      mes }); },
   async saveMov(mov)        { return this._post({ action:"saveMov",      mov }); },
   async updateMov(mov)      { return this._post({ action:"updateMov",    mov }); },
@@ -1457,12 +1458,57 @@ async function initApp() {
     goTab("config");
     return;
   }
+  // Arranque en dos tiempos. Traer todo del servidor cuesta unos segundos (una sola consulta,
+  // pero Apps Script tiene un piso de ~2 s por ejecución + arranque en frío), y esperar con la
+  // pantalla en blanco es lo que hacía sentir la app lentísima. Si hay una copia local de la
+  // última sesión, se pinta al instante y la actualización va por detrás: el usuario puede
+  // empezar a cargar un movimiento mientras llegan los datos frescos.
+  const hayCache = navigator.onLine && loadFromCacheIfAny();
+  if (hayCache) {
+    renderOfflineBanner();
+    goTab("nuevo");
+    mostrarRefrescando(true);
+    loadAllData()
+      .then(() => { rerenderTabActual(); renderOfflineBanner(); })
+      .finally(() => {
+        mostrarRefrescando(false);
+        if (navigator.onLine) syncPendingMovs().then(renderOfflineBanner);
+      });
+    return;
+  }
+
   showOverlay(navigator.onLine ? "Cargando datos…" : "Sin conexión — buscando datos guardados…");
   await loadAllData();
   hideOverlay();
   renderOfflineBanner();
   goTab("nuevo");
   if (navigator.onLine) syncPendingMovs().then(renderOfflineBanner);
+}
+
+/** Avisito de que los datos en pantalla son la copia local y se están actualizando. */
+function mostrarRefrescando(activo) {
+  let el = document.getElementById("refrescando-banner");
+  if (activo) {
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "refrescando-banner";
+      el.style.cssText = "position:fixed;bottom:70px;left:50%;transform:translateX(-50%);z-index:60;" +
+        "background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:6px 14px;" +
+        "font-size:12px;color:var(--text2);box-shadow:0 2px 12px rgba(0,0,0,.4)";
+      el.textContent = "Actualizando datos…";
+      document.body.appendChild(el);
+    }
+  } else if (el) el.remove();
+}
+
+/** Vuelve a dibujar la pestaña que el usuario está mirando, sin sacarlo de donde está. */
+function rerenderTabActual() {
+  // Con un modal abierto no redibujamos: el usuario está en el medio de algo y perdería
+  // lo que tenga a medio escribir. Lo mismo si está cargando un movimiento — el formulario
+  // vive en el DOM, no en F, hasta que se guarda.
+  if (document.getElementById("modal-root")?.innerHTML.trim()) return;
+  if (currentTab === "nuevo" && (F.concepto || F.monto)) return;
+  goTab(currentTab);
 }
 
 async function loadAllData(_esReintento) {
@@ -1473,39 +1519,70 @@ async function loadAllData(_esReintento) {
     return;
   }
   try {
-    const [rMov, rJug, rGrp, rAdh, rPag, rCfg, rPar, rRes, rEve] = await Promise.all([
-      Storage.listMov(),
-      Storage.listJugadores(),
-      Storage.listGrupos(),
-      Storage.listAdherentes(),
-      Storage.listPagos(),
-      Storage.getConfig(),
-      Storage.listPartidos(),
-      Storage.listReservas(),
-      Storage.listEventos(),
-    ]);
-    if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
-    if (rJug.ok) jugadores   = rJug.jugadores   || [];
-    if (rGrp.ok) grupos      = rGrp.grupos       || [];
-    if (rAdh.ok) adherentes  = rAdh.adherentes   || [];
-    if (rPag.ok) pagos       = rPag.pagos        || [];
-    if (rPar.ok) partidos    = rPar.partidos     || [];
-    if (rRes.ok) reservas    = rRes.reservas     || [];
-    if (rEve.ok) eventos     = rEve.eventos      || [];
-    // Módulo de Pagos a Jugadores: en su propio Promise.all/try — si algo falla acá
-    // (ej. límite de ejecuciones simultáneas de Apps Script) no debe tumbar la carga
-    // del resto de la app (Partidos, Movimientos, etc. de arriba).
+    // Una sola consulta que trae todo (ver el case "bootstrap" en Code.gs). Si el backend
+    // todavía no fue redeployado con esa acción, cae al camino viejo de 12 consultas: el
+    // index.html se publica por GitHub Pages y el Code.gs a mano, así que hay una ventana
+    // en la que el front es nuevo y el backend viejo.
+    let rBoot = null;
     try {
-      const [rCfgJ, rRos, rPJ] = await Promise.all([
-        Storage.listConfigJugadores(),
-        Storage.listRoster(),
-        Storage.listPagosJugadores(),
+      const r = await Storage.bootstrap();
+      if (r && r.ok && r.jugadores !== undefined) rBoot = r;
+    } catch (eBoot) {
+      if (isNetworkError(eBoot)) throw eBoot;  // sin red: lo maneja el catch de afuera
+    }
+
+    let rCfg;
+    if (rBoot) {
+      if (rBoot.movimientos)     movimientos     = rBoot.movimientos.map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
+      if (rBoot.jugadores)       jugadores       = rBoot.jugadores;
+      if (rBoot.grupos)          grupos          = rBoot.grupos;
+      if (rBoot.adherentes)      adherentes      = rBoot.adherentes;
+      if (rBoot.pagos)           pagos           = rBoot.pagos;
+      if (rBoot.partidos)        partidos        = rBoot.partidos;
+      if (rBoot.reservas)        reservas        = rBoot.reservas;
+      if (rBoot.eventos)         eventos         = rBoot.eventos;
+      if (rBoot.configJugadores) configJugadores = rBoot.configJugadores;
+      if (rBoot.roster)          rosterPartidos  = rBoot.roster;
+      if (rBoot.pagosJugadores)  pagosJugadores  = rBoot.pagosJugadores;
+      const fallaron = Object.keys(rBoot.errores || {});
+      if (fallaron.length) toast("No se pudo cargar: " + fallaron.join(", "), "err");
+      rCfg = { ok: rBoot.config !== null && rBoot.config !== undefined, config: rBoot.config || {} };
+    } else {
+      const [rMov, rJug, rGrp, rAdh, rPag, rCfg0, rPar, rRes, rEve] = await Promise.all([
+        Storage.listMov(),
+        Storage.listJugadores(),
+        Storage.listGrupos(),
+        Storage.listAdherentes(),
+        Storage.listPagos(),
+        Storage.getConfig(),
+        Storage.listPartidos(),
+        Storage.listReservas(),
+        Storage.listEventos(),
       ]);
-      if (rCfgJ.ok) configJugadores = rCfgJ.configJugadores || [];
-      if (rRos.ok)  rosterPartidos  = rRos.roster           || [];
-      if (rPJ.ok)   pagosJugadores  = rPJ.pagosJugadores    || [];
-    } catch (ePagos) {
-      toast("No se pudo cargar el módulo de Pagos a Jugadores: " + ePagos.message, "err");
+      rCfg = rCfg0;
+      if (rMov.ok) movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
+      if (rJug.ok) jugadores   = rJug.jugadores   || [];
+      if (rGrp.ok) grupos      = rGrp.grupos       || [];
+      if (rAdh.ok) adherentes  = rAdh.adherentes   || [];
+      if (rPag.ok) pagos       = rPag.pagos        || [];
+      if (rPar.ok) partidos    = rPar.partidos     || [];
+      if (rRes.ok) reservas    = rRes.reservas     || [];
+      if (rEve.ok) eventos     = rEve.eventos      || [];
+      // Módulo de Pagos a Jugadores: en su propio Promise.all/try — si algo falla acá
+      // (ej. límite de ejecuciones simultáneas de Apps Script) no debe tumbar la carga
+      // del resto de la app (Partidos, Movimientos, etc. de arriba).
+      try {
+        const [rCfgJ, rRos, rPJ] = await Promise.all([
+          Storage.listConfigJugadores(),
+          Storage.listRoster(),
+          Storage.listPagosJugadores(),
+        ]);
+        if (rCfgJ.ok) configJugadores = rCfgJ.configJugadores || [];
+        if (rRos.ok)  rosterPartidos  = rRos.roster           || [];
+        if (rPJ.ok)   pagosJugadores  = rPJ.pagosJugadores    || [];
+      } catch (ePagos) {
+        toast("No se pudo cargar el módulo de Pagos a Jugadores: " + ePagos.message, "err");
+      }
     }
     if (rCfg.ok) {
       applyCuentasMetodos(rCfg.config || {});

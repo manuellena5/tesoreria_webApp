@@ -215,6 +215,53 @@ function doGet() {
 function handleAction(data) {
   switch (data.action) {
 
+    // ─── ARRANQUE ─────────────────────────────────────────────
+    //
+    // Todo lo que la app necesita al abrirse, en UNA sola ejecución.
+    //
+    // Antes el front hacía 12 requests (dos Promise.all). Medido contra la planilla real:
+    // cada uno costaba entre 2,1 y 5 segundos **sin importar cuánto devolvía** — listGrupos
+    // tardaba 4,9 s para traer 6 filas y 1 KB. Ese piso no son los datos: es abrir la planilla
+    // (getSpreadsheet → PropertiesService + openById) y esperar el lock de doPost, que
+    // serializa las ejecuciones. Doce veces ese costo daba ~14 s con todo en paralelo, más
+    // ~4,4 s de arranque en frío la primera vez: los 20 segundos que veía el usuario.
+    //
+    // Acá la planilla se abre una vez y el lock se toma una vez. Los datos en sí son baratos
+    // (768 KB, de los cuales 714 KB son movimientos).
+    //
+    // Cada bloque va en su propio try: que falle una hoja no puede dejar sin arrancar a la app
+    // entera. Lo que falla vuelve como null y el front decide si reintentar suelto.
+    case "bootstrap": {
+      const out = { ok: true, errores: {} };
+      const partes = [
+        ["movimientos",     "listMov",             "movimientos"],
+        ["jugadores",       "listJugadores",       "jugadores"],
+        ["grupos",          "listGrupos",          "grupos"],
+        ["adherentes",      "listAdherentes",      "adherentes"],
+        ["pagos",           "listPagos",           "pagos"],
+        ["config",          "getConfig",           "config"],
+        ["partidos",        "listPartidos",        "partidos"],
+        ["reservas",        "listReservas",        "reservas"],
+        ["eventos",         "listEventos",         "eventos"],
+        ["configJugadores", "listConfigJugadores", "configJugadores"],
+        ["roster",          "listRoster",          "roster"],
+        ["pagosJugadores",  "listPagosJugadores",  "pagosJugadores"]
+      ];
+      for (const p of partes) {
+        const destino = p[0], accion = p[1], clave = p[2];
+        try {
+          const r = handleAction({ action: accion });
+          out[destino] = (r && r.ok) ? r[clave] : null;
+          if (!r || !r.ok) out.errores[destino] = (r && r.error) || "sin respuesta";
+        } catch (e) {
+          out[destino] = null;
+          out.errores[destino] = e.message;
+        }
+      }
+      return out;
+    }
+
+
     // ─── MOVIMIENTOS ─────────────────────────────────────────
 
     case "listMov": {

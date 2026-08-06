@@ -8053,25 +8053,46 @@ function pjToggleChip(partidoId) {
 // IDs de las filas de "Pagos Jugadores" que entran en el pago. El checkbox del jugador arrastra
 // sus partidos pendientes y su sueldo/descuentos; los premios entran SÓLO si están tildados uno
 // por uno, que es el punto de tener checkbox propio.
-function pjFilasSeleccionadas() {
+/**
+ * Traduce lo tildado en pantalla a IDs de filas de "Pagos Jugadores".
+ *
+ * Separada de la lectura del DOM a propósito: acá vive la regla de negocio que arregló el bug
+ * de que un premio se cobrara solo, y así se puede verificar sin navegador (ver spec/frontend.js).
+ * `seleccion` es [{jugadorId, incluido, premiosIds}] — una entrada por fila de la tabla.
+ */
+function pjIdsDeSeleccion(seleccion) {
   const partidosSel = [...partidos].filter(p => pjPartidosSel.includes(p.id));
   const ids = [];
-  document.querySelectorAll("#pj-transf-table tbody tr[data-jug]").forEach(tr => {
-    const jid  = tr.dataset.jug;
-    const main = tr.querySelector(".pj-transf-cb");
-    if (main && main.checked && !main.disabled) {
-      const cfg = configJugadores.find(c => c.idJugador === jid);
+  (seleccion || []).forEach(sel => {
+    if (sel.incluido) {
+      const cfg = configJugadores.find(c => c.idJugador === sel.jugadorId);
       if (cfg && cfg.frecuencia === "partido") {
         partidosSel.forEach(p => {
-          const fila = pjFilaPartido(jid, p.id);
+          const fila = pjFilaPartido(sel.jugadorId, p.id);
           if (fila && fila.estado === "pendiente") ids.push(fila.id);
         });
       }
-      pjFilasSueldoPendiente(jid).forEach(p => ids.push(p.id));
+      pjFilasSueldoPendiente(sel.jugadorId).forEach(p => ids.push(p.id));
     }
-    tr.querySelectorAll(".pj-premio-cb:checked").forEach(cb => ids.push(cb.value));
+    // Los premios entran SÓLO si están tildados uno por uno: tildar al jugador para pagarle el
+    // partido no tiene que arrastrárselos. Van afuera del if a propósito — un jugador que sólo
+    // tiene premios tiene el checkbox principal deshabilitado y aun así puede cobrarlos.
+    (sel.premiosIds || []).forEach(id => ids.push(id));
   });
   return [...new Set(ids)];
+}
+
+/** Lee la tabla de transferencias y delega la regla en pjIdsDeSeleccion. */
+function pjFilasSeleccionadas() {
+  const seleccion = [...document.querySelectorAll("#pj-transf-table tbody tr[data-jug]")].map(tr => {
+    const main = tr.querySelector(".pj-transf-cb");
+    return {
+      jugadorId:  tr.dataset.jug,
+      incluido:   !!(main && main.checked && !main.disabled),
+      premiosIds: [...tr.querySelectorAll(".pj-premio-cb:checked")].map(cb => cb.value)
+    };
+  });
+  return pjIdsDeSeleccion(seleccion);
 }
 
 /** Primer jugador del lote cuyo neto (sueldo + premios − descuentos) da negativo, o null.

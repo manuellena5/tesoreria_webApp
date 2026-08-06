@@ -1347,7 +1347,6 @@ function handleAction(data) {
           motivoAjuste:  String(all[i][6]||""),
           etiqueta:      String(all[i][11]||""),
           esPartido,
-          esPremio:      tipo === "premio",
           // Un premio se imputa al partido de su columna PartidoID; un pago de partido, al que
           // dice PartidosIncluidos (que es lo que escribe saveRoster desde siempre).
           partidoId:     esPartido ? (partidosIncl.length ? String(partidosIncl[0]) : String(all[i][15]||""))

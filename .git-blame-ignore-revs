@@ -8,6 +8,12 @@
 # cambio, convirtió index.html de CRLF a LF y eso reescribió las 9.000 líneas del archivo.
 4738c44fc46bed43fcda9223419f7eae144e7d29
 
-# Acá abajo va el hash del commit que restaura CRLF (el de estos arreglos). Después de
-# commitear, agregalo con:
+# e82de56 — "restaura CRLF en index.html y fija los finales de línea": la vuelta atrás del
+# anterior. Sin cambios de contenido (el árbol es byte por byte igual salvo los CR), pero
+# vuelve a tocar las 9.000 líneas, así que también hay que saltearlo.
+e82de5676f047b1f9112f37d2218abc134393f6a
+
+# Si algún día hay que reformatear de nuevo: que el commit sea SÓLO el reformateo, sin
+# cambios de contenido de otros archivos. Este archivo ignora el commit para todo el repo,
+# no por archivo, así que lo que venga colgado pierde el blame igual. Después de commitear:
 #   git log -1 --format=%H >> .git-blame-ignore-revs

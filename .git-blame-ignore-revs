@@ -1,0 +1,13 @@
+# Commits que reescribieron un archivo entero por un cambio de fin de línea.
+# `git blame` los saltea y atribuye cada línea al commit que la cambió de verdad.
+#
+# Activarlo una vez por clon:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# 4738c44 — "se corrigen pantalla de pagos de jugadores": junto con 393 líneas reales de
+# cambio, convirtió index.html de CRLF a LF y eso reescribió las 9.000 líneas del archivo.
+4738c44fc46bed43fcda9223419f7eae144e7d29
+
+# Acá abajo va el hash del commit que restaura CRLF (el de estos arreglos). Después de
+# commitear, agregalo con:
+#   git log -1 --format=%H >> .git-blame-ignore-revs

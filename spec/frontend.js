@@ -166,6 +166,136 @@ igual("un descuento se muestra negativo", app.fmtSigned(-8000), "−$8.000");
 igual("un cobro no lleva signo",          app.fmtSigned(8000),  "$8.000");
 igual("cero es cero",                     app.fmtSigned(0),     "$0");
 
+// ══════════════════════════════════════════════════════════════
+// JSON para el generador de placas (armarPlacaJson)
+// ══════════════════════════════════════════════════════════════
+
+/** Movimiento mínimo para Resumen > Por Partido: lo que leen calcPartidoResumenRows y sumarMontoAPartido. */
+function mov(codRubro, tipo, monto, extra) {
+  const rub = app.RUBROS.find(r => r.cod === codRubro) || { nombre: "", cat: "" };
+  return Object.assign({
+    id: "m" + Math.random().toString(36).slice(2, 8), fecha: "2026-08-03",
+    codRubro, rubro: rub.nombre, categoria: rub.cat, concepto: "", tipo,
+    ingreso: tipo === "INGRESO" ? monto : 0,
+    egreso:  tipo === "EGRESO"  ? monto : 0,
+    partidoId: "p1", itemsDetalle: []
+  }, extra || {});
+}
+
+/** El renglón de la placa con ese concepto, buscando en todos los bloques. */
+function item(json, c) {
+  for (const b of json.bloques) { const it = b.items.find(x => x.c === c); if (it) return it; }
+  return null;
+}
+function sumaItems(bloque) { return bloque.items.reduce((s, it) => s + it.m, 0); }
+
+function sembrarPartido() {
+  app.partidos = [
+    { id: "p1", fecha: "2026-08-03", rival: "Colón", numeroFecha: "22", condicion: "LOCAL", torneo: "Clausura" },
+    { id: "p2", fecha: "2026-08-10", rival: "Unión", numeroFecha: "23", condicion: "LOCAL", torneo: "Clausura" }
+  ];
+  app.movimientos = [
+    mov("2",   "INGRESO", 1198300),                                   // buffet
+    mov("2",   "EGRESO",   817840),
+    mov("1",   "INGRESO",  900000),                                   // entradas
+    mov("4",   "INGRESO",  345000),                                   // tribuna
+    mov("3",   "INGRESO",   82000),                                   // venta número → otros ingresos
+    mov("14a", "INGRESO",   25000),                                   // GOPASS → otros ingresos
+    mov("13",  "EGRESO",   635436),                                   // policía
+    mov("12",  "EGRESO",   790000),                                   // árbitros
+    mov("36",  "EGRESO",    85000, { concepto: "Enfermera de la fecha" }),
+    mov("36",  "EGRESO",    40000, { concepto: "AMBULANCIA del partido" }),
+    mov("14b", "EGRESO",   100000),                                   // filmación
+    mov("31",  "EGRESO",    63000),                                   // limpieza → otros gastos
+    mov("19",  "EGRESO",   500000),                                   // sueldo jugadores: excluido por categoría
+    mov("15",  "EGRESO",    30000),                                   // movilidad: excluida por categoría
+    mov("49",  "INTERNO",  200000),                                   // transferencia: no es INGRESO/EGRESO
+  ];
+}
+
+seccion("9 · Placa: mapeo de rubros a renglones del flyer");
+sembrarPartido();
+let fila  = app.calcPartidoResumenRows().find(r => r.p.id === "p1");
+let placa = app.armarPlacaJson(fila);
+
+igual("ingresos de buffet",        item(placa, "Ingresos buffet (local + visitante)").m,  1198300);
+igual("gastos de buffet en negativo", item(placa, "Gastos buffet").m,                     -817840);
+igual("entradas + tribuna juntas",  item(placa, "Venta entradas y tribuna").m,             1245000);
+igual("venta número + GOPASS → otros ingresos", item(placa, "Otros ingresos (Sorteo)").m,   107000);
+igual("policía",                    item(placa, "Policía").m,                             -635436);
+igual("árbitros",                   item(placa, "Árbitros").m,                            -790000);
+igual("el rubro 36 sin 'ambulancia' va a Enfermera", item(placa, "Enfermera").m,            -85000);
+igual("y con 'AMBULANCIA' en el concepto va a Ambulancia", item(placa, "Ambulancia").m,     -40000);
+igual("filmación",                  item(placa, "Filmación").m,                            -100000);
+igual("limpieza cae en el catch-all de egresos", item(placa, "Otros gastos (limpieza)").m,   -63000);
+
+seccion("10 · Placa: cuadre con la tabla Por Partido");
+igual("el neto de BUFFET es el de la tabla",  sumaItems(placa.bloques[0]), fila.netoBuffet);
+igual("el saldo final es el Total Neto",      app.placaSaldoFinal(placa),  fila.totalNeto);
+igual("y ese Total Neto es el esperado",      fila.totalNeto,              19024);
+igual("los gastos de cancha desglosados suman la columna G.Cancha",
+      fila.pg.policia + fila.pg.arbitros + fila.pg.enfermera + fila.pg.ambulancia + fila.pg.filmacion,
+      fila.pg.gastosCancha);
+check("sueldos y movilidad quedan fuera (como en la tabla)",
+      app.placaSaldoFinal(placa) === 19024, "saldo = " + app.placaSaldoFinal(placa));
+
+seccion("11 · Placa: contrato del JSON");
+const rt = JSON.parse(JSON.stringify(placa));   // parsea y sobrevive el round-trip
+igual("fecha es el número de fecha, como texto", rt.fecha, "22");
+check("y es string, no número", typeof rt.fecha === "string", typeof rt.fecha);
+igual("sub trae rival y fecha del partido", rt.sub, "vs. Colón · 03/08/2026");
+igual("título", rt.titulo, "RECAUDACIÓN");
+igual("etiqueta del saldo", rt.final, "SALDO FINAL");
+igual("pie", rt.pie, "@cdmitre · Fútbol Mayor");
+igual("asistencia vacía (la app no tiene el dato)", rt.asistencia, []);
+igual("neto es la etiqueta del bloque, no un número", [rt.bloques[0].neto, rt.bloques[1].neto],
+      ["NETO BUFFET", "NETO CANCHA"]);
+
+const todosLosItems = rt.bloques.reduce((a, b) => a.concat(b.items), []);
+check("ningún monto es string",
+      todosLosItems.every(it => typeof it.m === "number"),
+      todosLosItems.filter(it => typeof it.m !== "number").map(it => it.c).join(","));
+check("ningún monto tiene decimales",
+      todosLosItems.every(it => Number.isInteger(it.m)),
+      todosLosItems.filter(it => !Number.isInteger(it.m)).map(it => it.c + "=" + it.m).join(","));
+check("neg coincide con el signo en todos los renglones cargados",
+      todosLosItems.every(it => it.m === 0 || (it.m < 0) === it.neg),
+      todosLosItems.filter(it => it.m !== 0 && (it.m < 0) !== it.neg).map(it => it.c).join(","));
+igual("policía y árbitros comparten grupo",
+      [item(rt, "Policía").g, item(rt, "Árbitros").g], ["Policía y árbitros", "Policía y árbitros"]);
+igual("enfermera, filmación y ambulancia comparten grupo",
+      [item(rt, "Enfermera").g, item(rt, "Filmación").g, item(rt, "Ambulancia").g],
+      ["Enfermera, filmación y ambulancia", "Enfermera, filmación y ambulancia", "Enfermera, filmación y ambulancia"]);
+igual("los renglones sueltos van sin grupo",
+      [item(rt, "Ingresos buffet (local + visitante)").g, item(rt, "Otros gastos (limpieza)").g], ["", ""]);
+check("no se emite el saldo final (lo calcula el generador)",
+      !("saldo" in rt) && !("total" in rt), Object.keys(rt).join(","));
+
+seccion("12 · Placa: renglones en 0 y partido sin datos");
+sembrarPartido();
+app.movimientos = app.movimientos.filter(m => m.codRubro !== "36");
+placa = app.armarPlacaJson(app.calcPartidoResumenRows().find(r => r.p.id === "p1"));
+igual("sin movimientos de rubro 36, Enfermera va en 0", item(placa, "Enfermera").m, 0);
+check("pero el renglón se manda igual, con neg:true", item(placa, "Enfermera").neg === true);
+igual("un partido sin movimientos no da datos", app.placaDatosDePartido("p2"), null);
+
+seccion("13 · Placa: pago repartido entre dos partidos (itemsDetalle)");
+sembrarPartido();
+// Un solo pago de árbitros que cubrió las dos fechas: la placa tiene que imputar lo mismo que la tabla.
+app.movimientos = [
+  mov("12", "EGRESO", 100000, { partidoId: "", itemsDetalle: [
+    { desc: "Fecha 22", monto: 60000, partidoId: "p1" },
+    { desc: "Fecha 23", monto: 40000, partidoId: "p2" }
+  ]})
+];
+const filas2 = app.calcPartidoResumenRows();
+const pl1 = app.armarPlacaJson(filas2.find(r => r.p.id === "p1"));
+const pl2 = app.armarPlacaJson(filas2.find(r => r.p.id === "p2"));
+igual("a p1 le toca su parte",  item(pl1, "Árbitros").m, -60000);
+igual("a p2 la suya",           item(pl2, "Árbitros").m, -40000);
+igual("y cada placa cuadra con su fila", [app.placaSaldoFinal(pl1), app.placaSaldoFinal(pl2)],
+      [filas2.find(r => r.p.id === "p1").totalNeto, filas2.find(r => r.p.id === "p2").totalNeto]);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

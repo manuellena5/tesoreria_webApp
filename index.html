@@ -3119,7 +3119,17 @@ function sumarMontoAPartido(pg, m, monto) {
   } else {
     pg.egresos += monto;
     if (m.codRubro === "2")                              pg.buffetEgr    += monto;
-    else if (["12","13","14b","36"].includes(m.codRubro)) pg.gastosCancha += monto;
+    else if (["12","13","14b","36"].includes(m.codRubro)) {
+      pg.gastosCancha += monto;
+      // Desglose fino para la placa de redes (ver armarPlacaJson): la tabla muestra los gastos de
+      // cancha en una sola columna, pero el flyer pide un renglón por servicio. El rubro 36 es uno
+      // solo ("SERVICIO MEDICO Y AMBULANCIA | CANCHA"), así que se parte por el texto del concepto.
+      if      (m.codRubro === "13")  pg.policia   += monto;
+      else if (m.codRubro === "12")  pg.arbitros  += monto;
+      else if (m.codRubro === "14b") pg.filmacion += monto;
+      else if (normStr(m.concepto).includes("ambulancia")) pg.ambulancia += monto;
+      else                                                 pg.enfermera  += monto;
+    }
     else                                                  pg.otrosEgr     += monto;
   }
 }
@@ -3133,7 +3143,10 @@ function calcPartidoResumenRows() {
     (m.partidoId || (m.itemsDetalle||[]).some(it => it.partidoId))
   );
   const partidoMap = {};
-  const partidoPg = id => partidoMap[id] || (partidoMap[id] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0, otrosEgr:0 });
+  // policia/arbitros/enfermera/ambulancia/filmacion son el desglose de gastosCancha (su suma lo iguala):
+  // no los usa la tabla, sólo la placa de redes.
+  const partidoPg = id => partidoMap[id] || (partidoMap[id] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0, otrosEgr:0,
+                                                                policia:0, arbitros:0, enfermera:0, ambulancia:0, filmacion:0 });
 
   for (const m of movsPartido) {
     const total = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
@@ -3256,6 +3269,7 @@ function renderPartidoResumenBody() {
       <td>${pg.otrosIng ? fmt(pg.otrosIng) : ""}</td>
       <td class="${netoBuffet>=0?"ing":"egr"}">${netoBuffet!==0?(netoBuffet>=0?"+":"−")+fmt(netoBuffet):""}</td>
       <td class="${netoClass}">${netoSign}${fmt(totalNeto)}</td>
+      <td><button class="btn-sm" title="JSON para la placa de redes" onclick="openPlacaModal('${esc(escJs(p.id))}')">🖼️</button></td>
     </tr>`;
   }).join("");
 
@@ -3270,6 +3284,7 @@ function renderPartidoResumenBody() {
     <td>${fmt(totOtrosIng)}</td>
     <td class="${(totBuffetIng-totBuffetEgr)>=0?"ing":"egr"}">${(totBuffetIng-totBuffetEgr)>=0?"+":"−"}${fmt(totBuffetIng-totBuffetEgr)}</td>
     <td class="${totNetoClass}">${totNeto>=0?"+":"−"}${fmt(totNeto)}</td>
+    <td></td>
   </tr>`;
 
   return `
@@ -3285,6 +3300,7 @@ function renderPartidoResumenBody() {
           ${thOrdenPartidoRes("otrosIng","Otros Ing.")}
           ${thOrdenPartidoRes("netoBuffet","Neto Buffet")}
           ${thOrdenPartidoRes("totalNeto","Total Neto")}
+          <th></th>
         </tr></thead>
         <tbody>${partidoRows}${totRows}</tbody>
       </table>
@@ -3313,6 +3329,122 @@ function exportPartidoResExcel() {
   const partidoPart = partidoResFiltroPartidoId ? "1partido" : "todos";
   XLSX.writeFile(wb, `por_partido_${torneoPart}_${partidoPart}_${today()}.xlsx`);
   toast("Excel exportado ✓", "ok");
+}
+
+// ── JSON para el generador de placas de redes ─────────────────────────────
+// El flyer del balance de la fecha se arma en Placas_Recaudacion.html, que recibe el balance
+// pegado como JSON en su cuadro "Importar / exportar datos". Este bloque genera ese JSON desde
+// la misma agregación que alimenta la tabla Por Partido, así el saldo de la placa cuadra con la
+// columna Total Neto por construcción y no hay dos cálculos que mantener en sincronía.
+//
+// Del contrato del generador: los egresos van con `m` negativo; `neg` es redundante ahí pero se
+// manda igual porque es lo único que distingue un ingreso de un egreso cuando el monto es 0. Los
+// renglones que comparten `g` se colapsan en la placa en una línea con el subtotal. `neto` es la
+// etiqueta del total del bloque, no un número: el generador suma los items. El saldo final
+// (suma de los netos) también lo calcula el generador, por eso no se emite.
+const PLACA_G_SEGURIDAD = "Policía y árbitros";
+const PLACA_G_SERVICIOS = "Enfermera, filmación y ambulancia";
+
+function armarPlacaJson({p, pg}) {
+  const r = n => Math.round(n || 0);  // montos al peso, sin decimales ni separadores: número JSON plano
+  const fechaDMY = p.fecha ? p.fecha.slice(8)+"/"+p.fecha.slice(5,7)+"/"+p.fecha.slice(0,4) : "";
+  return {
+    fecha:   String(p.numeroFecha || ""),   // número de fecha del torneo, no una fecha calendario
+    titulo:  "RECAUDACIÓN",
+    sub:     "vs. " + (p.rival || "") + (fechaDMY ? " · " + fechaDMY : ""),
+    final:   "SALDO FINAL",
+    pie:     "@cdmitre · Fútbol Mayor",
+    asisTit: "ASISTENCIA",
+    asistencia: [],                          // la app no registra asistencia: se completa a mano en el generador
+    bloques: [
+      { nombre: "BUFFET", neto: "NETO BUFFET", items: [
+        { c: "Ingresos buffet (local + visitante)", m:  r(pg.buffetIng), g: "", neg: false },
+        { c: "Gastos buffet",                       m: -r(pg.buffetEgr), g: "", neg: true  },
+      ]},
+      { nombre: "CANCHA", neto: "NETO CANCHA", items: [
+        { c: "Venta entradas y tribuna", m:  r(pg.entradas),   g: "", neg: false },
+        { c: "Otros ingresos (Sorteo)",  m:  r(pg.otrosIng),   g: "", neg: false },
+        { c: "Policía",                  m: -r(pg.policia),    g: PLACA_G_SEGURIDAD, neg: true },
+        { c: "Árbitros",                 m: -r(pg.arbitros),   g: PLACA_G_SEGURIDAD, neg: true },
+        { c: "Enfermera",                m: -r(pg.enfermera),  g: PLACA_G_SERVICIOS, neg: true },
+        { c: "Filmación",                m: -r(pg.filmacion),  g: PLACA_G_SERVICIOS, neg: true },
+        { c: "Ambulancia",               m: -r(pg.ambulancia), g: PLACA_G_SERVICIOS, neg: true },
+        { c: "Otros gastos (limpieza)",  m: -r(pg.otrosEgr),   g: "", neg: true },
+      ]},
+    ]
+  };
+}
+
+// Suma de todos los items de todos los bloques = el saldo final que va a mostrar la placa.
+// Se calcula acá sólo para contrastarlo contra el Total Neto de la tabla en el modal.
+function placaSaldoFinal(json) {
+  return json.bloques.reduce((s, b) => s + b.items.reduce((si, it) => si + it.m, 0), 0);
+}
+
+// Devuelve { json, totalNeto, label } del partido, o null si no tiene movimientos imputados.
+function placaDatosDePartido(partidoId) {
+  const row = calcPartidoResumenRows().find(r => r.p.id === partidoId);
+  if (!row) return null;
+  return { json: armarPlacaJson(row), totalNeto: row.totalNeto, label: partidoResLabel(row.p) };
+}
+
+function openPlacaModal(partidoId) {
+  const d = placaDatosDePartido(partidoId);
+  if (!d) { toast("Ese partido no tiene movimientos", "err"); return; }
+
+  const saldo = placaSaldoFinal(d.json);
+  const dif   = saldo - d.totalNeto;
+  // El prorrateo de los pagos multipartido deja decimales y cada renglón se redondea al peso, así que
+  // puede quedar una diferencia de unos pesos. Se muestra, no se maquilla.
+  const cuadre = dif === 0
+    ? `<span class="ing">✓ cuadra con la tabla</span>`
+    : `<span class="egr">⚠ difiere en ${fmtSigned(dif)} (redondeo al peso)</span>`;
+
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div style="text-align:center;font-size:12px;font-weight:600;color:var(--accent);letter-spacing:.05em;margin-bottom:2px">
+          🖼️ JSON PARA LA PLACA
+        </div>
+        <div style="text-align:center;font-size:15px;font-weight:600;margin-bottom:8px">${esc(d.label)}</div>
+        <div class="modal-detail-row"><span class="modal-detail-lbl">Saldo placa</span><span class="modal-detail-val">${fmtSigned(saldo)}</span></div>
+        <div class="modal-detail-row"><span class="modal-detail-lbl">Total Neto app</span><span class="modal-detail-val">${fmtSigned(d.totalNeto)}</span></div>
+        <div style="text-align:center;font-size:12px;margin:6px 0">${cuadre}</div>
+        <textarea id="placa-json" class="inp" readonly rows="10"
+                  style="width:100%;font-family:monospace;font-size:11px;white-space:pre;resize:vertical"
+                  onclick="this.select()">${esc(JSON.stringify(d.json, null, 2))}</textarea>
+        <p class="note">Pegalo en "Importar / exportar datos" del generador de placas.</p>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cerrar</button>
+          <button class="btn-main" style="flex:1" onclick="copiarPlacaJson()">📋 Copiar JSON para placa</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function copiarPlacaJson() {
+  const ta = document.getElementById("placa-json");
+  if (!ta) return;
+  const fallback = () => {
+    // Safari viejo / contextos sin permiso de portapapeles: seleccionar y copiar a la vieja usanza.
+    try {
+      ta.removeAttribute("readonly");
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      const ok = document.execCommand("copy");
+      ta.setAttribute("readonly", "readonly");
+      toast(ok ? "JSON copiado ✓" : "No se pudo copiar — copialo del cuadro", ok ? "ok" : "err");
+    } catch (e) {
+      ta.setAttribute("readonly", "readonly");
+      toast("No se pudo copiar — copialo del cuadro", "err");
+    }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ta.value).then(() => toast("JSON copiado ✓", "ok"), fallback);
+  } else {
+    fallback();
+  }
 }
 
 function renderPartidoResumen() {

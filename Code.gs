@@ -1223,6 +1223,10 @@ function handleAction(data) {
 
     // ─── PAGOS JUGADORES ──────────────────────────────────────
 
+    // El Mes viaja como "YYYY-MM", y eso Sheets lo interpreta como fecha: la celda queda con un
+    // Date y al leerla salía "Sat Aug 01 2026 00:00:00 GMT-0300…", que no matchea con nada.
+    // Se normaliza al leer (arregla las filas ya guardadas así) y se escribe la celda como texto
+    // plano en savePagoJugador (evita que vuelva a pasar), igual que con la columna timestamp.
     case "listPagosJugadores": {
       const sh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
       const all = sh.getDataRange().getValues();
@@ -1243,7 +1247,7 @@ function handleAction(data) {
           medioPago:         String(r[10]||""),
           etiqueta:          String(r[11]||""),
           movimientoId:      String(r[12]||""),
-          mes:               String(r[13]||""),
+          mes:               normalizarMesPJ_(r[13]),
           tipo:              String(r[14]||""),  // "" en las filas anteriores al backfill
           partidoId:         String(r[15]||"")
         }));
@@ -1266,6 +1270,7 @@ function handleAction(data) {
               p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||"", p.mes||"",
               p.tipo||"periodico", p.partidoId||""
             ]]);
+            escribirMesPJ_(sh, i + 1, p.mes || "");
             return { ok: true, id: p.id };
           }
         }
@@ -1277,6 +1282,7 @@ function handleAction(data) {
         p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", "", p.mes||"",
         p.tipo||"periodico", p.partidoId||""
       ]);
+      escribirMesPJ_(sh, sh.getLastRow(), p.mes || "");
       return { ok: true, id };
     }
 
@@ -2135,6 +2141,26 @@ function tsToIsoLocal(val) {
  *  al formato local con offset. Se corre a mano desde el editor de Apps Script,
  *  una sola vez, para dejar prolijos los registros viejos guardados en UTC.
  *  No cambia el instante representado, solo cómo se lee en la hoja. */
+/** Reescribe como texto plano las celdas Mes de "Pagos Jugadores" que Sheets convirtió en fechas.
+ *  Idempotente: correr de nuevo no cambia nada. La app ya normaliza al leer, así que esto es
+ *  higiene de la planilla — sirve para que el Mes se vea bien también abriendo la hoja a mano. */
+function normalizarMesPagosJugadores() {
+  const sh   = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+  const col  = PJ_COLS.indexOf("Mes") + 1;
+  const last = sh.getLastRow();
+  if (last < 2) return "Sin filas";
+  const rng  = sh.getRange(2, col, last - 1, 1);
+  const vals = rng.getValues();
+  let cambiados = 0;
+  const out = vals.map(r => {
+    const nuevo = normalizarMesPJ_(r[0]);
+    if (nuevo !== String(r[0] || "")) cambiados++;
+    return [nuevo];
+  });
+  rng.setNumberFormat("@").setValues(out);
+  return "Mes normalizado en Pagos Jugadores: " + cambiados + " de " + vals.length;
+}
+
 function normalizarTimestampsMovimientos() {
   const sh   = getOrCreateSheet(MOV_SHEET, MOV_COLS);
   const col  = MOV_COLS.indexOf("timestamp") + 1;
@@ -2150,6 +2176,29 @@ function normalizarTimestampsMovimientos() {
   });
   rng.setNumberFormat("@").setValues(out);
   return "Timestamps normalizados: " + cambiados + " de " + vals.length;
+}
+
+/** Mes de Pagos Jugadores a "YYYY-MM", venga como texto, como "YYYYMM" o como el Date en que
+ *  Sheets convierte "2026-08" al escribirlo sin formato de texto. "" si no se puede interpretar. */
+function normalizarMesPJ_(v) {
+  if (v === "" || v === null || v === undefined) return "";
+  if (Object.prototype.toString.call(v) === "[object Date]") {
+    return isNaN(v.getTime()) ? "" : v.getFullYear() + "-" + ("0" + (v.getMonth() + 1)).slice(-2);
+  }
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}$/.test(s)) return s;
+  if (/^\d{6}$/.test(s)) return s.slice(0, 4) + "-" + s.slice(4);
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return "";
+  return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2);
+}
+
+/** Reescribe la celda Mes de una fila como texto plano. El formato "@" va ANTES del valor: sobre
+ *  una celda ya convertida a fecha, poner el formato después sólo mostraría el número de serie. */
+function escribirMesPJ_(sh, fila, mes) {
+  const cell = sh.getRange(fila, PJ_COLS.indexOf("Mes") + 1);
+  cell.setNumberFormat("@");
+  cell.setValue(mes || "");
 }
 
 function formatFecha(val) {

@@ -1041,6 +1041,23 @@ function fmtTimestamp(ts) {
   return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)}/${d.getFullYear()} `
        + `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
+// El Mes de "Pagos Jugadores" se guarda como "YYYY-MM", que Google Sheets interpreta como fecha:
+// la celda termina con un Date y al leerla vuelve como "Sat Aug 01 2026 00:00:00 GMT-0300…".
+// Eso rompía el filtro por mes de la pestaña Mensual (pjFilasMes), que es el único lugar de la app
+// que compara ese campo — por eso los descuentos seguían visibles en Transferencias y desaparecían
+// en Mensual al recargar. Se normaliza al entrar, así el resto de la app ve siempre "YYYY-MM".
+function normMesPJ(v) {
+  if (!v) return "";
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}$/.test(s)) return s;                          // ya viene bien
+  if (/^\d{6}$/.test(s)) return s.slice(0,4) + "-" + s.slice(4);  // "202608"
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return "";
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+}
+function normPagosJugadores(arr) {
+  return (arr || []).map(p => ({ ...p, mes: normMesPJ(p.mes) }));
+}
 function nowMes() {
   const d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
@@ -1194,7 +1211,9 @@ const Storage = {
     if (!url) throw new Error("Sin URL configurada. Configurá el script en la pestaña ⚙️ Config.");
     return post(url, data);
   },
-  async bootstrap()         { return this._post({ action:"bootstrap"         }); },
+  async bootstrap()         { const r = await this._post({ action:"bootstrap" });
+                              if (r && r.pagosJugadores) r.pagosJugadores = normPagosJugadores(r.pagosJugadores);
+                              return r; },
   async listMov(mes)        { return this._post({ action:"listMov",      mes }); },
   async saveMov(mov)        { return this._post({ action:"saveMov",      mov }); },
   async updateMov(mov)      { return this._post({ action:"updateMov",    mov }); },
@@ -1236,7 +1255,11 @@ const Storage = {
   async deleteConfigJugador(idJugador) { return this._post({ action:"deleteConfigJugador", idJugador }); },
   async listRoster()               { return this._post({ action:"listRoster"                     }); },
   async saveRoster(partidoId, roster) { return this._post({ action:"saveRoster", partidoId, roster }); },
-  async listPagosJugadores()       { return this._post({ action:"listPagosJugadores"             }); },
+  // Se normaliza el mes acá, en el borde: es el único punto por donde entran los pagos desde el
+  // servidor (junto con bootstrap), así que el resto de la app nunca ve un Mes deformado por Sheets.
+  async listPagosJugadores()       { const r = await this._post({ action:"listPagosJugadores" });
+                                     if (r && r.pagosJugadores) r.pagosJugadores = normPagosJugadores(r.pagosJugadores);
+                                     return r; },
   async savePagoJugador(p)         { return this._post({ action:"savePagoJugador", pago:p         }); },
   async deletePagoJugador(id)      { return this._post({ action:"deletePagoJugador", id           }); },
   async confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago, cuenta }); },
@@ -1370,7 +1393,7 @@ function verSnapshotDe(fecha) {
   eventos     = snap.eventos     || [];
   configJugadores = snap.configJugadores || [];
   rosterPartidos  = snap.rosterPartidos  || [];
-  pagosJugadores  = snap.pagosJugadores  || [];
+  pagosJugadores  = normPagosJugadores(snap.pagosJugadores);   // snapshots viejos pueden traer el Mes deformado
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
@@ -1676,7 +1699,7 @@ function loadFromCacheIfAny() {
   eventos     = snap.eventos     || [];
   configJugadores = snap.configJugadores || [];
   rosterPartidos  = snap.rosterPartidos  || [];
-  pagosJugadores  = snap.pagosJugadores  || [];
+  pagosJugadores  = normPagosJugadores(snap.pagosJugadores);   // snapshots viejos pueden traer el Mes deformado
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;

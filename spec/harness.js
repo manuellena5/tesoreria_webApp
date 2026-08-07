@@ -28,6 +28,7 @@ class Range {
     return out;
   }
   setBackground() { return this; } setFontColor() { return this; } setFontWeight() { return this; }
+  setNumberFormat() { return this; }
 }
 
 class Sheet {
@@ -136,6 +137,47 @@ if (require.main === module) {
   igual("deleteMov informa qué revirtió", rDel.revertido.cuotas.length, 1);
   igual("la cuota volvió a PENDIENTE", filas(PAG_SHEET)[0][4], "PENDIENTE");
   igual("y quedó sin MovimientoID", filas(PAG_SHEET)[0][5], "");
+
+  // ── Mes de Pagos Jugadores convertido en fecha por Sheets ──────
+  // Escribir "2026-08" en una celda sin formato de texto hace que Sheets la guarde como Date.
+  // Al leer salía "Sat Aug 01 2026 …" y el filtro por mes de la pestaña Mensual no matcheaba nada,
+  // así que los descuentos desaparecían de ahí (pero seguían en Transferencias, que no filtra).
+  seccion("Mes de Pagos Jugadores deformado por Sheets");
+  reset();
+  hoja(PJ_SHEET, PJ_COLS, [
+    ["pj1", "j1", "GOMEZ", "[]", -40000, 0, "", -40000, "pendiente", "", "", "Adelanto", "",
+     new Date(2026, 7, 1), "descuento", ""],                       // celda con Date, como quedó en la planilla
+    ["pj2", "j1", "GOMEZ", "[]", 80000, 0, "", 80000, "pendiente", "", "", "Agosto", "",
+     "2026-08", "periodico", ""],                                   // celda sana, como texto
+    ["pj3", "j2", "PEREZ", "[]", 50000, 0, "", 50000, "pendiente", "", "", "Julio", "",
+     "", "periodico", ""],                                          // sin mes asignado
+  ]);
+  const leidos = handleAction({ action: "listPagosJugadores" }).pagosJugadores;
+  igual("un Mes guardado como fecha se lee como YYYY-MM", leidos[0].mes, "2026-08");
+  igual("uno sano se deja igual",                          leidos[1].mes, "2026-08");
+  igual("y uno vacío sigue vacío",                         leidos[2].mes, "");
+  check("los dos de agosto quedan comparables entre sí", leidos[0].mes === leidos[1].mes);
+
+  seccion("El alta escribe el Mes como texto plano");
+  handleAction({ action: "savePagoJugador", pago: {
+    jugadorId: "j1", jugadorNombre: "GOMEZ", partidosIncluidos: [],
+    montoBase: -25000, ajuste: 0, motivoAjuste: "", montoFinal: -25000,
+    estado: "pendiente", etiqueta: "Internet", mes: "2026-08", tipo: "descuento", partidoId: ""
+  }});
+  const nueva = filas(PJ_SHEET).find(f => f[11] === "Internet");
+  igual("el Mes queda como string, no como Date", typeof nueva[13], "string");
+  igual("y con el valor correcto",                nueva[13], "2026-08");
+  const trasAlta = handleAction({ action: "listPagosJugadores" }).pagosJugadores;
+  igual("el descuento nuevo se lee en el mismo mes que el sueldo",
+        trasAlta.find(p => p.etiqueta === "Internet").mes,
+        trasAlta.find(p => p.etiqueta === "Agosto").mes);
+
+  seccion("Reparación de una pasada sobre las filas viejas");
+  igual("informa cuántas celdas reescribió", normalizarMesPagosJugadores(),
+        "Mes normalizado en Pagos Jugadores: 1 de 4");
+  igual("la celda quedó como texto", filas(PJ_SHEET)[0][13], "2026-08");
+  igual("y correrla de nuevo no cambia nada", normalizarMesPagosJugadores(),
+        "Mes normalizado en Pagos Jugadores: 0 de 4");
 
   resumen();
 }

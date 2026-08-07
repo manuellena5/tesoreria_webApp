@@ -353,6 +353,33 @@ check("tras editar, ningún monto quedó como string",
 igual("y el saldo refleja lo editado", app.placaSaldoFinal(editado),
       1500000 - 900000 + 1245000 + 107000 - 500 - 0 - 85000 - 100000 - 40000 - 63000);
 
+seccion("9b · Mes de Pagos Jugadores deformado por Sheets");
+igual("un Date en texto vuelve a YYYY-MM",
+      app.normMesPJ("Sat Aug 01 2026 00:00:00 GMT-0300 (Argentina Standard Time)"), "2026-08");
+igual("un mes sano se deja intacto",     app.normMesPJ("2026-08"), "2026-08");
+igual("el formato de movimientos también",app.normMesPJ("202608"), "2026-08");
+igual("vacío sigue vacío",               app.normMesPJ(""), "");
+igual("y una basura no explota",         app.normMesPJ("cualquier cosa"), "");
+check("normalizar es idempotente", app.normMesPJ(app.normMesPJ("Sat Aug 01 2026 00:00:00 GMT-0300")) === "2026-08");
+
+// El bug tal como se veía: el descuento traído del servidor no matcheaba el mes seleccionado,
+// así que pjFilasMes lo dejaba afuera y desaparecía de la pestaña Mensual.
+app.configJugadores = [{ idJugador: "j1", nombre: "GOMEZ", frecuencia: "mensual", premios: [] }];
+const crudos = [
+  { id:"s1", jugadorId:"j1", jugadorNombre:"GOMEZ", partidosIncluidos:[], montoFinal:80000,
+    estado:"pendiente", etiqueta:"Agosto", mes:"Sat Aug 01 2026 00:00:00 GMT-0300", tipo:"periodico" },
+  { id:"d1", jugadorId:"j1", jugadorNombre:"GOMEZ", partidosIncluidos:[], montoFinal:-40000,
+    estado:"pendiente", etiqueta:"Adelanto", mes:"Sat Aug 01 2026 00:00:00 GMT-0300", tipo:"descuento" },
+];
+app.pagosJugadores = crudos;
+igual("sin normalizar, la pestaña Mensual no ve nada", app.pjFilasMes("j1", "2026-08").length, 0);
+app.pagosJugadores = app.normPagosJugadores(crudos);
+igual("normalizado, aparecen el sueldo y el descuento", app.pjFilasMes("j1", "2026-08").length, 2);
+igual("y el neto del mes ya viene descontado",
+      app.pjFilasMes("j1", "2026-08").reduce((s,p) => s + p.montoFinal, 0), 40000);
+check("Transferencias los veía igual (no filtra por mes) — por eso ahí no se notaba",
+      app.pjFilasAcumuladoPendiente("j1").length === 2);
+
 // ══════════════════════════════════════════════════════════════
 // Cache offline: cupo de localStorage y clasificación de errores
 // ══════════════════════════════════════════════════════════════

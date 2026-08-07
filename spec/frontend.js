@@ -296,6 +296,37 @@ igual("a p2 la suya",           item(pl2, "Árbitros").m, -40000);
 igual("y cada placa cuadra con su fila", [app.placaSaldoFinal(pl1), app.placaSaldoFinal(pl2)],
       [filas2.find(r => r.p.id === "p1").totalNeto, filas2.find(r => r.p.id === "p2").totalNeto]);
 
+seccion("13a · Por Partido: detalle desplegable de movimientos");
+sembrarPartido();
+fila = app.calcPartidoResumenRows().find(r => r.p.id === "p1");
+igual("el detalle trae los 12 movimientos que la tabla computa", fila.pg.movs.length, 12);
+igual("y aparte los 3 que no computa (sueldo, movilidad, interno)", fila.noComputados.length, 3);
+igual("los no computados son los esperados",
+      fila.noComputados.map(m => m.codRubro).sort(), ["15", "19", "49"]);
+check("ningún no computado se coló en las columnas",
+      fila.pg.movs.every(m => !["15","19","49"].includes(m.codRubro)),
+      fila.pg.movs.map(m => m.codRubro).join(","));
+igual("la suma del detalle es exactamente el Total Neto de la fila",
+      fila.pg.movs.reduce((s, m) => s + m.montoAplicado, 0), fila.totalNeto);
+check("los ingresos van en positivo y los egresos en negativo",
+      fila.pg.movs.every(m => m.tipo === "INGRESO" ? m.montoAplicado > 0 : m.montoAplicado < 0));
+igual("un egreso no computado conserva su signo",
+      app.montoMovNoComputado(fila.noComputados.find(m => m.codRubro === "19")), -500000);
+check("el detalle se arma sin romperse", typeof app.renderPartidoResDetalle(fila) === "string");
+
+// Pago repartido: el detalle de cada partido muestra su parte, marcada como tal.
+sembrarPartido();
+app.movimientos = [
+  mov("12", "EGRESO", 100000, { partidoId: "", itemsDetalle: [
+    { desc: "Fecha 22", monto: 60000, partidoId: "p1" },
+    { desc: "Fecha 23", monto: 40000, partidoId: "p2" }
+  ]})
+];
+const fp1 = app.calcPartidoResumenRows().find(r => r.p.id === "p1");
+igual("el detalle muestra la parte imputada, no el total del movimiento",
+      fp1.pg.movs[0].montoAplicado, -60000);
+check("y queda marcada como repartida", fp1.pg.movs[0].repartido === true);
+
 seccion("13b · Placa: edición de los campos en el modal");
 sembrarPartido();
 // El modal deja el JSON en placaEdit y lo va editando; refrescarPlacaJson toca el DOM pero

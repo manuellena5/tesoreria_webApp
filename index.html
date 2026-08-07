@@ -970,6 +970,7 @@ let partidoResOrdenCol      = "fecha"; // fecha|buffet|buffetEgr|gastosCancha|ot
 let partidoResOrdenDir      = -1;      // 1 = ascendente (▲), -1 = descendente (▼) — igual convención que detTablaSort
 let partidoResFiltroTorneo  = "";
 let partidoResFiltroPartidoId = "";
+let partidoResExpandido       = new Set();   // ids de partido con el detalle de movimientos abierto
 let eventoResAnio       = String(new Date().getFullYear());
 let eventoResMes        = "";
 let eventoResExpandido  = new Set();
@@ -3136,7 +3137,11 @@ function renderResumen() {
 /** Suma `monto` (ya sea el total del movimiento o la porción imputada a un partido) al acumulador
  *  `pg` de un partido, clasificando por codRubro del movimiento — los ítems heredan el codRubro
  *  de su movimiento padre, no tienen uno propio. */
-function sumarMontoAPartido(pg, m, monto) {
+function sumarMontoAPartido(pg, m, monto, repartido) {
+  // Se guarda además el movimiento con el monto realmente imputado a ESTE partido — que no es el
+  // total del movimiento cuando viene prorrateado por itemsDetalle — para el detalle desplegable.
+  // Al hacerlo acá, el detalle no puede desincronizarse de lo que suman las columnas.
+  pg.movs.push({ ...m, montoAplicado: m.tipo === "INGRESO" ? monto : -monto, repartido: !!repartido });
   if (m.tipo === "INGRESO") {
     pg.ingresos += monto;
     if (m.codRubro === "2")                             pg.buffetIng   += monto;
@@ -3162,17 +3167,48 @@ function sumarMontoAPartido(pg, m, monto) {
 
 const PARTIDO_RES_CATS_EXCLUIDAS = ["Movilidad", "Jugadores y Cuerpo Técnico"];
 
+// Un movimiento apunta a un partido por su propio partidoId o por el de alguno de sus ítems.
+function movTienePartido(m) {
+  return !!(m.partidoId || (m.itemsDetalle||[]).some(it => it.partidoId));
+}
+
+// Partidos a los que apunta un movimiento. Si tiene desglose por ítems manda el desglose, igual
+// que en la imputación de calcPartidoResumenRows; si no, el partidoId del movimiento.
+function partidosDeMov(m) {
+  const its = [...new Set((m.itemsDetalle||[]).filter(it => it.partidoId).map(it => it.partidoId))];
+  return its.length ? its : (m.partidoId ? [m.partidoId] : []);
+}
+
+// Monto con signo de un movimiento que la tabla NO computa (no viene prorrateado por partido).
+function montoMovNoComputado(m) {
+  if (m.tipo === "INGRESO") return  Number(m.ingreso || 0);
+  if (m.tipo === "EGRESO")  return -Number(m.egreso  || 0);
+  return Number(m.montoFinal || 0);   // INTERNO / AJUSTE
+}
+
 function calcPartidoResumenRows() {
   const movsPartido = movimientos.filter(m =>
     (m.tipo === "INGRESO" || m.tipo === "EGRESO") &&
     !PARTIDO_RES_CATS_EXCLUIDAS.includes(m.categoria) &&
-    (m.partidoId || (m.itemsDetalle||[]).some(it => it.partidoId))
+    movTienePartido(m)
   );
+  // Movimientos que apuntan a un partido pero que esta tabla deja afuera: sueldos y premios
+  // (Jugadores y Cuerpo Técnico), Movilidad, y los internos/ajustes. No entran en ninguna columna,
+  // así que al abrir el detalle se listan aparte marcados como no computados — es la pregunta que
+  // aparece siempre al mirar un total del partido y no encontrarle todos los gastos.
+  const movsNoComputados = movimientos.filter(m =>
+    movTienePartido(m) &&
+    (!(m.tipo === "INGRESO" || m.tipo === "EGRESO") || PARTIDO_RES_CATS_EXCLUIDAS.includes(m.categoria))
+  );
+  const noComputadosMap = {};
+  for (const m of movsNoComputados) {
+    for (const pid of partidosDeMov(m)) (noComputadosMap[pid] || (noComputadosMap[pid] = [])).push(m);
+  }
   const partidoMap = {};
   // policia/arbitros/enfermera/ambulancia/filmacion son el desglose de gastosCancha (su suma lo iguala):
   // no los usa la tabla, sólo la placa de redes.
   const partidoPg = id => partidoMap[id] || (partidoMap[id] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0, otrosEgr:0,
-                                                                policia:0, arbitros:0, enfermera:0, ambulancia:0, filmacion:0 });
+                                                                policia:0, arbitros:0, enfermera:0, ambulancia:0, filmacion:0, movs:[] });
 
   for (const m of movsPartido) {
     const total = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
@@ -3200,14 +3236,15 @@ function calcPartidoResumenRows() {
         partidosDelMov.forEach(pid => porPartido[pid] += resto / partidosDelMov.length);
       }
     }
-    partidosDelMov.forEach(pid => sumarMontoAPartido(partidoPg(pid), m, porPartido[pid]));
+    partidosDelMov.forEach(pid => sumarMontoAPartido(partidoPg(pid), m, porPartido[pid], true));
   }
 
   return partidos
     .filter(p => partidoMap[p.id])
     .map(p => {
       const pg = partidoMap[p.id];
-      return { p, pg, netoBuffet: pg.buffetIng - pg.buffetEgr, totalNeto: pg.ingresos - pg.egresos };
+      return { p, pg, netoBuffet: pg.buffetIng - pg.buffetEgr, totalNeto: pg.ingresos - pg.egresos,
+               noComputados: noComputadosMap[p.id] || [] };
     });
 }
 
@@ -3256,6 +3293,41 @@ function setPartidoResFiltroPartido(v) {
   document.getElementById("partido-res-body").innerHTML = renderPartidoResumenBody();
 }
 
+function togglePartidoResDetalle(id) {
+  if (partidoResExpandido.has(id)) partidoResExpandido.delete(id);
+  else partidoResExpandido.add(id);
+  document.getElementById("partido-res-body").innerHTML = renderPartidoResumenBody();
+}
+
+// Segundo nivel de la tabla: los movimientos del partido, con el mismo componente de detalle
+// (filtro, orden y selector de columnas) que usan Adherentes, Jugadores y Eventos.
+function renderPartidoResDetalle(r) {
+  const detItem = (m, monto, extra) => {
+    const mesRaw = mesFromRecord(m);
+    return {
+      fechaRaw: m.fecha || "",
+      fechaD:   m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "",
+      mesRaw, mesTxt: mesLabel(mesRaw),
+      concepto: m.concepto || "", monto,
+      rubro: m.rubro || "", categoria: m.categoria || "",
+      entidad: m.jugadorCT || m.adherente || m.cuenta || "",
+      extra
+    };
+  };
+  const porFecha = (a, b) => (a.fecha||"").localeCompare(b.fecha||"");
+
+  // Primero lo que la tabla sí suma, con el monto imputado a este partido.
+  const items = [...r.pg.movs].sort(porFecha).map(m =>
+    detItem(m, m.montoAplicado, m.repartido ? "parte de un pago repartido entre varios partidos" : ""));
+
+  // Después lo que apunta al partido pero queda fuera de las columnas, marcado como tal: así el
+  // detalle explica por qué el Total Neto no incluye, por ejemplo, los sueldos de la fecha.
+  for (const m of [...r.noComputados].sort(porFecha)) {
+    items.push(detItem(m, montoMovNoComputado(m), "⊘ no computado en esta tabla"));
+  }
+  return renderDetTabla(`par_${escJs(r.p.id)}`, items);
+}
+
 function thOrdenPartidoRes(col, label) {
   const active = partidoResOrdenCol === col;
   const arrow = active ? `<span class="rt-arrow">${partidoResOrdenDir===1?"▲":"▼"}</span>` : "";
@@ -3275,7 +3347,8 @@ function renderPartidoResumenBody() {
 
   let totBuffetIng=0, totBuffetEgr=0, totGastosCancha=0, totOtrosEgr=0, totEntradas=0, totOtrosIng=0, totNeto=0;
 
-  const partidoRows = rows.map(({p, pg, netoBuffet, totalNeto}) => {
+  const partidoRows = rows.map(r => {
+    const {p, pg, netoBuffet, totalNeto} = r;
     totBuffetIng    += pg.buffetIng;
     totBuffetEgr    += pg.buffetEgr;
     totGastosCancha += pg.gastosCancha;
@@ -3285,8 +3358,11 @@ function renderPartidoResumenBody() {
     totNeto         += totalNeto;
     const netoClass  = totalNeto >= 0 ? "neto-pos" : "neto-neg";
     const netoSign   = totalNeto >= 0 ? "+" : "−";
-    return `<tr>
-      <td>${esc(partidoResLabel(p))}</td>
+    const isExp      = partidoResExpandido.has(p.id);
+    const nNoComp    = r.noComputados.length;
+    return `<tr class="reint-row" onclick="togglePartidoResDetalle('${esc(escJs(p.id))}')">
+      <td><span style="color:var(--text3)">${isExp?"▾":"▸"}</span> ${esc(partidoResLabel(p))}${
+        nNoComp ? ` <span style="color:var(--text3);font-size:11px" title="${nNoComp} movimiento${nNoComp!==1?"s":""} de este partido que la tabla no computa">⊘${nNoComp}</span>` : ""}</td>
       <td>${pg.buffetIng ? fmt(pg.buffetIng) : ""}</td>
       <td class="egr">${pg.buffetEgr ? fmt(pg.buffetEgr) : ""}</td>
       <td class="egr">${pg.gastosCancha ? fmt(pg.gastosCancha) : ""}</td>
@@ -3295,8 +3371,9 @@ function renderPartidoResumenBody() {
       <td>${pg.otrosIng ? fmt(pg.otrosIng) : ""}</td>
       <td class="${netoBuffet>=0?"ing":"egr"}">${netoBuffet!==0?(netoBuffet>=0?"+":"−")+fmt(netoBuffet):""}</td>
       <td class="${netoClass}">${netoSign}${fmt(totalNeto)}</td>
-      <td><button class="btn-sm" title="JSON para la placa de redes" onclick="openPlacaModal('${esc(escJs(p.id))}')">🖼️</button></td>
-    </tr>`;
+      <td><button class="btn-sm" title="JSON para la placa de redes" onclick="event.stopPropagation();openPlacaModal('${esc(escJs(p.id))}')">🖼️</button></td>
+    </tr>${isExp ? `
+    <tr><td colspan="10" style="padding:0;border-bottom:none">${renderPartidoResDetalle(r)}</td></tr>` : ""}`;
   }).join("");
 
   const totNetoClass = totNeto >= 0 ? "neto-pos" : "neto-neg";
@@ -3944,6 +4021,7 @@ function setResumenSubTab(tab) {
   adherenteExpandido.clear();
   jugadorResExpandido.clear();
   catResExpandido.clear();
+  partidoResExpandido.clear();
   adhResumenOpen = false;
   renderResumen();
 }

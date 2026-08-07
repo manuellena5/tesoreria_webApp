@@ -296,6 +296,32 @@ igual("a p2 la suya",           item(pl2, "Árbitros").m, -40000);
 igual("y cada placa cuadra con su fila", [app.placaSaldoFinal(pl1), app.placaSaldoFinal(pl2)],
       [filas2.find(r => r.p.id === "p1").totalNeto, filas2.find(r => r.p.id === "p2").totalNeto]);
 
+seccion("13b · Placa: edición de los campos en el modal");
+sembrarPartido();
+// El modal deja el JSON en placaEdit y lo va editando; refrescarPlacaJson toca el DOM pero
+// está todo guardado con `if (el)`, así que la lógica se puede ejercitar sin navegador.
+app.placaEdit = app.placaDatosDePartido("p1");
+app.setPlacaMonto(0, 0, "1500000");
+igual("editar un ingreso lo deja positivo", item(app.placaEdit.json, "Ingresos buffet (local + visitante)").m, 1500000);
+app.setPlacaMonto(0, 1, "900000");
+igual("editar un egreso lo deja negativo", item(app.placaEdit.json, "Gastos buffet").m, -900000);
+app.setPlacaMonto(1, 2, "1234.67");
+igual("los decimales se redondean al peso", item(app.placaEdit.json, "Policía").m, -1235);
+app.setPlacaMonto(1, 2, "-500");
+igual("un valor negativo tipeado no invierte el signo del renglón", item(app.placaEdit.json, "Policía").m, -500);
+app.setPlacaMonto(1, 3, "");
+igual("vaciar el campo deja el renglón en 0", item(app.placaEdit.json, "Árbitros").m, 0);
+check("y el renglón en 0 conserva neg:true", item(app.placaEdit.json, "Árbitros").neg === true);
+app.setPlacaCampo("fecha", "23");
+app.setPlacaCampo("sub", "vs. Unión · 10/08/2026");
+igual("los campos de cabecera se editan", [app.placaEdit.json.fecha, app.placaEdit.json.sub],
+      ["23", "vs. Unión · 10/08/2026"]);
+const editado = JSON.parse(JSON.stringify(app.placaEdit.json));
+check("tras editar, ningún monto quedó como string",
+      editado.bloques.reduce((a,b)=>a.concat(b.items),[]).every(it => typeof it.m === "number"));
+igual("y el saldo refleja lo editado", app.placaSaldoFinal(editado),
+      1500000 - 900000 + 1245000 + 107000 - 500 - 0 - 85000 - 100000 - 40000 - 63000);
+
 // ══════════════════════════════════════════════════════════════
 // Cache offline: cupo de localStorage y clasificación de errores
 // ══════════════════════════════════════════════════════════════

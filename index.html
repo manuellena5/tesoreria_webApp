@@ -3414,32 +3414,101 @@ function placaDatosDePartido(partidoId) {
   return { json: armarPlacaJson(row), totalNeto: row.totalNeto, label: partidoResLabel(row.p) };
 }
 
+// Estado del modal mientras está abierto: el JSON que se está editando más el Total Neto del
+// partido, para poder contrastarlos. Se pisa en cada apertura.
+let placaEdit = null;
+
+// Una fila por renglón de la placa: el concepto es fijo (lo define el mapeo de rubros) y el monto
+// es editable, siempre en positivo — el signo lo da `neg`, igual que en el resto de la app, donde
+// los montos se guardan sin signo y el tipo decide. Espeja los renglones del generador de placas.
+function renderPlacaCampos() {
+  const j = placaEdit.json;
+  const bloques = j.bloques.map((b, bi) => `
+    <div style="margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--border);padding-bottom:4px">
+        <span style="font-size:11px;font-weight:600;color:var(--accent);letter-spacing:.07em">${esc(b.nombre)}</span>
+        <span style="font-size:11px;color:var(--text3)">${esc(b.neto)}: <b id="placa-neto-${bi}"></b></span>
+      </div>
+      ${b.items.map((it, ii) => `
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+          <span style="flex:1;font-size:12.5px;color:var(--text2)">
+            <span class="${it.neg ? "egr" : "ing"}">${it.neg ? "−" : "+"}</span> ${esc(it.c)}
+          </span>
+          <input class="inp" type="number" min="0" step="any" inputmode="decimal" placeholder="0"
+                 style="flex:0 0 118px;text-align:right;padding:6px 9px;font-size:13px"
+                 value="${Math.abs(it.m) || ""}" oninput="setPlacaMonto(${bi},${ii},this.value)">
+        </div>`).join("")}
+    </div>`).join("");
+
+  return `
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <div class="field" style="flex:0 0 96px">
+        <label>Fecha Nº</label>
+        <input class="inp" type="text" style="padding:6px 9px;font-size:13px"
+               value="${esc(j.fecha)}" oninput="setPlacaCampo('fecha',this.value)">
+      </div>
+      <div class="field" style="flex:1">
+        <label>Bajada</label>
+        <input class="inp" type="text" style="padding:6px 9px;font-size:13px"
+               value="${esc(j.sub)}" oninput="setPlacaCampo('sub',this.value)">
+      </div>
+    </div>
+    ${bloques}`;
+}
+
+function setPlacaMonto(bi, ii, v) {
+  const it = placaEdit.json.bloques[bi].items[ii];
+  const n  = Math.round(Math.abs(Number(v) || 0));   // al peso, sin signo: el signo lo fija `neg`
+  it.m = it.neg ? -n : n;
+  refrescarPlacaJson();
+}
+
+function setPlacaCampo(campo, v) {
+  placaEdit.json[campo] = v;
+  refrescarPlacaJson();
+}
+
+// Repinta sólo lo derivado (netos, saldo, cuadre y el JSON), nunca los inputs: si se re-renderizara
+// el bloque de campos en cada tecla, el input en foco lo perdería en el medio de la escritura.
+function refrescarPlacaJson() {
+  const saldo = placaSaldoFinal(placaEdit.json);
+  placaEdit.json.bloques.forEach((b, bi) => {
+    const el = document.getElementById("placa-neto-" + bi);
+    if (el) el.textContent = fmtSigned(b.items.reduce((s, it) => s + it.m, 0));
+  });
+  const elSaldo = document.getElementById("placa-saldo");
+  if (elSaldo) elSaldo.textContent = fmtSigned(saldo);
+  // El prorrateo de pagos multipartido deja decimales y cada renglón se redondea al peso, así que
+  // puede haber diferencia aun sin editar nada. Se informa, no se maquilla.
+  const dif = saldo - placaEdit.totalNeto;
+  const elCuadre = document.getElementById("placa-cuadre");
+  if (elCuadre) elCuadre.innerHTML = dif === 0
+    ? `<span class="ing">✓ coincide con el Total Neto de la app</span>`
+    : `<span class="egr">⚠ difiere en ${fmtSigned(dif)} del Total Neto de la app</span>`;
+  const ta = document.getElementById("placa-json");
+  if (ta) ta.value = JSON.stringify(placaEdit.json, null, 2);
+}
+
 function openPlacaModal(partidoId) {
   const d = placaDatosDePartido(partidoId);
   if (!d) { toast("Ese partido no tiene movimientos", "err"); return; }
-
-  const saldo = placaSaldoFinal(d.json);
-  const dif   = saldo - d.totalNeto;
-  // El prorrateo de los pagos multipartido deja decimales y cada renglón se redondea al peso, así que
-  // puede quedar una diferencia de unos pesos. Se muestra, no se maquilla.
-  const cuadre = dif === 0
-    ? `<span class="ing">✓ cuadra con la tabla</span>`
-    : `<span class="egr">⚠ difiere en ${fmtSigned(dif)} (redondeo al peso)</span>`;
+  placaEdit = d;
 
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
         <div class="modal-handle"></div>
         <div style="text-align:center;font-size:12px;font-weight:600;color:var(--accent);letter-spacing:.05em;margin-bottom:2px">
-          🖼️ JSON PARA LA PLACA
+          🖼️ DATOS PARA LA PLACA
         </div>
-        <div style="text-align:center;font-size:15px;font-weight:600;margin-bottom:8px">${esc(d.label)}</div>
-        <div class="modal-detail-row"><span class="modal-detail-lbl">Saldo placa</span><span class="modal-detail-val">${fmtSigned(saldo)}</span></div>
+        <div style="text-align:center;font-size:15px;font-weight:600">${esc(d.label)}</div>
+        ${renderPlacaCampos()}
+        <div class="modal-detail-row" style="margin-top:14px"><span class="modal-detail-lbl">Saldo placa</span><span class="modal-detail-val" id="placa-saldo"></span></div>
         <div class="modal-detail-row"><span class="modal-detail-lbl">Total Neto app</span><span class="modal-detail-val">${fmtSigned(d.totalNeto)}</span></div>
-        <div style="text-align:center;font-size:12px;margin:6px 0">${cuadre}</div>
-        <textarea id="placa-json" class="inp" readonly rows="10"
+        <div style="text-align:center;font-size:12px;margin:6px 0" id="placa-cuadre"></div>
+        <textarea id="placa-json" class="inp" readonly rows="8"
                   style="width:100%;font-family:monospace;font-size:11px;white-space:pre;resize:vertical"
-                  onclick="this.select()">${esc(JSON.stringify(d.json, null, 2))}</textarea>
+                  onclick="this.select()"></textarea>
         <p class="note">Pegalo en "Importar / exportar datos" del generador de placas.</p>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cerrar</button>
@@ -3447,6 +3516,7 @@ function openPlacaModal(partidoId) {
         </div>
       </div>
     </div>`;
+  refrescarPlacaJson();   // pinta netos, saldo, cuadre y el JSON inicial
 }
 
 function copiarPlacaJson() {

@@ -296,6 +296,71 @@ igual("a p2 la suya",           item(pl2, "Árbitros").m, -40000);
 igual("y cada placa cuadra con su fila", [app.placaSaldoFinal(pl1), app.placaSaldoFinal(pl2)],
       [filas2.find(r => r.p.id === "p1").totalNeto, filas2.find(r => r.p.id === "p2").totalNeto]);
 
+// ══════════════════════════════════════════════════════════════
+// Cache offline: cupo de localStorage y clasificación de errores
+// ══════════════════════════════════════════════════════════════
+
+seccion("14 · Un error de cupo no es un error de red");
+const errCupo = Object.assign(new Error("Failed to execute 'setItem' on 'Storage': exceeded the quota."),
+                              { name: "QuotaExceededError", code: 22 });
+check("QuotaExceededError NO se toma por caída de red", app.isNetworkError(errCupo) === false);
+check("pero un fetch caído sí", app.isNetworkError(new TypeError("Failed to fetch")) === true);
+check("y un NetworkError también", app.isNetworkError(new Error("NetworkError when attempting to fetch")) === true);
+
+seccion("15 · Con el cupo lleno se liberan las copias diarias más viejas");
+/** localStorage de mentira con cupo, para forzar el QuotaExceededError. */
+function localStorageConCupo(bytes) {
+  const m = new Map();
+  const usado = () => [...m.entries()].reduce((s, [k, v]) => s + k.length + v.length, 0);
+  return {
+    get length() { return m.size; },
+    key: i => [...m.keys()][i],
+    getItem: k => (m.has(k) ? m.get(k) : null),
+    removeItem: k => { m.delete(k); },
+    setItem: (k, v) => {
+      const previo = m.has(k) ? k.length + m.get(k).length : 0;
+      if (usado() - previo + k.length + v.length > bytes) {
+        const e = new Error("Failed to execute 'setItem' on 'Storage': exceeded the quota.");
+        e.name = "QuotaExceededError"; e.code = 22;
+        throw e;
+      }
+      m.set(k, v);
+    },
+    _claves: () => [...m.keys()]
+  };
+}
+
+app.viendoSnapshotHistorico = null;
+app.movimientos = []; app.jugadores = []; app.grupos = []; app.adherentes = []; app.pagos = [];
+app.partidos = []; app.reservas = []; app.eventos = []; app.configJugadores = [];
+app.rosterPartidos = []; app.pagosJugadores = [];
+const relleno = "x".repeat(300);
+app.localStorage = localStorageConCupo(1200);
+// Tres copias diarias viejas que ya ocupan casi todo el cupo: el snapshot vivo no entra
+// hasta que se libere al menos una.
+["2026-08-01", "2026-08-02", "2026-08-03"].forEach(f =>
+  app.localStorage.setItem("clubfm_offline_snapshot_" + f, relleno + f));
+app.observacionLarga = relleno;
+app.movimientos = [{ id: "m1", concepto: relleno }];   // hace que el snapshot vivo no entre solo
+
+app.saveSnapshotToCache();
+
+const claves = app.localStorage._claves();
+check("el snapshot en vivo quedó guardado", claves.includes("clubfm_offline_snapshot"), claves.join(","));
+check("se liberó la copia diaria más vieja", !claves.includes("clubfm_offline_snapshot_2026-08-01"), claves.join(","));
+igual("y el snapshot guardado es el estado actual",
+      JSON.parse(app.localStorage.getItem("clubfm_offline_snapshot")).movimientos.length, 1);
+
+seccion("16 · dropOldestDailySnapshot respeta el orden cronológico");
+app.localStorage = localStorageConCupo(100000);
+["2026-08-05", "2026-08-02", "2026-08-09"].forEach(f =>
+  app.localStorage.setItem("clubfm_offline_snapshot_" + f, "x"));
+check("borra la más vieja primero", app.dropOldestDailySnapshot() === true);
+check("y era la del 02", !app.localStorage._claves().includes("clubfm_offline_snapshot_2026-08-02"),
+      app.localStorage._claves().join(","));
+app.localStorage = localStorageConCupo(100000);
+check("sin copias diarias devuelve false", app.dropOldestDailySnapshot() === false);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

@@ -1255,6 +1255,10 @@ let viendoSnapshotHistorico = null; // fecha "YYYY-MM-DD" si estamos mirando una
 
 // Detecta errores de red (offline / servidor inalcanzable) vs. errores de la app (ej. "Sin URL configurada").
 function isNetworkError(e) {
+  // Un cupo de localStorage lleno llega como "Failed to execute 'setItem' on 'Storage'…", que
+  // matchea el /failed/ de abajo: se tomaba por caída de red y disparaba el reintento completo
+  // de loadAllData — otros ~13 s de espera por un problema que no es de red. Se descarta primero.
+  if (e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22)) return false;
   if (!navigator.onLine) return true;
   const msg = String(e && e.message || "");
   return e instanceof TypeError || /fetch|network|failed/i.test(msg);
@@ -1269,22 +1273,40 @@ function saveSnapshotToCache() {
     configJugadores, rosterPartidos, pagosJugadores,
     cuentas, metodos, preciosGranos, savedAt: Date.now()
   });
-  try {
-    localStorage.setItem(CACHE_KEY, payload);
-  } catch (e) {
-    // Si falla (ej. cupo de localStorage lleno) y lo tragamos en silencio, el
-    // snapshot queda congelado en un estado viejo para siempre — y ese estado
-    // viejo es justamente el que se usa para "resucitar" datos cuando más
-    // adelante se cae a modo offline. Reintentamos limpiando el snapshot previo;
-    // si igual falla, al menos queda registrado para poder diagnosticarlo.
-    try {
-      localStorage.removeItem(CACHE_KEY);
-      localStorage.setItem(CACHE_KEY, payload);
-    } catch (e2) {
-      console.warn("No se pudo guardar el snapshot offline:", e2);
+  // El snapshot "en vivo" es el que usa el arranque rápido: tiene prioridad sobre las copias
+  // diarias. Guardar el estado completo N veces (una en vivo + una por día) no escala — con
+  // ~1300 movimientos son varios MB y el cupo de localStorage (~5 MB) se llena. Antes se
+  // reintentaba una sola vez y, si fallaba, el dispositivo quedaba sin respaldo en silencio.
+  // Ahora liberamos las copias diarias más viejas hasta que entre: se pierde historial, que es
+  // el extra, y no el snapshot que hace arrancar la app rápido.
+  if (!trySetItem(CACHE_KEY, payload)) {
+    localStorage.removeItem(CACHE_KEY);   // liberar el espacio del snapshot anterior antes de reintentar
+    while (!trySetItem(CACHE_KEY, payload)) {
+      if (!dropOldestDailySnapshot()) {
+        console.warn("No se pudo guardar el snapshot offline: cupo de localStorage lleno");
+        return;   // sin copias diarias que liberar tampoco entra: no tiene sentido seguir
+      }
     }
   }
   saveDailySnapshotIfNeeded(payload);
+}
+
+function trySetItem(key, value) {
+  try { localStorage.setItem(key, value); return true; }
+  catch (e) { return false; }
+}
+
+/** Borra la copia diaria más antigua. Devuelve false si ya no quedaba ninguna. */
+function dropOldestDailySnapshot() {
+  const claves = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(CACHE_DAILY_PREFIX)) claves.push(key);
+  }
+  if (!claves.length) return false;
+  claves.sort();   // el prefijo es fijo y la fecha va en formato YYYY-MM-DD: orden alfabético = cronológico
+  localStorage.removeItem(claves[0]);
+  return true;
 }
 
 function todayKeyLocal() {
@@ -1465,6 +1487,10 @@ async function initApp() {
   // empezar a cargar un movimiento mientras llegan los datos frescos.
   const hayCache = navigator.onLine && loadFromCacheIfAny();
   if (hayCache) {
+    // #overlay arranca visible desde el HTML (sólo .hidden lo oculta): si este camino vuelve sin
+    // ocultarlo, la app queda cargada pero tapada por el spinner para siempre. El camino lento de
+    // más abajo sí lo oculta, por eso el síntoma sólo aparecía cuando había snapshot local.
+    hideOverlay();
     renderOfflineBanner();
     goTab("nuevo");
     mostrarRefrescando(true);

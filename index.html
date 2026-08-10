@@ -1169,7 +1169,17 @@ function buildDefaultF() {
     codRubro:"", rubro:"", categoria:"", concepto:"", monto:"",
     cuenta: (cuentas[0] || "EFECTIVO"), cuentaDestino: "",
     modoPago: (metodos[0] || "EFECTIVO"),
-    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0, saldoReal:"", partidoId:"", eventoId:"" };
+    jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0, saldoReal:"", partidoId:"", eventoId:"",
+    // Cobro dividido: un mismo cobro que entró partido entre varias cuentas (la recaudación de un
+    // partido suele venir en efectivo + Mercado Pago). `reparto` es null salvo que esté activado.
+    // Al guardar se emite UN movimiento por fila, no uno solo con dos cuentas: `cuenta` es un campo
+    // único y el saldo por cuenta —lo que hay que conciliar contra el banco— depende de eso.
+    reparto: null };
+}
+
+// Una fila del reparto. `monto` queda como string igual que F.monto: se parsea al guardar.
+function nuevaFilaReparto() {
+  return { monto: "", cuenta: (cuentas[0] || "EFECTIVO"), modoPago: (metodos[0] || "EFECTIVO") };
 }
 function resetF() {
   const savedFecha  = F.fecha;
@@ -1820,6 +1830,9 @@ function renderNuevo() {
     `<option value="${esc(m)}" ${F.modoPago===m?"selected":""}>${esc(m)}</option>`).join("");
   const isInt = F.tipo === "INTERNO";
   const isAdj = F.tipo === "AJUSTE";
+  // El reparto puede quedar colgado en F si se cambia a INTERNO/AJUSTE o se entra a editar: se
+  // ignora en el render y saveMovimiento vuelve a chequear lo mismo antes de emitir nada.
+  const isRep = !!F.reparto && repartoDisponible();
   const isAdh = !isAdj && F.rubro && F.rubro.toUpperCase().includes("ADHERENTE");
   const mesNum = F.fecha ? F.fecha.slice(0,7).replace("-","") : "";
   const mesDisplay = F.fecha ? mesLabel(F.fecha.slice(0,7)) : "";
@@ -1865,11 +1878,21 @@ function renderNuevo() {
                oninput="F.concepto=this.value">
       </div>
 
+      ${repartoDisponible() ? `
+      <div class="field">
+        <label style="cursor:pointer">
+          <input type="checkbox" id="f-reparto-on" style="width:16px;height:16px;accent-color:var(--accent);vertical-align:middle;margin-right:6px;cursor:pointer"
+                 ${isRep ? "checked" : ""} onchange="toggleReparto(this.checked)">
+          Entró en más de una cuenta
+        </label>
+      </div>` : ""}
+
+      ${isRep ? renderRepartoBlock() : `
       <div class="field">
         <label>Monto</label>
         <input class="inp ${F.tipo==='INGRESO'?'monto-ing':F.tipo==='EGRESO'?'monto-egr':''}" type="number" id="f-monto" placeholder="0" min="0" step="any" value="${F.monto}"
                oninput="F.monto=this.value" inputmode="decimal">
-      </div>` : `
+      </div>`}` : `
       <div class="field">
         <label>Saldo real de la cuenta</label>
         <input class="inp" type="number" id="f-saldo-real" placeholder="0.00" step="any"
@@ -1892,7 +1915,7 @@ function renderNuevo() {
       <div class="field">
         <label>Cuenta</label>
         <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value">${cuentaOptions}</select>
-      </div>` : `
+      </div>` : isRep ? "" : `
       <div class="row2">
         <div class="field">
           <label>Cuenta${isInt ? " origen" : ""}</label>
@@ -2077,6 +2100,76 @@ function highlightRubroItem(items) {
   if (active) active.scrollIntoView({ block: "nearest" });
 }
 
+// ── Cobro dividido ────────────────────────────────────────────────────────
+// Un cobro que entró repartido entre varias cuentas (típico: la recaudación de un partido, parte
+// en efectivo y parte en Mercado Pago). Emite un movimiento por fila en vez de uno solo con dos
+// cuentas, porque `cuenta` es único y el saldo por cuenta depende de eso.
+//
+// Sólo en altas nuevas: editando, cada movimiento ya es una fila independiente y se toca por
+// separado. Mezclar los dos modos obligaría a decidir qué pasa si al editar un reparto de 2 filas
+// lo dejás en 1 (¿se borra el otro movimiento?), y no vale la pena para lo que resuelve.
+function repartoDisponible() {
+  return !editId && (F.tipo === "INGRESO" || F.tipo === "EGRESO");
+}
+
+function toggleReparto(on) {
+  if (!repartoDisponible()) return;
+  // Al activarlo arranca con dos filas —repartir en una sola no es repartir— y la primera hereda
+  // el monto y la cuenta que ya venían cargados, para no hacer retipear lo que estaba puesto.
+  F.reparto = on ? [{ monto: F.monto || "", cuenta: F.cuenta, modoPago: F.modoPago }, nuevaFilaReparto()] : null;
+  renderNuevo();
+}
+
+function addFilaReparto()  { if (F.reparto) { F.reparto.push(nuevaFilaReparto()); renderNuevo(); } }
+function delFilaReparto(i) { if (F.reparto && F.reparto.length > 2) { F.reparto.splice(i, 1); renderNuevo(); } }
+
+function setRepartoCampo(i, campo, valor) {
+  if (!F.reparto || !F.reparto[i]) return;
+  F.reparto[i][campo] = valor;
+  if (campo === "monto") updateRepartoTotal();
+}
+
+function repartoTotal() {
+  return (F.reparto || []).reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
+}
+
+function updateRepartoTotal() {
+  const el = document.getElementById("reparto-total");
+  if (el) el.textContent = fmt(repartoTotal());
+}
+
+// Filas con monto cargado. Las vacías se ignoran en silencio al guardar: dejar una fila de más
+// sin completar es lo más normal del mundo y no tiene por qué ser un error.
+function repartoFilasValidas() {
+  return (F.reparto || []).filter(f => f.monto !== "" && parseFloat(f.monto) > 0);
+}
+
+function renderRepartoBlock() {
+  const filas = F.reparto || [];
+  const rows = filas.map((f, i) => {
+    const cuentaOpts = cuentas.map(c => `<option value="${esc(c)}" ${f.cuenta===c?"selected":""}>${esc(c)}</option>`).join("");
+    const metodoOpts = metodos.map(m => `<option value="${esc(m)}" ${f.modoPago===m?"selected":""}>${esc(m)}</option>`).join("");
+    return `<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <input class="inp ${F.tipo==='INGRESO'?'monto-ing':'monto-egr'}" type="number" min="0" step="any" inputmode="decimal"
+             placeholder="0" style="flex:1;min-width:80px" value="${esc(String(f.monto))}"
+             oninput="setRepartoCampo(${i},'monto',this.value)">
+      <select class="inp" style="flex:1;min-width:90px" onchange="setRepartoCampo(${i},'cuenta',this.value)">${cuentaOpts}</select>
+      <select class="inp" style="flex:1;min-width:90px" onchange="setRepartoCampo(${i},'modoPago',this.value)">${metodoOpts}</select>
+      <button class="btn-sm" title="Quitar esta fila" ${filas.length<=2?"disabled":""}
+              style="${filas.length<=2?"opacity:.35":""}" onclick="delFilaReparto(${i})">✕</button>
+    </div>`;
+  }).join("");
+  return `
+    <div class="field">
+      <label>Cobro dividido — se guarda un movimiento por fila</label>
+      ${rows}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+        <button class="btn-sm" onclick="addFilaReparto()">+ Agregar cuenta</button>
+        <span style="font-size:13px;color:var(--text2)">Total: $<span id="reparto-total">${fmt(repartoTotal())}</span></span>
+      </div>
+    </div>`;
+}
+
 // ── Atajo de entradas vendidas en el form de movimientos ──────────────────
 // El dato vive en el partido (PAR_COLS), no en el movimiento: un partido puede tener varios
 // movimientos de entradas y no habría forma de saber cuál lleva el número bueno. Pero el momento
@@ -2197,6 +2290,10 @@ async function saveMovimiento() {
   if (!F.fecha || isNaN(new Date(F.fecha + "T00:00:00").getTime())) { toast("Ingresá una fecha válida", "err"); return; }
 
   let mov;
+  // Cobro dividido: se resuelve acá arriba porque cambia qué se valida (no hay un F.monto único) y
+  // de dónde salen cuenta/método del movimiento principal.
+  const usaReparto = !!F.reparto && repartoDisponible();
+  const filasRep   = usaReparto ? repartoFilasValidas() : [];
 
   if (F.tipo === "AJUSTE") {
     if (F.saldoReal === "" || isNaN(+F.saldoReal)) { toast("Ingresá el saldo real de la cuenta", "err"); return; }
@@ -2225,12 +2322,20 @@ async function saveMovimiento() {
   } else {
     if (!F.rubro)   { toast("Seleccioná un rubro", "err"); return; }
     if (!F.concepto || !F.concepto.trim()) { toast("Ingresá un concepto", "err"); return; }
-    if (!F.monto || isNaN(+F.monto) || +F.monto <= 0) { toast("Ingresá un monto válido", "err"); return; }
+    if (usaReparto) {
+      if (filasRep.length < 2) { toast("Cargá el monto en al menos dos cuentas, o destildá el cobro dividido", "err"); return; }
+      // Dos filas a la misma cuenta serían dos movimientos idénticos: casi siempre es un descuido,
+      // y si de verdad fueran dos cobros distintos van como dos altas separadas.
+      const usadas = filasRep.map(f => f.cuenta);
+      if (new Set(usadas).size !== usadas.length) { toast("Hay dos filas con la misma cuenta — juntalas en una", "err"); return; }
+    } else {
+      if (!F.monto || isNaN(+F.monto) || +F.monto <= 0) { toast("Ingresá un monto válido", "err"); return; }
+    }
     if (F.tipo === "INTERNO") {
       if (!F.cuentaDestino) { toast("Seleccioná cuenta destino", "err"); return; }
       if (F.cuentaDestino === F.cuenta) { toast("La cuenta destino debe ser distinta a la de origen", "err"); return; }
     }
-    const monto = Math.abs(parseFloat(F.monto));
+    const monto = usaReparto ? Math.abs(parseFloat(filasRep[0].monto)) : Math.abs(parseFloat(F.monto));
     const mes   = F.fecha.slice(0,7).replace("-","");
     mov = {
       id: F.id, mes, fecha: F.fecha,
@@ -2239,8 +2344,9 @@ async function saveMovimiento() {
       egreso:     F.tipo === "EGRESO"  ? monto : (F.tipo === "INTERNO" ? monto : 0),
       ingreso:    F.tipo === "INGRESO" ? monto : 0,
       montoFinal: monto,
-      cuenta: F.cuenta, cuentaDestino: F.cuentaDestino || "",
-      modoPago: F.modoPago,
+      cuenta: usaReparto ? filasRep[0].cuenta : F.cuenta,
+      cuentaDestino: F.cuentaDestino || "",
+      modoPago: usaReparto ? filasRep[0].modoPago : F.modoPago,
       jugadorCT: F.jugadorCT || "", jugadorId: entidadIdPorNombre(F.jugadorCT),
       adherente: F.adherente || "", adherenteId: adherenteIdPorNombre(F.adherente),
       observacion: F.observacion || "", comprobante: F.comprobante || "",
@@ -2267,6 +2373,17 @@ async function saveMovimiento() {
 
   const wasEdit = !!editId;
 
+  // Las filas 2..N del reparto: clones del movimiento principal que sólo difieren en monto, cuenta
+  // y método. Comparten concepto, rubro, fecha, partido y evento, así que en cualquier reporte
+  // agrupado (por partido, por rubro, por mes) suman como una sola cosa, que es lo que son.
+  const movsExtra = usaReparto ? filasRep.slice(1).map(f => {
+    const m = Math.abs(parseFloat(f.monto));
+    return { ...mov, id: uid(),
+             egreso:  F.tipo === "EGRESO"  ? m : 0,
+             ingreso: F.tipo === "INGRESO" ? m : 0,
+             montoFinal: m, cuenta: f.cuenta, modoPago: f.modoPago };
+  }) : [];
+
   // Marca de alta. En un alta nueva es ahora; editando se conserva la original
   // para que el movimiento no se mueva de lugar en el orden de carga.
   if (wasEdit) {
@@ -2277,10 +2394,17 @@ async function saveMovimiento() {
     mov.timestamp = nowTimestamp();
     // Al final de la lista hasta el próximo refresco desde la hoja
     mov.orden = movimientos.reduce((mx, m) => Math.max(mx, m.orden || 0), 0) + 1;
+    // Órdenes consecutivos para que las filas del reparto queden juntas y en el orden en que se
+    // cargaron, en vez de intercaladas con lo que venga después.
+    movsExtra.forEach((me, i) => { me.timestamp = mov.timestamp; me.orden = mov.orden + i + 1; });
   }
 
   setSaveBtnState("saving");
   showOverlay(navigator.onLine ? "Guardando…" : "Guardando (sin conexión)…");
+  // Si la conexión se corta en medio de un reparto, el principal puede haber entrado y una fila
+  // posterior no. Sin esta marca, el catch offline volvería a encolar el principal y terminaría
+  // duplicado en la hoja.
+  let principalGuardado = false;
   try {
     const r = editId
       ? await Storage.updateMov(mov)
@@ -2297,6 +2421,18 @@ async function saveMovimiento() {
     } else {
       movimientos.push(mov);
     }
+    principalGuardado = true;
+
+    // Filas 2..N del reparto, una por una: el backend serializa las escrituras con un lock, así
+    // que mandarlas en paralelo sólo haría que se peleen por él. Si una falla, las anteriores ya
+    // quedaron guardadas — se avisa cuáles entraron para que la diferencia se vea en el momento y
+    // no al conciliar el mes.
+    for (const me of movsExtra) {
+      const rx = await Storage.saveMov(me);
+      if (!rx.ok) throw new Error("Se guardó " + mov.cuenta + " pero falló " + me.cuenta + ": " + (rx.error || "error"));
+      if (rx.id) me.id = rx.id;
+      movimientos.push(me);
+    }
     // Refresh pagos in background — non-blocking, no second wait
     if (mov.adherente && mov.rubro.toUpperCase().includes("ADHERENTE")) {
       Storage.listPagos().then(rPag => { if (rPag.ok) pagos = rPag.pagos || []; });
@@ -2310,18 +2446,29 @@ async function saveMovimiento() {
     renderNuevo();
     setSaveBtnState("saved");
     showMovSavedModal(mov, wasEdit);
+    if (movsExtra.length) toast("Se guardaron " + (movsExtra.length + 1) + " movimientos, uno por cuenta", "ok");
   } catch(e) {
     hideOverlay();
     if (isNetworkError(e)) {
       // Sin conexión: guardamos localmente y encolamos para sincronizar después.
-      mov._pending = true;
-      if (wasEdit) {
-        const idx = movimientos.findIndex(m => m.id === mov.id);
-        if (idx >= 0) movimientos[idx] = mov;
-      } else {
-        movimientos.push(mov);
+      if (!principalGuardado) {
+        mov._pending = true;
+        if (wasEdit) {
+          const idx = movimientos.findIndex(m => m.id === mov.id);
+          if (idx >= 0) movimientos[idx] = mov;
+        } else {
+          movimientos.push(mov);
+        }
+        addPendingMov(mov, wasEdit);
       }
-      addPendingMov(mov, wasEdit);
+      // Las filas del reparto que todavía no se guardaron van a la misma cola. Se filtran las que
+      // ya entraron antes de que se cortara la conexión, para no encolarlas dos veces.
+      for (const me of movsExtra) {
+        if (movimientos.some(m => m.id === me.id)) continue;
+        me._pending = true;
+        movimientos.push(me);
+        addPendingMov(me, false);
+      }
       saveSnapshotToCache();
       updateBadge();
       resetF();

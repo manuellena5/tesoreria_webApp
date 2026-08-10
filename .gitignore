@@ -2,3 +2,7 @@ PROMPT_ClaudeCode_webApp.md
 PROMPT_ClaudeCode_webApp_v2.md
 _test_marker.txt
 PROMPT_premios_descuentos_pagos.md
+# Cuando se reescribe un archivo que el montaje de Windows tiene abierto, el original queda
+# huérfano con este nombre en vez de borrarse. Son basura, y el número cambia cada vez: por eso el
+# comodín y no un nombre puntual (ya se colaron dos al repo por listarlos de a uno).
+.fuse_hidden*

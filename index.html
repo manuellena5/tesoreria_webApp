@@ -3746,9 +3746,12 @@ function armarPlacaJson({p, pg}) {
     // que existiera el campo — así que el generador sigue recibiendo lo que ya sabía manejar y el
     // caso "sin cargar" no cambia de comportamiento. El JSON es editable en el modal antes de
     // copiarlo, así que se puede corregir a mano igual que siempre.
+    // Ojo: acá la clave del número es `n`, no `m`. Los renglones de los bloques usan `m`, pero el
+    // generador lee la asistencia con `n` (ver readAsis/renderAsis en Placas_Recaudacion.html).
+    // Con `m` la placa importa los conceptos y los deja todos en cero, sin avisar de nada.
     asistencia: partidoEntradasTotal(p) === null ? [] : [
-      { c: "Caballeros", m: Number(p.entradasCaballeros || 0) },
-      { c: "Damas",      m: Number(p.entradasDamas      || 0) },
+      { c: "Caballeros", n: Number(p.entradasCaballeros || 0) },
+      { c: "Damas",      n: Number(p.entradasDamas      || 0) },
     ],
     bloques: [
       { nombre: "BUFFET", neto: "NETO BUFFET", items: [
@@ -3857,8 +3860,8 @@ function setPlacaAsistencia(cat, v) {
 // que la placa publique un cero que nadie contó.
 function aplicarAsistenciaPlaca() {
   placaEdit.json.asistencia = ["Caballeros", "Damas"]
-    .map(c => ({ c, m: placaEdit.asis[c] || 0 }))
-    .filter(a => a.m > 0);
+    .map(c => ({ c, n: placaEdit.asis[c] || 0 }))   // `n`, no `m` — ver armarPlacaJson
+    .filter(a => a.n > 0);
 }
 
 function setPlacaMonto(bi, ii, v) {
@@ -3907,7 +3910,7 @@ function openPlacaModal(partidoId) {
   // manipular el array directamente obligaría a crear y borrar elementos según se vacíe cada campo.
   placaEdit.asis = { Caballeros: 0, Damas: 0 };
   for (const a of (d.json.asistencia || [])) {
-    if (a && Object.prototype.hasOwnProperty.call(placaEdit.asis, a.c)) placaEdit.asis[a.c] = Number(a.m) || 0;
+    if (a && Object.prototype.hasOwnProperty.call(placaEdit.asis, a.c)) placaEdit.asis[a.c] = Number(a.n) || 0;
   }
   placaEdit.asisDelPartido = (d.json.asistencia || []).length > 0;
 

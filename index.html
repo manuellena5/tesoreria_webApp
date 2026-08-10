@@ -1089,6 +1089,11 @@ function fmt(n) {
   const v = Math.round(Math.abs(+n || 0));
   return "$" + v.toLocaleString("es-AR");
 }
+// Kilos de grano: mismo separador de miles que fmt() pero SIN el "$" — son una cantidad, no plata.
+// Se admiten hasta 2 decimales porque los kg de una cosecha o venta no siempre son enteros.
+function fmtKg(n) {
+  return (+n || 0).toLocaleString("es-AR", { maximumFractionDigits: 2 });
+}
 // fmt() muestra siempre el valor absoluto (el signo lo da el color y el tipo del movimiento).
 // Donde un negativo significa algo distinto que un positivo — descuentos sobre el sueldo, netos
 // a transferir — hay que mostrarlo, o un descuento de $8.000 se lee como un cobro de $8.000.
@@ -3991,7 +3996,7 @@ function renderPatrimonio() {
     const kg = stock[g] || 0;
     const valor = (kg/1000) * (preciosGranos[g]||0);
     return `<div class="cuenta-item">
-      <span class="cuenta-nombre">${esc(g)} (${fmt(kg)} kg)</span>
+      <span class="cuenta-nombre">${esc(g)} (${fmtKg(kg)} kg)</span>
       <span class="cuenta-saldo pos">${fmt(valor)}</span>
     </div>`;
   }).join("");
@@ -6677,7 +6682,7 @@ function renderGranos() {
     <div class="entity-item" style="flex-direction:column;align-items:stretch;gap:6px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span class="entity-name">${esc(g)}</span>
-        <span class="cuenta-saldo pos">${fmt(kg)} kg</span>
+        <span class="cuenta-saldo pos">${fmtKg(kg)} kg</span>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <label style="font-size:12px;color:var(--text2);white-space:nowrap">$/tonelada</label>
@@ -6689,14 +6694,22 @@ function renderGranos() {
   }).join("");
 
   const sorted = [...reservas].sort((a,b) => b.fecha.localeCompare(a.fecha));
-  const histHtml = sorted.map(r => `
+  const histHtml = sorted.map(r => {
+    // En una venta el monto vive en el movimiento que se generó: se busca por movimientoId para
+    // mostrar la misma línea que quedó como concepto del movimiento.
+    const mov   = r.movimientoId ? movimientos.find(m => m.id === r.movimientoId) : null;
+    const monto = mov ? Number(mov.ingreso || mov.montoFinal || 0) : 0;
+    const cola  = (r.tipo === "VENTA" && monto)
+      ? ` — ${fmt(monto)} <span style="color:var(--text3)">(precio ${fmt(monto / (r.kg/1000))})</span>` : "";
+    return `
     <div class="entity-item" id="res-${r.id}">
       <div>
-        <span class="entity-name">${r.tipo === "COSECHA" ? "🌾" : "💰"} ${esc(r.grano)} — ${fmt(r.kg)} kg</span>
+        <span class="entity-name">${r.tipo === "COSECHA" ? "🌾" : "💰"} ${esc(r.grano)} — ${fmtKg(r.kg)} kg${cola}</span>
         <div style="font-size:11px;color:var(--text3)">${r.fecha} · ${esc(r.tipo)}${r.nota ? " · "+esc(r.nota) : ""}</div>
       </div>
       <button class="btn-sm danger" id="resdel-${r.id}" onclick="confirmDeleteReserva('${r.id}')">✕</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 
   return `
     <div class="cfg-title" style="margin-bottom:8px">📦 Stock de granos</div>
@@ -6781,17 +6794,22 @@ async function addVentaGrano() {
   if (!isFinite(monto) || monto<=0){ toast("Ingresá el monto del ingreso (número positivo)", "err"); return; }
   const stock = calcStockGranos();
   if (kg > (stock[grano] || 0)) {
-    toast(`No hay suficiente stock de ${grano} (disponible: ${fmt(stock[grano]||0)} kg)`, "err");
+    toast(`No hay suficiente stock de ${grano} (disponible: ${fmtKg(stock[grano]||0)} kg)`, "err");
     return;
   }
   setBtnState(btnId, "saving");
   showOverlay("Guardando…");
   try {
     const mes = fecha.slice(0,7).replace("-","");
+    // Precio implícito de ESTA venta, en $/tonelada (la unidad del precio que se carga en pantalla).
+    // Sale de los dos números que se acaban de tipear, así que la descripción siempre cierra sola:
+    // kg × precio/1000 = monto. Usar el precio configurado en su lugar daría una línea que no
+    // multiplica bien cuando la venta se cerró a otro valor.
+    const precioTn = monto / (kg / 1000);
     const movPayload = {
       id: uid(), mes, fecha,
       codRubro: "34", rubro: "CEREAL - INGRESOS Y GASTOS", categoria: "Otros | Internos",
-      concepto: `Venta ${grano} ${fmt(kg)} kg`,
+      concepto: `Venta ${grano} - ${fmtKg(kg)} kg - ${fmt(monto)} - (precio ${fmt(precioTn)})`,
       egreso: 0, ingreso: monto, montoFinal: monto,
       cuenta, cuentaDestino: "", modoPago: modo,
       jugadorCT: "", adherente: "",
@@ -6799,6 +6817,9 @@ async function addVentaGrano() {
     };
     const rMov = await Storage.saveMov(movPayload);
     if (!rMov.ok) throw new Error(rMov.error || "Error al guardar el ingreso");
+    // saveMov puede reasignar el ID si el que mandamos ya existía en la hoja: vale el que volvió,
+    // o el historial de granos no encuentra el movimiento de su propia venta.
+    movPayload.id = rMov.id || movPayload.id;
     movimientos.push(movPayload);
 
     const rRes = await Storage.saveReserva({ fecha, grano, tipo: "VENTA", kg, nota, movimientoId: rMov.id });

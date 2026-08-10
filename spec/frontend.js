@@ -353,6 +353,24 @@ check("tras editar, ningún monto quedó como string",
 igual("y el saldo refleja lo editado", app.placaSaldoFinal(editado),
       1500000 - 900000 + 1245000 + 107000 - 500 - 0 - 85000 - 100000 - 40000 - 63000);
 
+seccion("9a · Granos: los kilos no son plata");
+igual("fmtKg no pone el signo peso",   app.fmtKg(5010),    "5.010");
+igual("separa los miles igual que fmt",app.fmtKg(1234567), "1.234.567");
+igual("admite kg con decimales",       app.fmtKg(5010.5),  "5.010,5");
+igual("cero es cero",                  app.fmtKg(0),       "0");
+igual("y un valor vacío no rompe",     app.fmtKg(undefined), "0");
+check("fmt sí lleva el $ (no se tocó)", app.fmt(5010) === "$5.010");
+
+// La descripción del movimiento que genera una venta: cereal, kilos, monto y precio por tonelada.
+// El precio sale de los dos números tipeados, así que la línea siempre multiplica bien.
+const kgV = 5010, montoV = 1500000;
+const conceptoV = `Venta Trigo - ${app.fmtKg(kgV)} kg - ${app.fmt(montoV)} - (precio ${app.fmt(montoV/(kgV/1000))})`;
+igual("la descripción tiene el formato pedido", conceptoV,
+      "Venta Trigo - 5.010 kg - $1.500.000 - (precio $299.401)");
+check("y ya no muestra los kg como pesos", conceptoV.indexOf("$5.010") < 0, conceptoV);
+check("el precio por tonelada reconstruye el monto",
+      Math.abs((kgV/1000) * (montoV/(kgV/1000)) - montoV) < 0.01);
+
 seccion("9b · Mes de Pagos Jugadores deformado por Sheets");
 igual("un Date en texto vuelve a YYYY-MM",
       app.normMesPJ("Sat Aug 01 2026 00:00:00 GMT-0300 (Argentina Standard Time)"), "2026-08");

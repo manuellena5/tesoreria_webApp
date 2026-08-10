@@ -27,7 +27,13 @@ const JUG_SHEET = "Jugadores";
 const GRP_SHEET = "Grupos";
 const CFG_SHEET = "Config";
 const PAR_SHEET = "Partidos";
-const PAR_COLS  = ["ID","Fecha","Rival","NumeroFecha","Condicion","Activo","Torneo"];
+// EntradasDamas/EntradasCaballeros son la asistencia pagada del partido, no plata: viven acá y no
+// en el movimiento de recaudación porque un partido puede tener varios movimientos de entradas
+// (rubros 1 y 4) y no habría forma de saber cuál lleva el número bueno. Se cargan desde el modal
+// de partido o desde el atajo del formulario de movimientos, que escribe sobre esta misma fila.
+// Vacías en los partidos históricos: todo consumidor debe tolerar "" y no asumir 0 (ver
+// partidoEntradasTotal en index.html, que devuelve null cuando no hay dato cargado).
+const PAR_COLS  = ["ID","Fecha","Rival","NumeroFecha","Condicion","Activo","Torneo","EntradasDamas","EntradasCaballeros"];
 const EVE_SHEET = "Eventos";
 const EVE_COLS  = ["ID","Nombre","Fecha","Activo"];
 
@@ -1043,7 +1049,11 @@ function handleAction(data) {
           numeroFecha:  String(r[3]||""),
           condicion:    String(r[4]||"LOCAL"),
           activo:       String(r[5]) !== "false",
-          torneo:       String(r[6]||"")
+          torneo:       String(r[6]||""),
+          // "" (no cargado) y 0 (partido sin público) son cosas distintas y el front las distingue:
+          // se emite "" tal cual en vez de normalizar a 0.
+          entradasDamas:      r[7] === "" || r[7] == null ? "" : Number(r[7]),
+          entradasCaballeros: r[8] === "" || r[8] == null ? "" : Number(r[8])
         }))
         .sort((a,b) => b.fecha.localeCompare(a.fecha));
       return { ok: true, partidos };
@@ -1053,18 +1063,27 @@ function handleAction(data) {
       const sh = getOrCreateSheet(PAR_SHEET, PAR_COLS);
       const p  = data.partido;
       const all = sh.getDataRange().getValues();
+      // Un cliente viejo (index.html cacheado por el service worker de antes de este cambio) manda
+      // el partido sin los campos de entradas. Como la edición pisa la fila entera, sin este
+      // resguardo ese cliente borraría la asistencia ya cargada. `undefined` = "no opino, dejá lo
+      // que había"; "" = "borralo" (el usuario vació el campo a propósito).
+      const entradaOKeep = (v, actual) => v === undefined ? (actual == null ? "" : actual)
+                                        : (v === "" || v === null ? "" : Number(v));
       if (p.id) {
         for (let i = 1; i < all.length; i++) {
           if (String(all[i][0]) === String(p.id)) {
             sh.getRange(i + 1, 1, 1, PAR_COLS.length).setValues([[
-              p.id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true", p.torneo||""
+              p.id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true", p.torneo||"",
+              entradaOKeep(p.entradasDamas,      all[i][7]),
+              entradaOKeep(p.entradasCaballeros, all[i][8])
             ]]);
             return { ok: true, id: p.id };
           }
         }
       }
       const id = uid_gs();
-      sh.appendRow([id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true", p.torneo||""]);
+      sh.appendRow([id, p.fecha||"", p.rival||"", p.numeroFecha||"", p.condicion||"LOCAL", "true", p.torneo||"",
+                    entradaOKeep(p.entradasDamas, ""), entradaOKeep(p.entradasCaballeros, "")]);
       return { ok: true, id };
     }
 

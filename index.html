@@ -1928,7 +1928,7 @@ function renderNuevo() {
 
       <div class="field">
         <label>Partido (opcional)</label>
-        <select class="inp" id="f-partido" onchange="F.partidoId=this.value">
+        <select class="inp" id="f-partido" onchange="F.partidoId=this.value; syncEntradasPartidoRow()">
           <option value="">— Sin partido —</option>
           ${[...partidos]
             .filter(p => p.activo)
@@ -1939,6 +1939,14 @@ function renderNuevo() {
               return `<option value="${esc(p.id)}" ${F.partidoId===p.id?"selected":""}>${esc(label)}</option>`;
             }).join("")}
         </select>
+      </div>
+
+      <div class="field" id="entradas-partido-row" style="${entradasRowAplica()?"":"display:none"}">
+        <label>Entradas vendidas · se guardan en el partido</label>
+        <div style="display:flex; gap:8px">
+          <input class="inp" id="f-ent-damas"      type="number" min="0" step="1" inputmode="numeric" placeholder="Damas">
+          <input class="inp" id="f-ent-caballeros" type="number" min="0" step="1" inputmode="numeric" placeholder="Caballeros">
+        </div>
       </div>
 
       <div class="field">
@@ -1984,6 +1992,9 @@ function renderNuevo() {
   `);
 
   initRubroSelect();
+  // El template ya decide si la fila de entradas se ve, pero los inputs salen vacíos: esto los
+  // precarga con lo que tenga el partido (clave al editar un movimiento ya cargado).
+  syncEntradasPartidoRow();
 }
 
 function setTipo(tipo) {
@@ -2066,6 +2077,58 @@ function highlightRubroItem(items) {
   if (active) active.scrollIntoView({ block: "nearest" });
 }
 
+// ── Atajo de entradas vendidas en el form de movimientos ──────────────────
+// El dato vive en el partido (PAR_COLS), no en el movimiento: un partido puede tener varios
+// movimientos de entradas y no habría forma de saber cuál lleva el número bueno. Pero el momento
+// natural para anotarlo es al cargar la recaudación, así que se ofrece acá y se escribe sobre el
+// partido. Sólo aparece cuando el movimiento apunta a un partido y el rubro es de entradas.
+const ENTRADAS_RUBROS = ["1", "4"];
+
+function entradasRowAplica() {
+  return !!F.partidoId && ENTRADAS_RUBROS.includes(F.codRubro);
+}
+
+// Muestra u oculta la fila y la precarga con lo que ya tiene el partido. Se llama cada vez que
+// cambia el partido o el rubro, que son las dos cosas de las que depende.
+function syncEntradasPartidoRow() {
+  const row = document.getElementById("entradas-partido-row");
+  if (!row) return;
+  const aplica = entradasRowAplica();
+  row.style.display = aplica ? "" : "none";
+  if (!aplica) return;
+  const p = partidos.find(x => x.id === F.partidoId);
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v === "" || v == null) ? "" : String(v); };
+  set("f-ent-damas",      p ? p.entradasDamas      : "");
+  set("f-ent-caballeros", p ? p.entradasCaballeros : "");
+}
+
+// Persiste las entradas sobre el partido. Se llama después de guardar el movimiento y falla en
+// silencio a propósito: el movimiento (que es la plata) ya se guardó bien, y hacer fallar todo el
+// alta por un dato de asistencia sería peor que perderlo. Si falla, avisa y el número se puede
+// cargar después desde el modal de partido.
+async function guardarEntradasDelPartido(partidoId, damasRaw, caballerosRaw) {
+  const p = partidos.find(x => x.id === partidoId);
+  if (!p) return;
+  const norm = v => { const s = String(v ?? "").trim(); return s === "" ? "" : Number(s); };
+  const entradasDamas = norm(damasRaw), entradasCaballeros = norm(caballerosRaw);
+  if (entradasDamas !== "" && (!Number.isFinite(entradasDamas) || entradasDamas < 0)) return;
+  if (entradasCaballeros !== "" && (!Number.isFinite(entradasCaballeros) || entradasCaballeros < 0)) return;
+  const igual = v => (v === "" ? "" : Number(v));
+  if (igual(p.entradasDamas) === entradasDamas && igual(p.entradasCaballeros) === entradasCaballeros) return;
+  try {
+    const r = await Storage.savePartido({
+      id: p.id, fecha: p.fecha, rival: p.rival, numeroFecha: p.numeroFecha,
+      condicion: p.condicion, torneo: p.torneo, entradasDamas, entradasCaballeros
+    });
+    if (!r.ok) throw new Error(r.error || "Error");
+    p.entradasDamas = entradasDamas;
+    p.entradasCaballeros = entradasCaballeros;
+    saveSnapshotToCache();
+  } catch (e) {
+    toast("El movimiento se guardó, pero no se pudieron guardar las entradas. Cargalas desde el partido.", "err");
+  }
+}
+
 function selectRubroItem(item, input, drop, blurAfter) {
   if (!item) return;
   F.codRubro  = item.dataset.cod;
@@ -2084,6 +2147,7 @@ function selectRubroItem(item, input, drop, blurAfter) {
     if (F.rubro.toUpperCase().includes("ADHERENTE")) adhRow.classList.add("highlighted");
     else adhRow.classList.remove("highlighted");
   }
+  syncEntradasPartidoRow();
 }
 
 function filterRubros(query) {
@@ -2188,6 +2252,14 @@ async function saveMovimiento() {
     };
   }
 
+  // Las entradas se leen del DOM ahora, antes de cualquier await: resetF() y el re-render posterior
+  // vacían los inputs, así que después del guardado ya no estarían.
+  const entradasPend = entradasRowAplica()
+    ? { partidoId: F.partidoId,
+        damas:      document.getElementById("f-ent-damas")?.value      ?? "",
+        caballeros: document.getElementById("f-ent-caballeros")?.value ?? "" }
+    : null;
+
   // Fecha llamativamente en el futuro: probablemente un error de tipeo, confirmamos antes de guardar.
   if (F.fecha > today() && !editId) {
     if (!confirm("La fecha (" + F.fecha + ") es posterior a hoy. ¿Confirmás que es correcta?")) return;
@@ -2229,6 +2301,8 @@ async function saveMovimiento() {
     if (mov.adherente && mov.rubro.toUpperCase().includes("ADHERENTE")) {
       Storage.listPagos().then(rPag => { if (rPag.ok) pagos = rPag.pagos || []; });
     }
+    // Asistencia del partido: va aparte del movimiento y sin bloquear el alta (ver la función).
+    if (entradasPend) guardarEntradasDelPartido(entradasPend.partidoId, entradasPend.damas, entradasPend.caballeros);
     updateBadge();
     saveSnapshotToCache();
     resetF();
@@ -3195,6 +3269,18 @@ function sumarMontoAPartido(pg, m, monto, repartido) {
 
 const PARTIDO_RES_CATS_EXCLUIDAS = ["Movilidad", "Jugadores y Cuerpo Técnico"];
 
+// Público pagado del partido: damas + caballeros. Devuelve null —no 0— cuando no hay ningún dato
+// cargado, para poder distinguir "todavía no lo anotamos" de "no vino nadie". Los partidos
+// anteriores a que existiera el campo caen siempre en null, así que todo lo que promedie o sume
+// asistencia tiene que filtrarlos en vez de tratarlos como cero y ensuciar el promedio.
+function partidoEntradasTotal(p) {
+  if (!p) return null;
+  const d = p.entradasDamas, c = p.entradasCaballeros;
+  const vacio = v => v === "" || v == null || !Number.isFinite(Number(v));
+  if (vacio(d) && vacio(c)) return null;
+  return (vacio(d) ? 0 : Number(d)) + (vacio(c) ? 0 : Number(c));
+}
+
 // Un movimiento apunta a un partido por su propio partidoId o por el de alguno de sus ítems.
 function movTienePartido(m) {
   return !!(m.partidoId || (m.itemsDetalle||[]).some(it => it.partidoId));
@@ -3281,6 +3367,9 @@ function partidoResLabel(p) { return `${p.numeroFecha} — ${p.rival}`; }
 function partidoResOrdenValor(r, col) {
   switch (col) {
     case "fecha":        return r.p.fecha;
+    // Los partidos sin asistencia cargada van al fondo en el orden descendente (el default), en vez
+    // de mezclarse con los que efectivamente no tuvieron público.
+    case "publico":       return partidoEntradasTotal(r.p) ?? -1;
     case "buffet":        return r.pg.buffetIng;
     case "buffetEgr":     return r.pg.buffetEgr;
     case "gastosCancha":  return r.pg.gastosCancha;
@@ -3374,9 +3463,12 @@ function renderPartidoResumenBody() {
   if (!rows.length) return `<p class="note">Sin partidos para estos filtros</p>`;
 
   let totBuffetIng=0, totBuffetEgr=0, totGastosCancha=0, totOtrosEgr=0, totEntradas=0, totOtrosIng=0, totNeto=0;
+  let totPublico=0;
 
   const partidoRows = rows.map(r => {
     const {p, pg, netoBuffet, totalNeto} = r;
+    const publico = partidoEntradasTotal(p);
+    if (publico !== null) totPublico += publico;
     totBuffetIng    += pg.buffetIng;
     totBuffetEgr    += pg.buffetEgr;
     totGastosCancha += pg.gastosCancha;
@@ -3391,6 +3483,7 @@ function renderPartidoResumenBody() {
     return `<tr class="reint-row" onclick="togglePartidoResDetalle('${esc(escJs(p.id))}')">
       <td><span style="color:var(--text3)">${isExp?"▾":"▸"}</span> ${esc(partidoResLabel(p))}${
         nNoComp ? ` <span style="color:var(--text3);font-size:11px" title="${nNoComp} movimiento${nNoComp!==1?"s":""} de este partido que la tabla no computa">⊘${nNoComp}</span>` : ""}</td>
+      <td title="${publico===null?"Asistencia no cargada":esc((p.entradasDamas||0)+" damas · "+(p.entradasCaballeros||0)+" caballeros")}">${publico===null?`<span style="color:var(--text3)">—</span>`:publico}</td>
       <td>${pg.buffetIng ? fmt(pg.buffetIng) : ""}</td>
       <td class="egr">${pg.buffetEgr ? fmt(pg.buffetEgr) : ""}</td>
       <td class="egr">${pg.gastosCancha ? fmt(pg.gastosCancha) : ""}</td>
@@ -3401,12 +3494,13 @@ function renderPartidoResumenBody() {
       <td class="${netoClass}">${netoSign}${fmt(totalNeto)}</td>
       <td><button class="btn-sm" title="JSON para la placa de redes" onclick="event.stopPropagation();openPlacaModal('${esc(escJs(p.id))}')">🖼️</button></td>
     </tr>${isExp ? `
-    <tr><td colspan="10" style="padding:0;border-bottom:none">${renderPartidoResDetalle(r)}</td></tr>` : ""}`;
+    <tr><td colspan="11" style="padding:0;border-bottom:none">${renderPartidoResDetalle(r)}</td></tr>` : ""}`;
   }).join("");
 
   const totNetoClass = totNeto >= 0 ? "neto-pos" : "neto-neg";
   const totRows = `<tr>
     <td>TOTALES</td>
+    <td>${totPublico || ""}</td>
     <td>${fmt(totBuffetIng)}</td>
     <td class="egr">${fmt(totBuffetEgr)}</td>
     <td class="egr">${fmt(totGastosCancha)}</td>
@@ -3423,6 +3517,7 @@ function renderPartidoResumenBody() {
       <table class="partido-table">
         <thead><tr>
           ${thOrdenPartidoRes("fecha","Partido")}
+          ${thOrdenPartidoRes("publico","Público")}
           ${thOrdenPartidoRes("buffet","Buffet")}
           ${thOrdenPartidoRes("buffetEgr","G.Buffet")}
           ${thOrdenPartidoRes("gastosCancha","G.Cancha")}
@@ -3444,16 +3539,17 @@ function exportPartidoResExcel() {
   const rows = partidoResFiltrarYOrdenar();
   if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
 
-  const headers = ["Partido","Torneo","Buffet","G.Buffet","G.Cancha","Otros Egr.","Entradas","Otros Ing.","Neto Buffet","Total Neto"];
+  const headers = ["Partido","Torneo","Damas","Caballeros","Público","Buffet","G.Buffet","G.Cancha","Otros Egr.","Entradas","Otros Ing.","Neto Buffet","Total Neto"];
   const dataRows = rows.map(({p, pg, netoBuffet, totalNeto}) => [
     partidoResLabel(p), p.torneo || "",
+    p.entradasDamas ?? "", p.entradasCaballeros ?? "", partidoEntradasTotal(p) ?? "",
     pg.buffetIng || "", pg.buffetEgr || "", pg.gastosCancha || "", pg.otrosEgr || "",
     pg.entradas || "", pg.otrosIng || "", netoBuffet || "", totalNeto || ""
   ]);
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
-  ws["!cols"] = [28,12,12,12,12,12,12,12,12,12].map(w => ({wch:w}));
+  ws["!cols"] = [28,12,10,12,10,12,12,12,12,12,12,12,12].map(w => ({wch:w}));
   XLSX.utils.book_append_sheet(wb, ws, "Por Partido");
 
   const torneoPart  = partidoResFiltroTorneo || "todos";
@@ -3486,7 +3582,14 @@ function armarPlacaJson({p, pg}) {
     final:   "SALDO FINAL",
     pie:     "@cdmitre · Fútbol Mayor",
     asisTit: "ASISTENCIA",
-    asistencia: [],                          // la app no registra asistencia: se completa a mano en el generador
+    // Se precarga con lo cargado en el partido. Si no hay dato va [] — exactamente lo de antes de
+    // que existiera el campo — así que el generador sigue recibiendo lo que ya sabía manejar y el
+    // caso "sin cargar" no cambia de comportamiento. El JSON es editable en el modal antes de
+    // copiarlo, así que se puede corregir a mano igual que siempre.
+    asistencia: partidoEntradasTotal(p) === null ? [] : [
+      { c: "Damas",      m: Number(p.entradasDamas      || 0) },
+      { c: "Caballeros", m: Number(p.entradasCaballeros || 0) },
+    ],
     bloques: [
       { nombre: "BUFFET", neto: "NETO BUFFET", items: [
         { c: "Ingresos buffet (local + visitante)", m:  r(pg.buffetIng), g: "", neg: false },
@@ -6327,6 +6430,14 @@ function openPartidoModal(partidoId) {
               <option value="Clausura" ${(p&&p.torneo==="Clausura")?"selected":""}>Clausura</option>
             </select>
           </div>
+          <div class="field">
+            <label>Entradas damas</label>
+            <input class="inp" id="par-ent-damas" type="number" min="0" step="1" inputmode="numeric" placeholder="—" value="${esc(p&&p.entradasDamas!==""&&p.entradasDamas!=null?String(p.entradasDamas):"")}">
+          </div>
+          <div class="field">
+            <label>Entradas caballeros</label>
+            <input class="inp" id="par-ent-caballeros" type="number" min="0" step="1" inputmode="numeric" placeholder="—" value="${esc(p&&p.entradasCaballeros!==""&&p.entradasCaballeros!=null?String(p.entradasCaballeros):"")}">
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
@@ -6344,6 +6455,13 @@ async function savePartido(partidoId) {
   const nfecha    = (document.getElementById("par-nfecha")?.value   || "").trim();
   const condicion = document.getElementById("par-condicion")?.value || "LOCAL";
   const torneo    = document.getElementById("par-torneo")?.value    || "";
+  // Campo vacío se manda como "" (no cargado), no como 0: 0 significa "no vino nadie" y es un dato
+  // legítimo que no queremos inventar. El backend distingue los dos casos.
+  const entNum = id => { const v = (document.getElementById(id)?.value || "").trim(); return v === "" ? "" : Number(v); };
+  const entradasDamas      = entNum("par-ent-damas");
+  const entradasCaballeros = entNum("par-ent-caballeros");
+  if (entradasDamas !== "" && (!Number.isFinite(entradasDamas) || entradasDamas < 0)) { toast("Las entradas de damas no son un número válido", "err"); return; }
+  if (entradasCaballeros !== "" && (!Number.isFinite(entradasCaballeros) || entradasCaballeros < 0)) { toast("Las entradas de caballeros no son un número válido", "err"); return; }
   if (!fecha)  { toast("Ingresá una fecha", "err"); return; }
   if (!rival)  { toast("Ingresá el rival", "err"); return; }
   if (!nfecha) { toast("Ingresá el número de fecha", "err"); return; }
@@ -6351,17 +6469,17 @@ async function savePartido(partidoId) {
     && normStr(p.torneo) === normStr(torneo) && normStr(p.numeroFecha) === normStr(nfecha));
   if (dupFecha) { toast("Ya hay un partido con ese número de fecha en ese torneo", "err"); return; }
   const partido = partidoId
-    ? { id:partidoId, fecha, rival, numeroFecha:nfecha, condicion, torneo }
-    : { fecha, rival, numeroFecha:nfecha, condicion, torneo };
+    ? { id:partidoId, fecha, rival, numeroFecha:nfecha, condicion, torneo, entradasDamas, entradasCaballeros }
+    : { fecha, rival, numeroFecha:nfecha, condicion, torneo, entradasDamas, entradasCaballeros };
   setBtnState(btnId, "saving");
   try {
     const r = await Storage.savePartido(partido);
     if (!r.ok) throw new Error(r.error || "Error");
     if (partidoId) {
       const idx = partidos.findIndex(p => p.id === partidoId);
-      if (idx >= 0) partidos[idx] = { ...partidos[idx], fecha, rival, numeroFecha:nfecha, condicion, torneo };
+      if (idx >= 0) partidos[idx] = { ...partidos[idx], fecha, rival, numeroFecha:nfecha, condicion, torneo, entradasDamas, entradasCaballeros };
     } else {
-      partidos.push({ id:r.id, fecha, rival, numeroFecha:nfecha, condicion, torneo, activo:true });
+      partidos.push({ id:r.id, fecha, rival, numeroFecha:nfecha, condicion, torneo, entradasDamas, entradasCaballeros, activo:true });
     }
     setBtnState(btnId, "saved");
     toast(partidoId ? "Partido actualizado ✓" : "Partido agregado ✓", "ok");

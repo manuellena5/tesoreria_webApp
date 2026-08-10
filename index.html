@@ -3808,6 +3808,27 @@ function renderPlacaCampos() {
         </div>`).join("")}
     </div>`).join("");
 
+  // Asistencia: se precarga con lo cargado en el partido, pero se puede escribir acá para los
+  // partidos viejos o para los que no se anotó en el momento. Editarla no toca el partido — es un
+  // dato sólo para esta placa; para que quede guardado hay que cargarlo en el partido.
+  const asistencia = `
+    <div style="margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--border);padding-bottom:4px">
+        <span style="font-size:11px;font-weight:600;color:var(--accent);letter-spacing:.07em">${esc(j.asisTit || "ASISTENCIA")}</span>
+        <span style="font-size:11px;color:var(--text3)">TOTAL: <b id="placa-asis-total"></b></span>
+      </div>
+      ${["Caballeros", "Damas"].map(cat => `
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+          <span style="flex:1;font-size:12.5px;color:var(--text2)">${cat}</span>
+          <input class="inp" type="number" min="0" step="1" inputmode="numeric" placeholder="0"
+                 style="flex:0 0 118px;text-align:right;padding:6px 9px;font-size:13px"
+                 value="${placaEdit.asis[cat] || ""}" oninput="setPlacaAsistencia('${cat}',this.value)">
+        </div>`).join("")}
+      <p class="note" style="margin-top:6px">${placaEdit.asisDelPartido
+        ? "Cargada en el partido."
+        : "Este partido no tiene la asistencia cargada — lo que escribas acá va sólo a esta placa."}</p>
+    </div>`;
+
   return `
     <div style="display:flex;gap:8px;margin-top:10px">
       <div class="field" style="flex:0 0 96px">
@@ -3821,7 +3842,23 @@ function renderPlacaCampos() {
                value="${esc(j.sub)}" oninput="setPlacaCampo('sub',this.value)">
       </div>
     </div>
-    ${bloques}`;
+    ${bloques}
+    ${asistencia}`;
+}
+
+function setPlacaAsistencia(cat, v) {
+  placaEdit.asis[cat] = Math.max(0, Math.round(Number(v) || 0));
+  aplicarAsistenciaPlaca();
+  refrescarPlacaJson();
+}
+
+// Sólo van al JSON las categorías con gente. Si quedaron las dos en cero se emite [], que es lo que
+// el generador ya sabía manejar desde antes de que existiera el campo: mandar "Caballeros 0" haría
+// que la placa publique un cero que nadie contó.
+function aplicarAsistenciaPlaca() {
+  placaEdit.json.asistencia = ["Caballeros", "Damas"]
+    .map(c => ({ c, m: placaEdit.asis[c] || 0 }))
+    .filter(a => a.m > 0);
 }
 
 function setPlacaMonto(bi, ii, v) {
@@ -3846,6 +3883,11 @@ function refrescarPlacaJson() {
   });
   const elSaldo = document.getElementById("placa-saldo");
   if (elSaldo) elSaldo.textContent = fmtSigned(saldo);
+  const elAsis = document.getElementById("placa-asis-total");
+  if (elAsis) {
+    const tot = (placaEdit.asis.Caballeros || 0) + (placaEdit.asis.Damas || 0);
+    elAsis.textContent = tot ? String(tot) : "—";
+  }
   // El prorrateo de pagos multipartido deja decimales y cada renglón se redondea al peso, así que
   // puede haber diferencia aun sin editar nada. Se informa, no se maquilla.
   const dif = saldo - placaEdit.totalNeto;
@@ -3861,6 +3903,13 @@ function openPlacaModal(partidoId) {
   const d = placaDatosDePartido(partidoId);
   if (!d) { toast("Ese partido no tiene movimientos", "err"); return; }
   placaEdit = d;
+  // La asistencia se edita como dos números sueltos y recién al final se vuelca al array del JSON:
+  // manipular el array directamente obligaría a crear y borrar elementos según se vacíe cada campo.
+  placaEdit.asis = { Caballeros: 0, Damas: 0 };
+  for (const a of (d.json.asistencia || [])) {
+    if (a && Object.prototype.hasOwnProperty.call(placaEdit.asis, a.c)) placaEdit.asis[a.c] = Number(a.m) || 0;
+  }
+  placaEdit.asisDelPartido = (d.json.asistencia || []).length > 0;
 
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">

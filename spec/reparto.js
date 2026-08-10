@@ -138,6 +138,46 @@ const saldos = app.calcSaldosCuentas(app.movimientos);
 igual("EFECTIVO", saldos["EFECTIVO"], 589000);
 igual("MP", saldos["MP"], 108000);
 
+// ── 6 · El comprobante va por el total ─────────────────────────
+// A quien recibe el comprobante no le importa que una parte haya entrado en efectivo y otra por
+// Mercado Pago: le importa cuánto pagó.
+seccion("6 · El comprobante suma las dos cuentas");
+app.movimientos = [
+  { id: "r0", tipo: "INGRESO", fecha: "2026-08-09", codRubro: "1", rubro: "ENTRADAS | CANCHA",
+    concepto: "Recaudación vs María Susana", ingreso: 589000, egreso: 0, montoFinal: 589000,
+    cuenta: "EFECTIVO", modoPago: "EFECTIVO", mes: "202608", partidoId: "p1", eventoId: "" },
+  { id: "r1", tipo: "INGRESO", fecha: "2026-08-09", codRubro: "1", rubro: "ENTRADAS | CANCHA",
+    concepto: "Recaudación vs María Susana", ingreso: 108000, egreso: 0, montoFinal: 108000,
+    cuenta: "MP", modoPago: "TRANSFERENCIA", mes: "202608", partidoId: "p1", eventoId: "" },
+];
+igual("reconoce las dos filas como un solo cobro", app.movsMismoCobro(app.movimientos[0]).length, 2);
+const comp = app.movToComprobante(app.movimientos[0]);
+igual("el comprobante sale por el total", comp.items[0].monto, 697000);
+igual("con un solo renglón, sin mencionar cómo se pagó", comp.items.length, 1);
+const compDesdeLaOtra = app.movToComprobante(app.movimientos[1]);
+igual("y da igual desde qué fila se genere", compDesdeLaOtra.items[0].monto, 697000);
+
+// ── 7 · No sumar de más ────────────────────────────────────────
+seccion("7 · Dos cobros que se parecen no se mezclan");
+app.movimientos.push(
+  { id: "r2", tipo: "INGRESO", fecha: "2026-08-09", codRubro: "1", rubro: "ENTRADAS | CANCHA",
+    concepto: "Recaudación vs María Susana", ingreso: 50000, egreso: 0, montoFinal: 50000,
+    cuenta: "EFECTIVO", modoPago: "EFECTIVO", mes: "202608", partidoId: "p1", eventoId: "" });
+igual("con dos filas en la misma cuenta no se asume reparto",
+      app.movsMismoCobro(app.movimientos[0]).length, 1);
+igual("y el comprobante vuelve a ser el del movimiento solo",
+      app.movToComprobante(app.movimientos[0]).items[0].monto, 589000);
+
+app.movimientos = [
+  { id: "s0", tipo: "INGRESO", fecha: "2026-08-09", codRubro: "1", rubro: "ENTRADAS | CANCHA",
+    concepto: "Recaudación vs María Susana", ingreso: 589000, egreso: 0, montoFinal: 589000,
+    cuenta: "EFECTIVO", modoPago: "EFECTIVO", mes: "202608", partidoId: "p1", eventoId: "" },
+  { id: "s1", tipo: "INGRESO", fecha: "2026-08-09", codRubro: "1", rubro: "ENTRADAS | CANCHA",
+    concepto: "Venta de números", ingreso: 108000, egreso: 0, montoFinal: 108000,
+    cuenta: "MP", modoPago: "TRANSFERENCIA", mes: "202608", partidoId: "p1", eventoId: "" },
+];
+igual("distinto concepto, distinto cobro", app.movsMismoCobro(app.movimientos[0]).length, 1);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

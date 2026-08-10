@@ -1967,8 +1967,8 @@ function renderNuevo() {
       <div class="field" id="entradas-partido-row" style="${entradasRowAplica()?"":"display:none"}">
         <label>Entradas vendidas · se guardan en el partido</label>
         <div style="display:flex; gap:8px">
-          <input class="inp" id="f-ent-damas"      type="number" min="0" step="1" inputmode="numeric" placeholder="Damas">
           <input class="inp" id="f-ent-caballeros" type="number" min="0" step="1" inputmode="numeric" placeholder="Caballeros">
+          <input class="inp" id="f-ent-damas"      type="number" min="0" step="1" inputmode="numeric" placeholder="Damas">
         </div>
       </div>
 
@@ -2191,8 +2191,8 @@ function syncEntradasPartidoRow() {
   if (!aplica) return;
   const p = partidos.find(x => x.id === F.partidoId);
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v === "" || v == null) ? "" : String(v); };
-  set("f-ent-damas",      p ? p.entradasDamas      : "");
   set("f-ent-caballeros", p ? p.entradasCaballeros : "");
+  set("f-ent-damas",      p ? p.entradasDamas      : "");
 }
 
 // Persiste las entradas sobre el partido. Se llama después de guardar el movimiento y falla en
@@ -2445,8 +2445,7 @@ async function saveMovimiento() {
     hideOverlay();        // ocultar spinner antes del re-render
     renderNuevo();
     setSaveBtnState("saved");
-    showMovSavedModal(mov, wasEdit);
-    if (movsExtra.length) toast("Se guardaron " + (movsExtra.length + 1) + " movimientos, uno por cuenta", "ok");
+    showMovSavedModal(mov, wasEdit, movsExtra);
   } catch(e) {
     hideOverlay();
     if (isNetworkError(e)) {
@@ -3081,18 +3080,25 @@ function closeModal(e) {
   document.getElementById("modal-root").innerHTML = "";
 }
 
-function showMovSavedModal(mov, wasEdit) {
+// `hermanos` son las otras filas de un cobro dividido (vacío en un movimiento común). Cuando hay,
+// el número grande pasa a ser el total del cobro —que es lo que se contrasta contra la planilla de
+// caja— y el desglose por cuenta reemplaza a las filas de Cuenta y Método, que mostraban sólo las
+// de la primera fila y hacían parecer que se había guardado de menos.
+function showMovSavedModal(mov, wasEdit, hermanos) {
   compMovPendiente = mov; // por si todavía no está en el array de movimientos
+  const partes     = [mov, ...(hermanos || [])];
+  const esReparto  = partes.length > 1;
+  const montoDe    = m => m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
   const montoClass = mov.tipo==="INGRESO" ? "ing" : mov.tipo==="EGRESO" ? "egr" : mov.tipo==="AJUSTE" ? "adj" : "int";
-  const montoVal   = mov.tipo==="INGRESO" ? mov.ingreso : mov.tipo==="AJUSTE" ? Math.abs(mov.montoFinal) : mov.egreso || mov.montoFinal;
+  const montoVal   = partes.reduce((s, m) => s + montoDe(m), 0);
   const montoSign  = mov.tipo==="INGRESO" ? "+" : mov.tipo==="EGRESO" ? "\u2212" : mov.tipo==="AJUSTE" ? (mov.montoFinal>=0?"\u229a+":"\u229a\u2212") : "\u21c4";
   const detalles = [
     ["Tipo",      mov.tipo],
     ["Fecha",     mov.fecha],
     ["Rubro",     "["+mov.codRubro+"] "+mov.rubro],
     ["Concepto",  mov.concepto || null],
-    ["Cuenta",    mov.cuenta + (mov.cuentaDestino ? " \u2192 "+mov.cuentaDestino : "")],
-    ["M\u00e9todo",    mov.modoPago],
+    esReparto ? null : ["Cuenta",    mov.cuenta + (mov.cuentaDestino ? " \u2192 "+mov.cuentaDestino : "")],
+    esReparto ? null : ["M\u00e9todo",    mov.modoPago],
     mov.jugadorCT ? ["Jugador/CT", mov.jugadorCT] : null,
     mov.adherente ? ["Adherente",  mov.adherente]  : null,
     (mov.codRubro === "21" && mov.tipo === "EGRESO") ? ["Reintegro", mov.seguroReintegro ? "S\u00cd" : "NO"] : null,
@@ -3100,6 +3106,11 @@ function showMovSavedModal(mov, wasEdit) {
   ].filter(r => r && r[1]).map(([l,v]) =>
     `<div class="modal-detail-row"><span class="modal-detail-lbl">${l}</span><span class="modal-detail-val">${esc(v)}</span></div>`
   ).join("");
+  // Una fila por cuenta, con lo que efectivamente entró en cada una. Va después de los datos
+  // comunes (rubro, concepto) porque es lo que cambia entre las filas, no lo que comparten.
+  const desglose = !esReparto ? "" :
+    `<div class="modal-detail-row"><span class="modal-detail-lbl">Entró en ${partes.length} cuentas</span><span class="modal-detail-val"></span></div>` +
+    partes.map(m => `<div class="modal-detail-row"><span class="modal-detail-lbl">${esc(m.cuenta)}${m.modoPago ? " · " + esc(m.modoPago) : ""}</span><span class="modal-detail-val ${montoClass}">${montoSign}${fmt(montoDe(m))}</span></div>`).join("");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
@@ -3108,7 +3119,9 @@ function showMovSavedModal(mov, wasEdit) {
           ${wasEdit ? "\u270f\ufe0f MOVIMIENTO ACTUALIZADO" : "\u2713 MOVIMIENTO GUARDADO"}
         </div>
         <div class="modal-monto-big ${montoClass}">${montoSign}${fmt(montoVal)}</div>
+        ${esReparto ? `<div style="text-align:center;font-size:11px;color:var(--text3);margin:-4px 0 6px">total del cobro</div>` : ""}
         ${detalles}
+        ${desglose}
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="abrirComprobanteModal('${mov.id}')">🧾 Generar comprobante</button>
           <button class="btn-main" style="flex:1" onclick="document.getElementById('modal-root').innerHTML=''">Aceptar</button>
@@ -3630,7 +3643,7 @@ function renderPartidoResumenBody() {
     return `<tr class="reint-row" onclick="togglePartidoResDetalle('${esc(escJs(p.id))}')">
       <td><span style="color:var(--text3)">${isExp?"▾":"▸"}</span> ${esc(partidoResLabel(p))}${
         nNoComp ? ` <span style="color:var(--text3);font-size:11px" title="${nNoComp} movimiento${nNoComp!==1?"s":""} de este partido que la tabla no computa">⊘${nNoComp}</span>` : ""}</td>
-      <td title="${publico===null?"Asistencia no cargada":esc((p.entradasDamas||0)+" damas · "+(p.entradasCaballeros||0)+" caballeros")}">${publico===null?`<span style="color:var(--text3)">—</span>`:publico}</td>
+      <td title="${publico===null?"Asistencia no cargada":esc((p.entradasCaballeros||0)+" caballeros · "+(p.entradasDamas||0)+" damas")}">${publico===null?`<span style="color:var(--text3)">—</span>`:publico}</td>
       <td>${pg.buffetIng ? fmt(pg.buffetIng) : ""}</td>
       <td class="egr">${pg.buffetEgr ? fmt(pg.buffetEgr) : ""}</td>
       <td class="egr">${pg.gastosCancha ? fmt(pg.gastosCancha) : ""}</td>
@@ -3686,10 +3699,10 @@ function exportPartidoResExcel() {
   const rows = partidoResFiltrarYOrdenar();
   if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
 
-  const headers = ["Partido","Torneo","Damas","Caballeros","Público","Buffet","G.Buffet","G.Cancha","Otros Egr.","Entradas","Otros Ing.","Neto Buffet","Total Neto"];
+  const headers = ["Partido","Torneo","Caballeros","Damas","Público","Buffet","G.Buffet","G.Cancha","Otros Egr.","Entradas","Otros Ing.","Neto Buffet","Total Neto"];
   const dataRows = rows.map(({p, pg, netoBuffet, totalNeto}) => [
     partidoResLabel(p), p.torneo || "",
-    p.entradasDamas ?? "", p.entradasCaballeros ?? "", partidoEntradasTotal(p) ?? "",
+    p.entradasCaballeros ?? "", p.entradasDamas ?? "", partidoEntradasTotal(p) ?? "",
     pg.buffetIng || "", pg.buffetEgr || "", pg.gastosCancha || "", pg.otrosEgr || "",
     pg.entradas || "", pg.otrosIng || "", netoBuffet || "", totalNeto || ""
   ]);
@@ -3734,8 +3747,8 @@ function armarPlacaJson({p, pg}) {
     // caso "sin cargar" no cambia de comportamiento. El JSON es editable en el modal antes de
     // copiarlo, así que se puede corregir a mano igual que siempre.
     asistencia: partidoEntradasTotal(p) === null ? [] : [
-      { c: "Damas",      m: Number(p.entradasDamas      || 0) },
       { c: "Caballeros", m: Number(p.entradasCaballeros || 0) },
+      { c: "Damas",      m: Number(p.entradasDamas      || 0) },
     ],
     bloques: [
       { nombre: "BUFFET", neto: "NETO BUFFET", items: [
@@ -6578,12 +6591,12 @@ function openPartidoModal(partidoId) {
             </select>
           </div>
           <div class="field">
-            <label>Entradas damas</label>
-            <input class="inp" id="par-ent-damas" type="number" min="0" step="1" inputmode="numeric" placeholder="—" value="${esc(p&&p.entradasDamas!==""&&p.entradasDamas!=null?String(p.entradasDamas):"")}">
-          </div>
-          <div class="field">
             <label>Entradas caballeros</label>
             <input class="inp" id="par-ent-caballeros" type="number" min="0" step="1" inputmode="numeric" placeholder="—" value="${esc(p&&p.entradasCaballeros!==""&&p.entradasCaballeros!=null?String(p.entradasCaballeros):"")}">
+          </div>
+          <div class="field">
+            <label>Entradas damas</label>
+            <input class="inp" id="par-ent-damas" type="number" min="0" step="1" inputmode="numeric" placeholder="—" value="${esc(p&&p.entradasDamas!==""&&p.entradasDamas!=null?String(p.entradasDamas):"")}">
           </div>
         </div>
         <div class="modal-footer">
@@ -9774,11 +9787,31 @@ function escudoBN() {
 }
 
 /** Precarga los datos del comprobante a partir de un movimiento guardado. */
+// Las filas de un mismo cobro dividido. Se reconocen por compartir todo lo que las hace un solo
+// cobro —tipo, fecha, rubro, concepto, partido y evento— y diferir sólo en la cuenta. Se detectan
+// así y no por un campo de vínculo porque el reparto no deja rastro en la hoja: cada fila es un
+// movimiento común y corriente, y tiene que seguir siéndolo para que el saldo por cuenta cierre.
+//
+// Si dos de las candidatas comparten cuenta no era un reparto (serían dos movimientos idénticos),
+// y se devuelve sólo el propio: ante la duda, no sumar de más.
+function movsMismoCobro(mov) {
+  if (!mov.concepto) return [mov];
+  const mismos = movimientos.filter(m =>
+    m.tipo === mov.tipo && m.fecha === mov.fecha && m.codRubro === mov.codRubro &&
+    (m.concepto || "") === (mov.concepto || "") &&
+    (m.partidoId || "") === (mov.partidoId || "") &&
+    (m.eventoId  || "") === (mov.eventoId  || ""));
+  if (!mismos.some(m => m.id === mov.id)) mismos.push(mov);   // recién guardado, todavía fuera del array
+  const cuentas = new Set(mismos.map(m => m.cuenta));
+  return (mismos.length > 1 && cuentas.size === mismos.length) ? mismos : [mov];
+}
+
 function movToComprobante(mov) {
   const esAdh  = (mov.rubro || "").toUpperCase().includes("ADHERENTE");
-  const monto  = mov.tipo === "INGRESO"
-    ? Number(mov.ingreso || 0)
-    : Number(mov.egreso || mov.montoFinal || 0);
+  // El comprobante va por el total del cobro: a quien lo recibe no le importa que una parte haya
+  // entrado en efectivo y otra por Mercado Pago, le importa cuánto pagó.
+  const montoDe = m => m.tipo === "INGRESO" ? Number(m.ingreso || 0) : Number(m.egreso || m.montoFinal || 0);
+  const monto  = movsMismoCobro(mov).reduce((s, m) => s + montoDe(m), 0);
   const mesKey = mov.mes ? mov.mes.slice(0,4) + "-" + mov.mes.slice(4) : "";
   return {
     movId:    mov.id,

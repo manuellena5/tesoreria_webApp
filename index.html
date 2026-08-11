@@ -426,9 +426,6 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 /* Cada premio pendiente es una línea tildable adentro de la celda "Premios/Ajustes". */
 .pj-table td.pj-premios-cell { min-width:190px; }
 .pj-premio-lbl { display:flex; align-items:center; gap:5px; white-space:nowrap; cursor:pointer; padding:1px 0; }
-/* El :disabled global sólo corta el click; acá hace falta que además se vea apagado, porque
-   el botón queda deshabilitado por lo que el usuario tildó y tiene que notarlo. */
-.pj-comp-btn:disabled { opacity:.3; }
 .pj-premio-lbl .mono { font-family:var(--mono); }
 .pj-desc-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); }
 .pj-desc-item:last-child { border-bottom:0; }
@@ -637,6 +634,29 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
     margin-left: 50%;
     transform: translateX(-50%);
   }
+}
+
+/* ── Transferencias en notebook: la tabla crece con la cantidad de partidos tildados
+   (una columna por partido), así que a 940px se queda corta enseguida. Igual que la
+   tabla de Movimientos, se "escapa" del contenedor angosto y se re-centra usando todo
+   el ancho de la ventana; los chips y los KPIs de arriba siguen centrados en 940.
+   El corte es 1024 y no 1200 porque una notebook de 1366 con la pantalla al 125%
+   reporta ~1092px, que es justo donde más falta hacía.
+   Mobile queda intacto: no llega la media query y la tabla scrollea de costado. ── */
+@media (min-width: 1024px) {
+  .pj-transf-wrap {
+    width: 100vw;
+    max-width: 1600px;
+    margin-left: 50%;
+    transform: translateX(-50%);
+  }
+  /* Con el ancho de sobra la tabla se reparte sola: el min-width de 820px es el piso
+     de mobile, y los anchos mínimos por celda sólo la inflan sin necesidad. */
+  .pj-transf-wrap .pj-table { min-width: 0; }
+  .pj-transf-wrap .pj-table td.pj-premios-cell { min-width: 0; }
+  /* El premio va en una línea mientras entre; si la tabla queda justa (muchos partidos
+     tildados) el partido al que pertenece baja de renglón en vez de forzar scroll. */
+  .pj-transf-wrap .pj-premio-lbl { white-space: normal; flex-wrap: wrap; }
 }
 
 /* ── Resumen / Mensual en notebook-desktop: tabs+alertas y mes+KPIs pasan de
@@ -7948,6 +7968,16 @@ function pjPartidoLabel(partidoId) {
  *  comprobante que se emite ANTES de confirmar tiene que decir exactamente lo mismo que el
  *  que sale después, y antes de confirmar no hay movimiento del cual leerlo. Si cambia el
  *  formato de allá, cambiarlo acá. */
+/** MovimientoID del último pago confirmado de un jugador (el más reciente por fecha de pago).
+ *  Sirve para poder emitir el comprobante de una transferencia que ya se hizo, cuando en la
+ *  tabla no queda nada tildado porque todas sus filas pasaron a "pagado". */
+function pjUltimoMovimientoDe(jugadorId) {
+  const pagadas = pagosJugadores
+    .filter(p => p.jugadorId === jugadorId && p.movimientoId)
+    .sort((a, b) => (b.fechaPago || "").localeCompare(a.fechaPago || ""));
+  return pagadas.length ? pagadas[0].movimientoId : "";
+}
+
 function pjDescItem(p) {
   if (pjTipoFila(p) !== "partido") return p.etiqueta || "Ajuste";
   const par = partidos.find(x => x.id === (p.partidosIncluidos[0] || p.partidoId || ""));
@@ -8772,7 +8802,7 @@ function renderTransferencias() {
         <button class="btn-sm" onclick="pjMarcarTodos(true)">Tildar todos</button>
         <button class="btn-sm" onclick="pjMarcarTodos(false)">Destildar todos</button>
       </div>` : ""}
-    <div class="pj-table-wrap">
+    <div class="pj-table-wrap pj-transf-wrap">
       <table class="pj-table" id="pj-transf-table">
         <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Incluir</th><th>Comprob.</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="99" class="note">Sin jugadores pendientes para los partidos seleccionados</td></tr>`}</tbody>
@@ -8808,10 +8838,6 @@ function pjTransfRecalc() {
       cell.textContent = fmtSigned(total);
       cell.style.color = total < 0 ? "var(--red)" : "";
     }
-    // Sin nada tildado no hay comprobante que emitir, y con neto negativo tampoco: ese pago no
-    // se puede hacer (lo corta confirmarPagosJugadores), así que no hay que poder documentarlo.
-    const btnComp = tr.querySelector(".pj-comp-btn");
-    if (btnComp) btnComp.disabled = total <= 0;
     if (total !== 0) jugadores++;
     totalGeneral += total;
   });
@@ -9930,20 +9956,38 @@ function abrirComprobantePrevio(jugadorId) {
     premiosIds: [...tr.querySelectorAll(".pj-premio-cb:checked")].map(cb => cb.value)
   }]);
   const filas = ids.map(id => pagosJugadores.find(p => p.id === id)).filter(Boolean);
-  if (!filas.length) { toast("Tildá lo que querés incluir en el comprobante", "err"); return; }
+
+  // Nada tildado: lo normal es que el pago ya se haya confirmado (las filas quedaron en
+  // "pagado" y sin checkbox). Ahí el comprobante sale del movimiento real, que tiene la fecha
+  // de la transferencia que de verdad se hizo y el detalle tal cual quedó grabado — más fiel
+  // que rearmarlo de las filas.
+  if (!filas.length) {
+    const movId = pjUltimoMovimientoDe(jugadorId);
+    if (!movId) { toast("Tildá lo que querés incluir en el comprobante", "err"); return; }
+    const pagadas = pagosJugadores.filter(p => p.movimientoId === movId);
+    if (movimientos.some(m => m.id === movId)) { abrirComprobanteModal(movId); return; }
+    // El movimiento no está cargado (offline, o todavía no se refrescó la lista): se arma
+    // con las filas que quedaron apuntando a él, que son las mismas que lo componen.
+    filas.push(...pagadas);
+    if (!filas.length) { toast("Tildá lo que querés incluir en el comprobante", "err"); return; }
+  }
+
   const total = filas.reduce((s,p) => s + Number(p.montoFinal||0), 0);
   if (total <= 0) { toast("El neto de " + (filas[0].jugadorNombre || "el jugador") + " no da un monto a pagar", "err"); return; }
 
   const mes = (filas.find(p => p.mes) || {}).mes || "";
+  // Si ya se pagó, la fecha del comprobante es la de la transferencia, no la de hoy.
+  const fechaPago = (filas.find(p => p.fechaPago) || {}).fechaPago || "";
   compData = {
-    movId:    "",                                   // sin movimiento: es previo a confirmar
-    tipoDoc:  "comprobante",
-    numero:   (Number(ultimoComprobante) || 0) + 1,
-    fecha:    fmtFechaDMY(today()),
-    receptor: filas[0].jugadorNombre || "",
-    periodo:  mes ? mesLabel(mes) : "",
-    items:    filas.map(p => ({ desc: pjDescItem(p), monto: Number(p.montoFinal||0) })),
-    mensaje:  "",
+    movId:        "",
+    sinConfirmar: filas.some(p => p.estado === "pendiente"),
+    tipoDoc:      "comprobante",
+    numero:       (Number(ultimoComprobante) || 0) + 1,
+    fecha:        fmtFechaDMY(fechaPago || today()),
+    receptor:     filas[0].jugadorNombre || "",
+    periodo:      mes ? mesLabel(mes) : "",
+    items:        filas.map(p => ({ desc: pjDescItem(p), monto: Number(p.montoFinal||0) })),
+    mensaje:      "",
   };
   renderComprobanteModal();
   escudoBN().then(() => compRefreshDoc());
@@ -9957,9 +10001,9 @@ function renderComprobanteModal() {
       <div class="modal-card" onclick="event.stopPropagation()" style="max-width:620px">
         <div class="modal-handle"></div>
         <div class="modal-title">Comprobante</div>
-        ${d.movId ? "" : `<p class="note" style="border-left:3px solid var(--warn);padding-left:8px;margin:0 0 10px">
+        ${d.sinConfirmar ? `<p class="note" style="border-left:3px solid var(--warn);padding-left:8px;margin:0 0 10px">
           Emitido desde Transferencias: el pago <b>todavía no está confirmado</b> y no hay ningún egreso cargado.
-          Acordate de confirmarlo cuando corresponda.</p>`}
+          Acordate de confirmarlo cuando corresponda.</p>` : ""}
         <div class="fgrid">
           <div class="field">
             <label>Tipo de documento</label>

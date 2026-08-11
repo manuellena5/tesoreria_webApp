@@ -208,10 +208,200 @@ function doPost(e) {
   }
 }
 
-function doGet() {
+function doGet(e) {
+  // El sitio público (repo futbol-mayor) pega contra ?action=publico. Va por GET y no por POST
+  // porque un POST desde otro dominio dispara preflight CORS, que Apps Script no contesta.
+  const accion = e && e.parameter ? e.parameter.action : "";
+  if (accion === "publico") {
+    // Caché de una hora: la página es pública y no se sabe cuánta gente va a entrar, pero la hoja
+    // sólo cambia cuando el tesorero carga algo. Sin esto, mil visitas serían mil lecturas de la
+    // planilla y se agota la cuota diaria de Apps Script.
+    const cache = CacheService.getScriptCache();
+    const hit = cache.get("publico_v1");
+    if (hit) return ContentService.createTextOutput(hit).setMimeType(ContentService.MimeType.JSON);
+    const txt = JSON.stringify(construirDatosPublicos_());
+    try { cache.put("publico_v1", txt, 3600); } catch (err) {}   // >100KB no entra en caché: se sirve igual
+    return ContentService.createTextOutput(txt).setMimeType(ContentService.MimeType.JSON);
+  }
   return ContentService
     .createTextOutput(JSON.stringify({ ok: true, msg: "Tesorería Club API activa" }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ════════════════════════════════════════════════════════════
+// DATOS PÚBLICOS  (alimentan el sitio de balances)
+// ════════════════════════════════════════════════════════════
+//
+// Devuelve SÓLO agregados. Ningún movimiento suelto, ningún nombre de jugador o adherente, ningún
+// monto individual: aunque alguien encuentre la URL, no hay nada personal para sacar.
+//
+// El freno es la clave `publicado_hasta` de la hoja Config (formato YYYY-MM-DD). Nada posterior a
+// esa fecha se publica. Sin esa clave no se publica nada — es a propósito: que el default sea "no
+// mostrar" evita que un mes a medio cargar aparezca solo el día que se deploye esto.
+
+const PUB_RUBROS_ENTRADAS = ["1", "4"];              // entradas y tribuna
+const PUB_RUBROS_BUFFET   = ["2"];
+const PUB_RUBROS_CANCHA   = ["12", "13", "14b", "36"]; // árbitros, policía, filmación, médico
+const PUB_CATS_FUERA_PARTIDO = ["Movilidad", "Jugadores y Cuerpo Técnico"];
+const PUB_RUBROS_PENA     = ["54","55","56","57","58","59","60","61","62"];
+
+function pubLeer_(sheet, cols) {
+  const all = getOrCreateSheet(sheet, cols).getDataRange().getValues();
+  return all.length <= 1 ? [] : all.slice(1);
+}
+
+function pubConfig_(clave) {
+  const filas = pubLeer_(CFG_SHEET, CFG_COLS);
+  for (let i = 0; i < filas.length; i++) if (String(filas[i][0]) === clave) return String(filas[i][1] || "");
+  return "";
+}
+
+function pubSemestre_(fecha) {
+  const anio = fecha.slice(0, 4), mes = Number(fecha.slice(5, 7));
+  return { id: anio + (mes <= 6 ? "-S1" : "-S2"),
+           nombre: (mes <= 6 ? "1er" : "2do") + " semestre " + anio,
+           desde: anio + (mes <= 6 ? "-01-01" : "-07-01"),
+           hasta: anio + (mes <= 6 ? "-06-30" : "-12-31") };
+}
+
+function construirDatosPublicos_() {
+  const corte = pubConfig_("publicado_hasta");
+  const base = { club: "Club Deportivo Mitre", equipo: "Fútbol Mayor", actualizado: corte, periodos: [] };
+  if (!corte) { base.aviso = "Falta la clave publicado_hasta en la hoja Config"; return base; }
+
+  const movs = pubLeer_(MOV_SHEET, MOV_COLS)
+    .map(r => ({ fecha: formatFecha(r[2]), codRubro: String(r[3] || ""), categoria: String(r[5] || ""),
+                 egreso: Number(r[7] || 0), ingreso: Number(r[8] || 0), tipo: String(r[18] || ""),
+                 partidoId: String(r[20] || ""), eventoId: String(r[21] || "") }))
+    .filter(m => m.fecha && m.fecha <= corte && (m.tipo === "INGRESO" || m.tipo === "EGRESO"));
+
+  const partidos = {}, eventos = {};
+  pubLeer_(PAR_SHEET, PAR_COLS).forEach(r => {
+    if (r[0] && String(r[5]) !== "false") partidos[String(r[0])] = {
+      fecha: formatFecha(r[1]), rival: String(r[2] || ""), local: String(r[4] || "LOCAL") === "LOCAL",
+      torneo: String(r[6] || ""),
+      publico: (Number(r[7]) || 0) + (Number(r[8]) || 0)
+    };
+  });
+  pubLeer_(EVE_SHEET, EVE_COLS).forEach(r => {
+    if (r[0] && String(r[3]) !== "false") eventos[String(r[0])] = { nombre: String(r[1] || ""), fecha: formatFecha(r[2]) };
+  });
+
+  // Un período por semestre con movimientos. Se arma sobre la marcha en vez de configurarse: al
+  // cerrar diciembre aparece el semestre nuevo solo, sin que nadie tenga que tocar nada.
+  const porSem = {};
+  movs.forEach(m => {
+    const s = pubSemestre_(m.fecha);
+    if (!porSem[s.id]) porSem[s.id] = { info: s, movs: [] };
+    porSem[s.id].movs.push(m);
+  });
+
+  base.periodos = Object.keys(porSem).sort().reverse().map(id => pubArmarPeriodo_(porSem[id], partidos, eventos));
+  return base;
+}
+
+function pubArmarPeriodo_(sem, partidos, eventos) {
+  const movs = sem.movs;
+  const p = { id: sem.info.id, nombre: sem.info.nombre, desde: sem.info.desde, hasta: sem.info.hasta };
+
+  // ── Mes a mes ──
+  const meses = {};
+  const LBL = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  movs.forEach(m => {
+    const k = m.fecha.slice(0, 7);
+    if (!meses[k]) meses[k] = { label: LBL[Number(k.slice(5, 7)) - 1], ingresos: 0, egresos: 0 };
+    meses[k].ingresos += m.ingreso; meses[k].egresos += m.egreso;
+  });
+  // Un mes está "en temporada" si se jugó algún partido. Sirve para que el sitio muestre aparte lo
+  // que cuesta sostener el equipo jugando: los meses de parate arrastran el promedio para abajo y
+  // hacen parecer que mantener el fútbol sale bastante menos de lo que sale.
+  const mesesConPartido = {};
+  Object.keys(partidos).forEach(id => {
+    const f = partidos[id].fecha;
+    if (f && f >= sem.info.desde && f <= sem.info.hasta) mesesConPartido[f.slice(0, 7)] = true;
+  });
+  p.meses = Object.keys(meses).sort().map(k => {
+    if (mesesConPartido[k]) meses[k].temporada = true;
+    return meses[k];
+  });
+
+  // ── Ingresos y egresos por categoría: la tabla completa del balance ──
+  const cats = {};
+  movs.forEach(m => {
+    const k = m.categoria || "Otros";
+    if (!cats[k]) cats[k] = { nombre: k, ingresos: 0, egresos: 0 };
+    cats[k].ingresos += m.ingreso; cats[k].egresos += m.egreso;
+  });
+  p.categorias = Object.keys(cats).map(k => ({ nombre: k,
+    ingresos: Math.round(cats[k].ingresos), egresos: Math.round(cats[k].egresos) }))
+    .sort((a, b) => (b.ingresos - b.egresos) - (a.ingresos - a.egresos));
+
+  // ── Partido a partido. Mismo criterio que Resumen > Por Partido de la app: deja afuera sueldos y
+  // movilidad, que se pagan por mes y no son "lo que dejó la jornada". ──
+  const acum = {};
+  movs.forEach(m => {
+    if (!m.partidoId || !partidos[m.partidoId]) return;
+    if (PUB_CATS_FUERA_PARTIDO.indexOf(m.categoria) >= 0) return;
+    const a = acum[m.partidoId] || (acum[m.partidoId] = { entradas: 0, buffet: 0, gastosCancha: 0, otros: 0, neto: 0 });
+    const monto = m.ingreso || m.egreso, signo = m.ingreso ? 1 : -1;
+    a.neto += signo * monto;
+    if (PUB_RUBROS_BUFFET.indexOf(m.codRubro) >= 0)        a.buffet += signo * monto;
+    else if (signo > 0 && PUB_RUBROS_ENTRADAS.indexOf(m.codRubro) >= 0) a.entradas += monto;
+    else if (signo < 0 && PUB_RUBROS_CANCHA.indexOf(m.codRubro) >= 0)   a.gastosCancha += monto;
+    else a.otros += signo * monto;
+  });
+  p.partidos = Object.keys(acum)
+    .sort((x, y) => (partidos[x].fecha || "").localeCompare(partidos[y].fecha || ""))
+    .map(id => ({ rival: partidos[id].rival, local: partidos[id].local, publico: partidos[id].publico,
+                  entradas: Math.round(acum[id].entradas), buffet: Math.round(acum[id].buffet),
+                  gastosCancha: Math.round(acum[id].gastosCancha), otros: Math.round(acum[id].otros),
+                  neto: Math.round(acum[id].neto) }));
+  const torneos = Object.keys(acum).map(id => partidos[id].torneo).filter(Boolean);
+  p.torneo = torneos.length ? torneos[0] : "";
+  p.partidosNota = "El resultado de cada partido es lo que dejó la jornada en la cancha. No incluye los sueldos ni los viajes del plantel, que se pagan por mes y van aparte.";
+
+  // ── Abrir la cancha: promedio de los partidos de local con público cargado ──
+  const locales = p.partidos.filter(x => x.local && x.gastosCancha > 0);
+  const conPublico = locales.filter(x => x.publico > 0);
+  if (locales.length && conPublico.length) {
+    const costo = Math.round(locales.reduce((s, x) => s + x.gastosCancha, 0) / locales.length);
+    const publicoProm = Math.round(conPublico.reduce((s, x) => s + x.publico, 0) / conPublico.length);
+    const entradasTot = conPublico.reduce((s, x) => s + x.entradas, 0);
+    const gentTot = conPublico.reduce((s, x) => s + x.publico, 0);
+    const precio = gentTot ? Math.round(entradasTot / gentTot) : 0;
+    const necesarias = precio ? Math.round(costo / precio) : 0;
+    p.abrirCancha = { costoPromedio: costo, incluye: "árbitros, policía, ambulancia y filmación",
+                      precioPromedioEntrada: precio,
+                      entradasNecesarias: necesarias,
+                      publicoPromedio: publicoProm,
+                      // El texto lo decide el número, no una constante: si un semestre la gente
+                      // llena la cancha, decir igual que "no alcanza" sería mentir.
+                      nota: publicoProm >= necesarias
+                        ? "Con el público que viene, las entradas alcanzan para cubrir el costo de abrir la cancha."
+                        : "Las entradas solas no alcanzan: la diferencia la cubren el buffet, la parrilla y los sponsors." };
+  }
+
+  // ── Peñas y eventos ──
+  const evAcum = {};
+  movs.forEach(m => {
+    if (!m.eventoId || !eventos[m.eventoId]) return;
+    if (PUB_RUBROS_PENA.indexOf(m.codRubro) < 0) return;
+    evAcum[m.eventoId] = (evAcum[m.eventoId] || 0) + m.ingreso - m.egreso;
+  });
+  p.eventos = Object.keys(evAcum)
+    .sort((x, y) => (eventos[x].fecha || "").localeCompare(eventos[y].fecha || ""))
+    .map(id => ({ nombre: eventos[id].nombre, monto: Math.round(evAcum[id]) }));
+  p.eventosNota = "Con el trabajo de muchos voluntarios, las peñas dejan una ganancia importante para el club.";
+
+  // ── Plantel ──
+  const sueldos = movs.filter(m => m.categoria === "Jugadores y Cuerpo Técnico").reduce((s, m) => s + m.egreso, 0);
+  const movilidad = movs.filter(m => m.categoria === "Movilidad").reduce((s, m) => s + m.egreso, 0);
+  if (sueldos || movilidad) {
+    p.plantel = { detalle: [ { nombre: "Jugadores y cuerpo técnico", monto: Math.round(sueldos) },
+                             { nombre: "Movilidad (combustible, remís, viáticos)", monto: Math.round(movilidad) } ],
+                  nota: "Muchos jugadores vienen de otros pueblos, así que además del sueldo hay que cubrir el combustible y los viáticos para que puedan entrenar y jugar." };
+  }
+  return p;
 }
 
 // ════════════════════════════════════════════════════════════

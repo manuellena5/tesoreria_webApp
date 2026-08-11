@@ -112,7 +112,10 @@ function resumen() {
 }
 
 module.exports = { SHEETS, Sheet, reset, hoja, filas, movRow, check, igual, seccion, resumen,
-                   handleAction: (d) => handleAction(d) };
+                   handleAction: (d) => handleAction(d),
+                   // Los datos del sitio público no pasan por handleAction (se sirven por doGet):
+                   // se expone la función directamente, salteando el caché, que acá sólo estorbaría.
+                   datosPublicos: () => construirDatosPublicos_() };
 
 // ── Ejemplo ejecutable: sanity check del ciclo de pagos ──────
 if (require.main === module) {

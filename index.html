@@ -426,6 +426,9 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 /* Cada premio pendiente es una línea tildable adentro de la celda "Premios/Ajustes". */
 .pj-table td.pj-premios-cell { min-width:190px; }
 .pj-premio-lbl { display:flex; align-items:center; gap:5px; white-space:nowrap; cursor:pointer; padding:1px 0; }
+/* El :disabled global sólo corta el click; acá hace falta que además se vea apagado, porque
+   el botón queda deshabilitado por lo que el usuario tildó y tiene que notarlo. */
+.pj-comp-btn:disabled { opacity:.3; }
 .pj-premio-lbl .mono { font-family:var(--mono); }
 .pj-desc-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); }
 .pj-desc-item:last-child { border-bottom:0; }
@@ -7940,6 +7943,18 @@ function pjPartidoLabel(partidoId) {
   return (p.numeroFecha ? p.numeroFecha + " · " : "") + p.rival;
 }
 
+/** Descripción de una fila de pago, con el mismo texto que le pone el backend al armar
+ *  ItemsDetalle (ver confirmarPagosJugadores en Code.gs). Está duplicada a propósito: el
+ *  comprobante que se emite ANTES de confirmar tiene que decir exactamente lo mismo que el
+ *  que sale después, y antes de confirmar no hay movimiento del cual leerlo. Si cambia el
+ *  formato de allá, cambiarlo acá. */
+function pjDescItem(p) {
+  if (pjTipoFila(p) !== "partido") return p.etiqueta || "Ajuste";
+  const par = partidos.find(x => x.id === (p.partidosIncluidos[0] || p.partidoId || ""));
+  const desc = par ? (par.numeroFecha + " vs " + par.rival) : "Pago partido";
+  return p.motivoAjuste ? desc + " — " + p.motivoAjuste : desc;
+}
+
 function renderPagoPartido() {
   const sorted = [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha));
   if (!sorted.length) return '<p class="note">Todavía no hay partidos cargados (Entidades → Partidos).</p>';
@@ -8739,6 +8754,7 @@ function renderTransferencias() {
       <td class="mono pj-total-cell">${fmt(0)}</td>
       <td>${esc(info.alias || "—")}</td>
       <td style="text-align:center"><input type="checkbox" class="pj-transf-cb" value="${jid}" onchange="pjTransfRecalc()" ${hayBase?"checked":""} ${hayBase?"":"disabled"}></td>
+      <td style="text-align:center"><button class="btn-sm pj-comp-btn" onclick="abrirComprobantePrevio('${jid}')" title="Generar el comprobante de lo tildado, sin confirmar el pago">🧾</button></td>
     </tr>`;
   }).join("");
 
@@ -8758,7 +8774,7 @@ function renderTransferencias() {
       </div>` : ""}
     <div class="pj-table-wrap">
       <table class="pj-table" id="pj-transf-table">
-        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Incluir</th></tr></thead>
+        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Incluir</th><th>Comprob.</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="99" class="note">Sin jugadores pendientes para los partidos seleccionados</td></tr>`}</tbody>
       </table>
     </div>
@@ -8792,6 +8808,10 @@ function pjTransfRecalc() {
       cell.textContent = fmtSigned(total);
       cell.style.color = total < 0 ? "var(--red)" : "";
     }
+    // Sin nada tildado no hay comprobante que emitir, y con neto negativo tampoco: ese pago no
+    // se puede hacer (lo corta confirmarPagosJugadores), así que no hay que poder documentarlo.
+    const btnComp = tr.querySelector(".pj-comp-btn");
+    if (btnComp) btnComp.disabled = total <= 0;
     if (total !== 0) jugadores++;
     totalGeneral += total;
   });
@@ -9890,6 +9910,45 @@ function abrirComprobanteModal(movId) {
   escudoBN().then(() => compRefreshDoc());
 }
 
+/**
+ * Comprobante de un jugador armado desde lo tildado en Transferencias, sin movimiento detrás.
+ *
+ * La transferencia bancaria se hace antes de tocar la app, y el jugador pide el comprobante en
+ * ese momento; obligar a confirmar el pago primero fuerza a registrar un egreso que todavía no
+ * se controló contra el banco. Por eso los ítems se arman de las filas de Pagos Jugadores y no
+ * de un movimiento: acá no se graba nada, sólo se emite el papel.
+ */
+function abrirComprobantePrevio(jugadorId) {
+  const tr = document.querySelector(`#pj-transf-table tbody tr[data-jug="${jugadorId}"]`);
+  if (!tr) return;
+  const main = tr.querySelector(".pj-transf-cb");
+  // Misma regla que el pago: reusa pjIdsDeSeleccion con una sola fila para que el comprobante
+  // y lo que después se confirme no puedan discrepar.
+  const ids = pjIdsDeSeleccion([{
+    jugadorId,
+    incluido:   !!(main && main.checked && !main.disabled),
+    premiosIds: [...tr.querySelectorAll(".pj-premio-cb:checked")].map(cb => cb.value)
+  }]);
+  const filas = ids.map(id => pagosJugadores.find(p => p.id === id)).filter(Boolean);
+  if (!filas.length) { toast("Tildá lo que querés incluir en el comprobante", "err"); return; }
+  const total = filas.reduce((s,p) => s + Number(p.montoFinal||0), 0);
+  if (total <= 0) { toast("El neto de " + (filas[0].jugadorNombre || "el jugador") + " no da un monto a pagar", "err"); return; }
+
+  const mes = (filas.find(p => p.mes) || {}).mes || "";
+  compData = {
+    movId:    "",                                   // sin movimiento: es previo a confirmar
+    tipoDoc:  "comprobante",
+    numero:   (Number(ultimoComprobante) || 0) + 1,
+    fecha:    fmtFechaDMY(today()),
+    receptor: filas[0].jugadorNombre || "",
+    periodo:  mes ? mesLabel(mes) : "",
+    items:    filas.map(p => ({ desc: pjDescItem(p), monto: Number(p.montoFinal||0) })),
+    mensaje:  "",
+  };
+  renderComprobanteModal();
+  escudoBN().then(() => compRefreshDoc());
+}
+
 // ── Modal: campos editables arriba, vista previa abajo ────────
 function renderComprobanteModal() {
   const d = compData;
@@ -9898,6 +9957,9 @@ function renderComprobanteModal() {
       <div class="modal-card" onclick="event.stopPropagation()" style="max-width:620px">
         <div class="modal-handle"></div>
         <div class="modal-title">Comprobante</div>
+        ${d.movId ? "" : `<p class="note" style="border-left:3px solid var(--warn);padding-left:8px;margin:0 0 10px">
+          Emitido desde Transferencias: el pago <b>todavía no está confirmado</b> y no hay ningún egreso cargado.
+          Acordate de confirmarlo cuando corresponda.</p>`}
         <div class="fgrid">
           <div class="field">
             <label>Tipo de documento</label>
@@ -10064,8 +10126,8 @@ function comprobanteDocHTML(d) {
 
     <div style="display:flex;padding:12px 18px 10px;border-top:1px solid #ccc">${firmas}</div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 18px;border-top:1px solid #000">
-      <span style="font-size:11px;color:#000;border:1px solid #000;border-radius:20px;padding:2px 10px">${esRecibo ? "Recibido" : "Pagado"}</span>
+    <div style="display:flex;justify-content:${esRecibo ? "space-between" : "flex-end"};align-items:center;padding:8px 18px;border-top:1px solid #000">
+      ${esRecibo ? `<span style="font-size:11px;color:#000;border:1px solid #000;border-radius:20px;padding:2px 10px">Recibido</span>` : ""}
       <span style="font-size:10px;color:#666">Emitido el ${esc(d.fecha)}</span>
     </div>
   </div>`;

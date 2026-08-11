@@ -6,3 +6,4 @@ PROMPT_premios_descuentos_pagos.md
 # huérfano con este nombre en vez de borrarse. Son basura, y el número cambia cada vez: por eso el
 # comodín y no un nombre puntual (ya se colaron dos al repo por listarlos de a uno).
 .fuse_hidden*
+PROMPT_desglose_ajuste_comprobante.md

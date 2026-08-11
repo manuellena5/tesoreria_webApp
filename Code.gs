@@ -1606,6 +1606,10 @@ function handleAction(data) {
           jugadorId:     String(all[i][1]),
           jugadorNombre: String(all[i][2]||""),
           montoFinal:    Number(all[i][7]||0),
+          // MontoBase y Ajuste van separados para poder desglosar el ajuste como ítem propio
+          // en ItemsDetalle (ver el armado de items más abajo).
+          montoBase:     Number(all[i][4]||0),
+          ajuste:        Number(all[i][5]||0),
           motivoAjuste:  String(all[i][6]||""),
           etiqueta:      String(all[i][11]||""),
           esPartido,
@@ -1643,19 +1647,34 @@ function handleAction(data) {
       let count = 0;
       const movimientosCreados = [];
       for (const g of Object.values(grupos)) {
-        const items = g.filas.map(f => {
-          const partidoInfo = f.partidoId ? partidoById[f.partidoId] : null;
-          let desc;
-          if (f.esPartido) {
-            desc = partidoInfo ? (partidoInfo.numeroFecha + " vs " + partidoInfo.rival) : "Pago partido";
-            if (f.motivoAjuste) desc += " — " + f.motivoAjuste;
-          } else {
-            desc = f.etiqueta || "Ajuste";
+        // Un ítem por fila, salvo el pago de partido con ajuste, que se parte en dos: el ajuste
+        // vive en una columna de la misma fila (no en una fila propia como los premios) y sin
+        // separarlo el comprobante dice "1 vs La Emilia — Adelanto $8" sin mostrar que el partido
+        // eran $10. La igualdad montoBase + ajuste === montoFinal es la guarda contra filas viejas
+        // inconsistentes: si no cierra sale el ítem único con montoFinal, así el total del
+        // movimiento nunca difiere del egreso real.
+        // Los dos ítems llevan el mismo partidoId, así que Resumen > Por Partido no cambia.
+        // Esta regla está duplicada en pjItemsDeFila (index.html), que arma el comprobante que se
+        // emite antes de confirmar: si cambia acá, cambiarla allá.
+        // for con push y no flatMap: no se puede depender del runtime de Apps Script.
+        const items = [];
+        for (const f of g.filas) {
+          if (!f.esPartido) {
+            // partidoId también en los premios: así Resumen > Por Partido los imputa al partido en
+            // que se ganaron en vez de prorratearlos entre los partidos del movimiento.
+            items.push({ desc: f.etiqueta || "Ajuste", monto: f.montoFinal, partidoId: f.partidoId });
+            continue;
           }
-          // partidoId también en los premios: así Resumen > Por Partido los imputa al partido en
-          // que se ganaron en vez de prorratearlos entre los partidos del movimiento.
-          return { desc, monto: f.montoFinal, partidoId: f.partidoId };
-        });
+          const partidoInfo = f.partidoId ? partidoById[f.partidoId] : null;
+          const desc = partidoInfo ? (partidoInfo.numeroFecha + " vs " + partidoInfo.rival) : "Pago partido";
+          if (f.ajuste !== 0 && f.montoBase !== 0 && f.montoBase + f.ajuste === f.montoFinal) {
+            items.push({ desc, monto: f.montoBase, partidoId: f.partidoId });
+            items.push({ desc: (f.motivoAjuste || "").trim() || "Ajuste", monto: f.ajuste, partidoId: f.partidoId });
+          } else {
+            items.push({ desc: f.motivoAjuste ? desc + " — " + f.motivoAjuste : desc,
+                         monto: f.montoFinal, partidoId: f.partidoId });
+          }
+        }
         const montoFinal = items.reduce((s, it) => s + Number(it.monto||0), 0);
 
         // Concepto corto: numeroFecha de los partidos incluidos (no el desglose completo, que con

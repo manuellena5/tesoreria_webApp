@@ -7963,11 +7963,6 @@ function pjPartidoLabel(partidoId) {
   return (p.numeroFecha ? p.numeroFecha + " · " : "") + p.rival;
 }
 
-/** Descripción de una fila de pago, con el mismo texto que le pone el backend al armar
- *  ItemsDetalle (ver confirmarPagosJugadores en Code.gs). Está duplicada a propósito: el
- *  comprobante que se emite ANTES de confirmar tiene que decir exactamente lo mismo que el
- *  que sale después, y antes de confirmar no hay movimiento del cual leerlo. Si cambia el
- *  formato de allá, cambiarlo acá. */
 /** MovimientoID del último pago confirmado de un jugador (el más reciente por fecha de pago).
  *  Sirve para poder emitir el comprobante de una transferencia que ya se hizo, cuando en la
  *  tabla no queda nada tildado porque todas sus filas pasaron a "pagado". */
@@ -7978,11 +7973,42 @@ function pjUltimoMovimientoDe(jugadorId) {
   return pagadas.length ? pagadas[0].movimientoId : "";
 }
 
-function pjDescItem(p) {
-  if (pjTipoFila(p) !== "partido") return p.etiqueta || "Ajuste";
-  const par = partidos.find(x => x.id === (p.partidosIncluidos[0] || p.partidoId || ""));
-  const desc = par ? (par.numeroFecha + " vs " + par.rival) : "Pago partido";
-  return p.motivoAjuste ? desc + " — " + p.motivoAjuste : desc;
+/** Descripción pelada del partido de una fila, sin el motivo del ajuste. */
+function pjDescPartido(p) {
+  const par = partidos.find(x => x.id === ((p.partidosIncluidos || [])[0] || p.partidoId || ""));
+  return par ? (par.numeroFecha + " vs " + par.rival) : "Pago partido";
+}
+
+/**
+ * Ítems del comprobante que le corresponden a una fila de Pagos Jugadores.
+ *
+ * Devuelve DOS ítems cuando la fila es un pago de partido con ajuste: el descuento (o el plus)
+ * se carga en una columna de la misma fila, no en una fila propia como los premios, y si no se
+ * separa acá el jugador ve "1 vs La Emilia — Adelanto $8" sin saber que el partido eran $10.
+ * La igualdad montoBase + ajuste === montoFinal es una guarda contra filas viejas con datos
+ * inconsistentes: si no cierra se emite el ítem único con montoFinal, para que el total del
+ * comprobante nunca difiera del egreso real.
+ *
+ * Está duplicada a propósito con el armado de ItemsDetalle de confirmarPagosJugadores (Code.gs):
+ * el comprobante que se emite ANTES de confirmar tiene que decir exactamente lo mismo que el que
+ * sale después, y antes de confirmar no hay movimiento del cual leerlo. Si cambia la regla de
+ * allá, cambiarla acá.
+ */
+function pjItemsDeFila(p) {
+  const montoFinal = Number(p.montoFinal || 0);
+  if (pjTipoFila(p) !== "partido") return [{ desc: p.etiqueta || "Ajuste", monto: montoFinal }];
+
+  const montoBase = Number(p.montoBase || 0);
+  const ajuste    = Number(p.ajuste || 0);
+  const desc      = pjDescPartido(p);
+  if (ajuste !== 0 && montoBase !== 0 && montoBase + ajuste === montoFinal) {
+    return [
+      { desc, monto: montoBase },
+      { desc: (p.motivoAjuste || "").trim() || "Ajuste", monto: ajuste }
+    ];
+  }
+  // Ítem único: el motivo va pegado a la descripción, como venía saliendo desde siempre.
+  return [{ desc: p.motivoAjuste ? desc + " — " + p.motivoAjuste : desc, monto: montoFinal }];
 }
 
 function renderPagoPartido() {
@@ -9986,7 +10012,7 @@ function abrirComprobantePrevio(jugadorId) {
     fecha:        fmtFechaDMY(fechaPago || today()),
     receptor:     filas[0].jugadorNombre || "",
     periodo:      mes ? mesLabel(mes) : "",
-    items:        filas.map(p => ({ desc: pjDescItem(p), monto: Number(p.montoFinal||0) })),
+    items:        filas.reduce((acc, p) => acc.concat(pjItemsDeFila(p)), []),
     mensaje:      "",
   };
   renderComprobanteModal();

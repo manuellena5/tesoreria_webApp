@@ -463,6 +463,70 @@ check("y era la del 02", !app.localStorage._claves().includes("clubfm_offline_sn
 app.localStorage = localStorageConCupo(100000);
 check("sin copias diarias devuelve false", app.dropOldestDailySnapshot() === false);
 
+// ══════════════════════════════════════════════════════════════
+// El ajuste de "Por partido" vive en una columna de la fila, no en una fila propia como los
+// premios. pjItemsDeFila lo separa para que el comprobante muestre el partido y el descuento
+// como dos renglones. Tiene que dar lo MISMO que el armado de ItemsDetalle del backend
+// (ver la sección 6 de spec/premios.js).
+seccion("17 · pjItemsDeFila desglosa el ajuste del pago de partido");
+
+// Filas propias: el sembrar() compartido no tiene montoBase/ajuste y las secciones 1-6 dependen de él.
+function filaPartido(extra) {
+  return Object.assign({
+    id: "f-aj", jugadorId: "j1", jugadorNombre: "PEREZ", partidosIncluidos: ["p1"],
+    montoBase: 10000, ajuste: -2000, motivoAjuste: "Adelanto", montoFinal: 8000,
+    estado: "pendiente", etiqueta: "", mes: "2026-06", tipo: "partido", partidoId: "p1"
+  }, extra || {});
+}
+
+sembrar(); // deja app.partidos con p1 = "Fecha 3 vs Colon"
+igual("con ajuste devuelve dos ítems",
+      app.pjItemsDeFila(filaPartido()),
+      [{ desc: "Fecha 3 vs Colon", monto: 10000 }, { desc: "Adelanto", monto: -2000 }]);
+igual("la descripción del partido NO lleva el motivo pegado",
+      app.pjItemsDeFila(filaPartido())[0].desc, "Fecha 3 vs Colon");
+igual("la suma de los ítems es el montoFinal",
+      app.pjItemsDeFila(filaPartido()).reduce((s,it) => s + it.monto, 0), 8000);
+
+igual("motivo vacío → \"Ajuste\"",
+      app.pjItemsDeFila(filaPartido({ motivoAjuste: "" }))[1].desc, "Ajuste");
+igual("motivo en blanco también → \"Ajuste\"",
+      app.pjItemsDeFila(filaPartido({ motivoAjuste: "   " }))[1].desc, "Ajuste");
+
+igual("ajuste positivo sale positivo",
+      app.pjItemsDeFila(filaPartido({ ajuste: 1500, montoFinal: 11500, motivoAjuste: "Plus" })),
+      [{ desc: "Fecha 3 vs Colon", monto: 10000 }, { desc: "Plus", monto: 1500 }]);
+
+igual("sin ajuste: un solo ítem por el total",
+      app.pjItemsDeFila(filaPartido({ ajuste: 0, montoFinal: 10000, motivoAjuste: "" })),
+      [{ desc: "Fecha 3 vs Colon", monto: 10000 }]);
+igual("motivo sin ajuste: un ítem con el motivo pegado, como salía antes",
+      app.pjItemsDeFila(filaPartido({ ajuste: 0, montoFinal: 10000, motivoAjuste: "Viático" })),
+      [{ desc: "Fecha 3 vs Colon — Viático", monto: 10000 }]);
+igual("montoBase en 0: no hay nada que desglosar",
+      app.pjItemsDeFila(filaPartido({ montoBase: 0, ajuste: 8000, motivoAjuste: "Suelto" })),
+      [{ desc: "Fecha 3 vs Colon — Suelto", monto: 8000 }]);
+
+// Guarda contra filas viejas: si montoBase + ajuste no da montoFinal, se emite el ítem único
+// con montoFinal para que el comprobante no difiera del egreso real.
+igual("fila inconsistente: un solo ítem por el montoFinal guardado",
+      app.pjItemsDeFila(filaPartido({ montoFinal: 7777 })),
+      [{ desc: "Fecha 3 vs Colon — Adelanto", monto: 7777 }]);
+
+igual("partido que ya no existe: descripción genérica",
+      app.pjItemsDeFila(filaPartido({ partidosIncluidos: ["borrado"], partidoId: "borrado" }))[0].desc,
+      "Pago partido");
+
+// Las filas que no son de partido no se tocan: ya generan su propio ítem.
+igual("un premio sigue dando un ítem con su etiqueta",
+      app.pjItemsDeFila({ jugadorId:"j1", partidosIncluidos: [], montoBase: 3000, ajuste: 0,
+                          motivoAjuste: "", montoFinal: 3000, etiqueta: "Gol", tipo: "premio", partidoId: "p1" }),
+      [{ desc: "Gol", monto: 3000 }]);
+igual("un descuento del mes sigue dando un ítem negativo",
+      app.pjItemsDeFila({ jugadorId:"j2", partidosIncluidos: [], montoBase: -8000, ajuste: 0,
+                          motivoAjuste: "", montoFinal: -8000, etiqueta: "Multa", tipo: "descuento", partidoId: "" }),
+      [{ desc: "Multa", monto: -8000 }]);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

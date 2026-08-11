@@ -250,4 +250,83 @@ check("checkIntegridad detecta el premio colgado de un partido borrado",
       rInt2.problemas.some(p => p.grupo === "Pagos a jugadores" && p.detalle.indexOf("partido que se borró") >= 0),
       JSON.stringify(rInt2.problemas));
 
+// ══════════════════════════════════════════════════════════════
+// El ajuste de "Por partido" vive en una columna de la fila, no en una fila propia como los
+// premios. Sin desglosarlo, el comprobante muestra el neto y esconde de dónde salió.
+seccion("6 · El ajuste se desglosa como ítem propio en ItemsDetalle");
+
+/** Alta de un pago de partido con ajuste (lo que graba saveRoster desde la pantalla Por partido). */
+function altaPartidoConAjuste(montoBase, ajuste, motivoAjuste) {
+  handleAction({ action: "saveRoster", partidoId: "p1", roster: [
+    { jugadorId:"j1", jugadorNombre:"GOMEZ", rol:"titular",
+      montoBase, ajuste, motivoAjuste, montoFinal: montoBase + ajuste, mes: "2026-06" }
+  ]});
+  return pjRows().find(r => r[PJ_IX.TIPO] === "partido")[0];
+}
+
+sembrar();
+const idAj = altaPartidoConAjuste(10000, -2000, "Adelanto");
+const rAj  = confirmar([idAj]);
+check("se confirma el pago con ajuste", rAj.ok, rAj.error);
+const movAj = movRows()[0];
+igual("ItemsDetalle trae DOS ítems", items(movAj).length, 2);
+igual("el primero es el partido, por el monto base",
+      { desc: items(movAj)[0].desc, monto: items(movAj)[0].monto },
+      { desc: "Fecha 3 vs RIVAL FC", monto: 10000 });
+igual("el segundo es el ajuste, con el motivo tal cual y el signo tal cual",
+      { desc: items(movAj)[1].desc, monto: items(movAj)[1].monto },
+      { desc: "Adelanto", monto: -2000 });
+igual("los dos se imputan al mismo partido",
+      items(movAj).map(it => it.partidoId), ["p1", "p1"]);
+igual("la suma de los ítems cierra con el neto",
+      items(movAj).reduce((s,it) => s + Number(it.monto||0), 0), 8000);
+igual("el Egreso del movimiento es el neto", Number(movAj[7]), 8000);
+igual("y el MontoFinal también", Number(movAj[9]), 8000);
+check("la Observación sigue trayendo el motivo", movAj[15].indexOf("Adelanto") >= 0, movAj[15]);
+
+sembrar();
+const idSinAj = altaPartidoConAjuste(10000, 0, "");
+confirmar([idSinAj]);
+igual("sin ajuste sigue saliendo UN solo ítem", items(movRows()[0]).length, 1);
+igual("con el texto de siempre", items(movRows()[0])[0].desc, "Fecha 3 vs RIVAL FC");
+igual("y por el total", Number(movRows()[0][7]), 10000);
+
+// Motivo cargado pero ajuste en 0: no hay nada que desglosar, así que el motivo se sigue
+// pegando a la descripción como venía saliendo.
+sembrar();
+const idMotivoSolo = altaPartidoConAjuste(10000, 0, "Viático");
+confirmar([idMotivoSolo]);
+igual("motivo sin ajuste: un ítem con el motivo pegado", items(movRows()[0]).length, 1);
+igual("…y el texto de siempre", items(movRows()[0])[0].desc, "Fecha 3 vs RIVAL FC — Viático");
+
+// Ajuste positivo (un plus, no un descuento): el signo sale tal cual está guardado.
+sembrar();
+const idPlus = altaPartidoConAjuste(10000, 1500, "Premio al esfuerzo");
+confirmar([idPlus]);
+igual("el plus sale en positivo", items(movRows()[0])[1].monto, 1500);
+igual("y el total es la suma", Number(movRows()[0][7]), 11500);
+
+// Fila vieja inconsistente: MontoFinal que no cierra con MontoBase + Ajuste. La guarda tiene
+// que dejar el ítem único con MontoFinal para que el comprobante no difiera del egreso.
+sembrar();
+SHEETS[S.PJ].rows.push(
+  ["roto","j1","GOMEZ",'["p1"]',10000,-2000,"Adelanto",7777,"pendiente","","","","","2026-06","partido","p1"]
+);
+confirmar(["roto"]);
+igual("una fila que no cierra queda con UN solo ítem", items(movRows()[0]).length, 1);
+igual("por el MontoFinal guardado", items(movRows()[0])[0].monto, 7777);
+igual("y el egreso coincide con ese monto", Number(movRows()[0][7]), 7777);
+
+// Partido + premio + ajuste juntos: sigue siendo un solo movimiento, ahora con tres ítems.
+sembrar();
+const idAj2 = altaPartidoConAjuste(10000, -2000, "Adelanto");
+const idPr6 = altaPremio(3000, "Gol", "p1");
+confirmar([idAj2, idPr6]);
+igual("un solo movimiento", movRows().length, 1);
+igual("con tres ítems: partido, ajuste y premio",
+      items(movRows()[0]).map(it => it.desc), ["Fecha 3 vs RIVAL FC", "Adelanto", "Gol"]);
+igual("la suma cierra con el total",
+      items(movRows()[0]).reduce((s,it) => s + Number(it.monto||0), 0), Number(movRows()[0][7]));
+igual("que es 10000 - 2000 + 3000", Number(movRows()[0][7]), 11000);
+
 resumen();

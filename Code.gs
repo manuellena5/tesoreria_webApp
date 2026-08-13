@@ -46,7 +46,7 @@ const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","M
 // Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
 // independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
 const PJ_SHEET = "Pagos Jugadores";
-const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes","Tipo","PartidoID"];
+const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes","Tipo","PartidoID","CodRubroContra"];
 // PartidosIncluidos: JSON de un array de IDs de partido ("[]" para filas quincenales/mensuales agregadas a mano)
 // Estado: "pendiente" | "pagado"
 // Mes: "YYYY-MM" (mismo formato que nowMes()/mesLabel() en index.html — NO el "YYYYMM" de MOV_COLS.MES),
@@ -61,6 +61,15 @@ const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBas
 // Para las filas de tipo "partido" la fuente de verdad sigue siendo PartidosIncluidos.
 // Descuento: fila con MontoFinal NEGATIVO, para que reste del acumulado sin lógica especial en
 // ninguna suma existente. Se netea contra el sueldo al confirmar el pago.
+// CodRubroContra: sólo para descuentos, y sólo cuando el descuento tiene contrapartida real.
+//  - VACÍO = adelanto ya entregado. El egreso del adelanto ya se registró el día que se le dio la
+//    plata, así que al liquidar corresponde netear: el jugador cobra el sueldo menos ese adelanto
+//    y no hay nada más que asentar. Es el comportamiento de siempre.
+//  - CON CÓDIGO = el club le vendió o le cobró algo (camiseta, multa, vianda). Ahí hay un ingreso
+//    real que hoy no quedaba registrado en ningún lado: el descuento sale del cálculo del egreso
+//    (que pasa a ser el sueldo BRUTO) y se genera un INGRESO propio en ese rubro. Ver
+//    confirmarPagosJugadores.
+// Vacío en todas las filas viejas = comportamiento idéntico al anterior, sin backfill.
 const PJ_IX = {
   ESTADO:        9,
   FECHA_PAGO:   10,
@@ -1466,7 +1475,8 @@ function handleAction(data) {
           movimientoId:      String(r[12]||""),
           mes:               normalizarMesPJ_(r[13]),
           tipo:              String(r[14]||""),  // "" en las filas anteriores al backfill
-          partidoId:         String(r[15]||"")
+          partidoId:         String(r[15]||""),
+          codRubroContra:    String(r[16]||"")   // "" = adelanto, netea como siempre
         }));
       return { ok: true, pagosJugadores };
     }
@@ -1485,7 +1495,7 @@ function handleAction(data) {
               p.id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
               Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
               p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||"", p.mes||"",
-              p.tipo||"periodico", p.partidoId||""
+              p.tipo||"periodico", p.partidoId||"", p.codRubroContra||""
             ]]);
             escribirMesPJ_(sh, i + 1, p.mes || "");
             return { ok: true, id: p.id };
@@ -1497,7 +1507,7 @@ function handleAction(data) {
         id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
         Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
         p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", "", p.mes||"",
-        p.tipo||"periodico", p.partidoId||""
+        p.tipo||"periodico", p.partidoId||"", p.codRubroContra||""
       ]);
       escribirMesPJ_(sh, sh.getLastRow(), p.mes || "");
       return { ok: true, id };

@@ -354,4 +354,33 @@ igual("el alta también lo escribe", cfgJ3.celular, "+54 9 3492 123456");
 igual("un jugador sin celular cargado da vacío",
       handleAction({ action: "listConfigJugadores" }).configJugadores.find(c => c.idJugador === "j2").celular, "");
 
+// ══════════════════════════════════════════════════════════════
+// CodRubroContra distingue el adelanto ya entregado (vacío, netea como siempre) del descuento con
+// contrapartida real (con código, genera un ingreso propio). Acá sólo se verifica que el dato
+// viaje entero por las dos ramas de savePagoJugador; lo que hace con él, en la sección 9.
+seccion("8 · La columna CodRubroContra va y vuelve entera");
+sembrar();
+const idDescRubro = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j1", jugadorNombre:"GOMEZ", partidosIncluidos: [], montoBase: -20000, ajuste: 0,
+  motivoAjuste: "", montoFinal: -20000, estado: "pendiente", etiqueta: "Camiseta",
+  mes: "2026-06", tipo: "descuento", partidoId: "", codRubroContra: "35"
+}}).id;
+const leerPJ = id => handleAction({ action: "listPagosJugadores" }).pagosJugadores.find(p => p.id === id);
+igual("el alta lo escribe", leerPJ(idDescRubro).codRubroContra, "35");
+
+handleAction({ action: "savePagoJugador", pago: {
+  id: idDescRubro, jugadorId:"j1", jugadorNombre:"GOMEZ", partidosIncluidos: [], montoBase: -20000,
+  ajuste: 0, motivoAjuste: "", montoFinal: -20000, estado: "pendiente", etiqueta: "Camiseta",
+  mes: "2026-06", tipo: "descuento", partidoId: "", codRubroContra: "10"
+}});
+igual("el update por id también", leerPJ(idDescRubro).codRubroContra, "10");
+
+const idAdelanto = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j1", jugadorNombre:"GOMEZ", partidosIncluidos: [], montoBase: -5000, ajuste: 0,
+  motivoAjuste: "", montoFinal: -5000, estado: "pendiente", etiqueta: "Adelanto",
+  mes: "2026-06", tipo: "descuento", partidoId: ""
+}}).id;
+igual("un descuento sin rubro queda vacío, no undefined", leerPJ(idAdelanto).codRubroContra, "");
+igual("y un premio tampoco lo trae", leerPJ(altaPremio(3000, "Gol", "p1")).codRubroContra, "");
+
 resumen();

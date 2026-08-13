@@ -527,6 +527,31 @@ igual("un descuento del mes sigue dando un ítem negativo",
                           motivoAjuste: "", montoFinal: -8000, etiqueta: "Multa", tipo: "descuento", partidoId: "" }),
       [{ desc: "Multa", monto: -8000 }]);
 
+// ══════════════════════════════════════════════════════════════
+// Los premios ya cobrados siguen a la vista en la tabla (con ✓) para poder consultarlos después
+// de pagar. Su checkbox está deshabilitado, pero la regla no puede depender de eso: si un id de
+// premio pagado llega igual, mandarlo generaría un segundo egreso por el mismo premio.
+seccion("18 · Un premio ya cobrado no vuelve a entrar en un pago");
+sembrar();
+app.pagosJugadores.find(p => p.id === "f-prem1").estado = "pagado";
+app.pagosJugadores.find(p => p.id === "f-prem1").movimientoId = "mov-viejo";
+
+igual("el premio pagado se descarta aunque venga tildado",
+      app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: false, premiosIds: ["f-prem1"] }]), []);
+igual("y no contamina un lote con premios pendientes",
+      app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: false, premiosIds: ["f-prem1", "f-prem2"] }]),
+      ["f-prem2"]);
+igual("el partido pendiente sigue entrando igual",
+      app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: ["f-prem1"] }]), ["f-part"]);
+
+igual("pjPremiosPendientes ya no lo lista", app.pjPremiosPendientes("j1").map(p => p.id), ["f-prem2"]);
+// La vista sí lo muestra: es un premio del partido tildado (p1).
+igual("pero la tabla lo sigue mostrando, para poder consultarlo",
+      app.pjPremiosDeVista("j1").map(p => p.id), ["f-prem1", "f-prem2"]);
+app.pjPartidosSel = ["p2"];
+igual("acotado a los partidos tildados: con otro partido elegido, el cobrado no aparece",
+      app.pjPremiosDeVista("j1").map(p => p.id), ["f-prem2"]);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

@@ -426,6 +426,10 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 /* Cada premio pendiente es una línea tildable adentro de la celda "Premios/Ajustes". */
 .pj-table td.pj-premios-cell { min-width:190px; }
 .pj-premio-lbl { display:flex; align-items:center; gap:5px; white-space:nowrap; cursor:pointer; padding:1px 0; }
+/* Premio ya cobrado: queda a la vista para poder consultarlo, apagado para que no compita
+   con los que sí se pueden tildar. */
+.pj-premio-lbl.pj-premio-pagado { opacity:.55; cursor:default; }
+.pj-filtro-lbl { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text2); cursor:pointer; }
 .pj-premio-lbl .mono { font-family:var(--mono); }
 .pj-desc-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); }
 .pj-desc-item:last-child { border-bottom:0; }
@@ -953,6 +957,7 @@ let entidadesTab  = "jugadores";
 let pagosJugTab   = "partido";
 let pjPartidoSel  = null;
 let pjPartidosSel = null; // null = todavía no inicializado (se precarga con los partidos pendientes)
+let pjSoloPendientes = false; // filtro de Transferencias: esconder a los jugadores que ya están al día
 let pjMesSel      = null; // null = todavía no inicializado (se precarga con el mes actual); "" = "Sin mes asignado"
 let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", evento: "", search: "" };
 let F             = buildDefaultF();
@@ -7950,6 +7955,16 @@ function pjPremiosPendientes(jugadorId) {
     && pjTipoFila(p) === "premio");
 }
 
+/** Premios que muestra la tabla de Transferencias: los pendientes, más los ya cobrados del
+ *  partido que se está mirando. Los pagados quedan a la vista (con ✓, como las columnas de
+ *  partido) en vez de desaparecer al confirmar: si no, después de pagar no hay forma de ver
+ *  qué premios entraron. Se acotan a los partidos tildados para que la celda no acumule todo
+ *  el historial del jugador. */
+function pjPremiosDeVista(jugadorId) {
+  return pagosJugadores.filter(p => p.jugadorId === jugadorId && pjTipoFila(p) === "premio"
+    && (p.estado === "pendiente" || (p.partidoId && (pjPartidosSel || []).includes(p.partidoId))));
+}
+
 /** Lo acumulado pendiente que NO son premios (sueldo periódico neto de descuentos). */
 function pjFilasSueldoPendiente(jugadorId) {
   return pjFilasAcumuladoPendiente(jugadorId).filter(p => pjTipoFila(p) !== "premio");
@@ -8761,7 +8776,7 @@ function renderTransferencias() {
     }
     // "sueldo" = lo periódico + los descuentos (montoFinal negativo, netean solos).
     const sueldo  = pjFilasSueldoPendiente(cfg.idJugador);
-    const premios = pjPremiosPendientes(cfg.idJugador);
+    const premios = pjPremiosDeVista(cfg.idJugador);
     if (tienePartido || sueldo.length || premios.length) {
       filasPorJugador[cfg.idJugador] = {
         nombre: cfg.nombre, alias: cfg.alias, porPartido,
@@ -8770,7 +8785,18 @@ function renderTransferencias() {
     }
   });
 
-  const jugadorIds = Object.keys(filasPorJugador).sort((a,b) => filasPorJugador[a].nombre.localeCompare(filasPorJugador[b].nombre));
+  // "Pendiente" = le queda algo por cobrar: un partido de la selección, sueldo/descuentos, o un premio.
+  const tienePendiente = jid => {
+    const info = filasPorJugador[jid];
+    return info.sueldo.length > 0
+        || info.premios.some(p => p.estado === "pendiente")
+        || Object.values(info.porPartido).some(f => f.estado === "pendiente");
+  };
+
+  let jugadorIds = Object.keys(filasPorJugador).sort((a,b) => filasPorJugador[a].nombre.localeCompare(filasPorJugador[b].nombre));
+  const totalJugadores = jugadorIds.length;
+  if (pjSoloPendientes) jugadorIds = jugadorIds.filter(tienePendiente);
+  const ocultos = totalJugadores - jugadorIds.length;
 
   const rows = jugadorIds.map(jid => {
     const info = filasPorJugador[jid];
@@ -8793,14 +8819,20 @@ function renderTransferencias() {
       Object.values(info.porPartido).some(f => f.estado === "pendiente");
     // Un checkbox por premio: tildar al jugador para pagarle el partido no le tiene que arrastrar
     // los premios (antes se colaban solos y desaparecían de la pantalla sin que nadie los eligiera).
+    // Los ya cobrados se muestran con ✓ y sin checkbox: están para consultarlos, no para volver
+    // a pagarlos.
     const premiosCell = info.premios.length
-      ? info.premios.map(p => `
-          <label class="pj-premio-lbl">
-            <input type="checkbox" class="pj-premio-cb" value="${p.id}" data-monto="${Number(p.montoFinal||0)}" onchange="pjTransfRecalc()">
+      ? info.premios.map(p => {
+          const pagado = p.estado === "pagado";
+          return `
+          <label class="pj-premio-lbl${pagado ? " pj-premio-pagado" : ""}">
+            <input type="checkbox" class="pj-premio-cb" value="${p.id}" data-monto="${Number(p.montoFinal||0)}" onchange="pjTransfRecalc()" ${pagado?"disabled":""}>
             <span class="mono">${fmtSigned(p.montoFinal)}</span>
             <span>${esc(p.etiqueta || "Premio")}</span>
             <span class="pj-acumulado">${esc(pjPartidoLabel(p.partidoId))}</span>
-          </label>`).join("")
+            ${pagado ? '<span class="pj-badge pj-badge-pagado" style="padding:1px 5px">✓</span>' : ""}
+          </label>`;
+        }).join("")
       : "—";
     return `
     <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-base="${base}" data-total="0">
@@ -8809,7 +8841,7 @@ function renderTransferencias() {
       <td class="pj-premios-cell">${premiosCell}</td>
       <td class="mono pj-total-cell">${fmt(0)}</td>
       <td>${esc(info.alias || "—")}</td>
-      <td style="text-align:center"><input type="checkbox" class="pj-transf-cb" value="${jid}" onchange="pjTransfRecalc()" ${hayBase?"checked":""} ${hayBase?"":"disabled"}></td>
+      <td style="text-align:center"><input type="checkbox" class="pj-transf-cb" value="${jid}" onchange="pjTransfRecalc()" ${hayBase?"":"disabled"}></td>
       <td style="text-align:center"><button class="btn-sm pj-comp-btn" onclick="abrirComprobantePrevio('${jid}')" title="Generar el comprobante de lo tildado, sin confirmar el pago">🧾</button></td>
     </tr>`;
   }).join("");
@@ -8823,11 +8855,16 @@ function renderTransferencias() {
       <div class="stat-card"><div class="stat-label">Total a transferir</div><div class="stat-val egr" id="pj-total-transferir">${fmt(0)}</div></div>
       <div class="stat-card"><div class="stat-label">Partidos incluidos</div><div class="stat-val">${partidosSel.length}</div></div>
     </div>
-    ${jugadorIds.length ? `
-      <div style="display:flex;gap:8px;margin-bottom:8px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      ${jugadorIds.length ? `
         <button class="btn-sm" onclick="pjMarcarTodos(true)">Tildar todos</button>
-        <button class="btn-sm" onclick="pjMarcarTodos(false)">Destildar todos</button>
-      </div>` : ""}
+        <button class="btn-sm" onclick="pjMarcarTodos(false)">Destildar todos</button>` : ""}
+      <label class="pj-filtro-lbl">
+        <input type="checkbox" ${pjSoloPendientes?"checked":""} onchange="pjSoloPendientes=this.checked; renderPagosJugadores()">
+        Sólo pendientes de pagar
+      </label>
+      ${pjSoloPendientes && ocultos ? `<span class="pj-acumulado">${ocultos} jugador${ocultos!==1?"es":""} al día sin mostrar</span>` : ""}
+    </div>${totalJugadores && !jugadorIds.length ? `<p class="note">No queda nada pendiente para los partidos seleccionados.</p>` : ""}
     <div class="pj-table-wrap pj-transf-wrap">
       <table class="pj-table" id="pj-transf-table">
         <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Incluir</th><th>Comprob.</th></tr></thead>
@@ -8906,7 +8943,13 @@ function pjIdsDeSeleccion(seleccion) {
     // Los premios entran SÓLO si están tildados uno por uno: tildar al jugador para pagarle el
     // partido no tiene que arrastrárselos. Van afuera del if a propósito — un jugador que sólo
     // tiene premios tiene el checkbox principal deshabilitado y aun así puede cobrarlos.
-    (sel.premiosIds || []).forEach(id => ids.push(id));
+    // Los ya cobrados se descartan: la tabla los muestra para consulta y su checkbox está
+    // deshabilitado, pero volver a mandarlos generaría un segundo egreso por el mismo premio.
+    (sel.premiosIds || []).forEach(id => {
+      const p = pagosJugadores.find(x => x.id === id);
+      if (p && p.estado !== "pendiente") return;
+      ids.push(id);
+    });
   });
   return [...new Set(ids)];
 }
@@ -8938,15 +8981,71 @@ function pjJugadorConNetoNegativo(ids) {
   return Object.values(porJugador).find(g => g.neto < 0) || null;
 }
 
+/** Una celda de CSV: entrecomilla sólo si hace falta (coma, comilla o salto de línea).
+ *  Los nombres de rival y las etiquetas de premio son texto libre y pueden traer comas. */
+function csvCell(v) {
+  const s = String(v == null ? "" : v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/**
+ * CSV con las mismas columnas que la tabla de Transferencias.
+ *
+ * Sale una fila por jugador con algo a transferir (data-total ≠ 0, que ya descuenta los premios
+ * destildados). Los montos van como número pelado, sin "$" ni separador de miles, para que la
+ * planilla los pueda sumar; el único que lleva texto es el partido ya pagado, que se marca para
+ * explicar por qué no está sumado en el Total.
+ *
+ * Igual que en la tabla, las columnas de partido muestran lo que hay cargado y el Total muestra
+ * lo que se va a transferir: si el jugador está destildado los montos se ven igual pero el Total
+ * no los cuenta. Por eso va también la columna "Incluir".
+ */
 function exportarTransferencias() {
-  // Sale lo que efectivamente se va a transferir (data-total, que ya descuenta los premios
-  // destildados), no todo lo pendiente del jugador.
   const filas = [...document.querySelectorAll("#pj-transf-table tbody tr[data-jug]")]
     .filter(tr => Number(tr.dataset.total || 0) !== 0);
   if (!filas.length) { toast("No hay filas seleccionadas para exportar", "err"); return; }
-  const lineas = filas.map(tr => `${tr.dataset.alias},${tr.dataset.total}`);
-  const texto = "Alias/CBU,Monto\n" + lineas.join("\n");
-  const blob = new Blob([texto], { type:"text/csv;charset=utf-8" });
+
+  // Mismo orden que las columnas de la tabla (ver renderTransferencias).
+  const partidosSel = [...partidos]
+    .sort((a,b) => b.fecha.localeCompare(a.fecha))
+    .filter(p => pjPartidosSel.includes(p.id));
+
+  const encabezado = ["Jugador"]
+    .concat(partidosSel.map(p => p.rival + (p.fecha ? " " + p.fecha.slice(8) + "/" + p.fecha.slice(5,7) : "")))
+    .concat(["Sueldo/Acumulado", "Premios/Ajustes", "Total", "Alias/CBU", "Incluir"]);
+
+  const lineas = filas.map(tr => {
+    const jid  = tr.dataset.jug;
+    const cfg  = configJugadores.find(c => c.idJugador === jid);
+    const main = tr.querySelector(".pj-transf-cb");
+    const incluido = !!(main && main.checked && !main.disabled);
+
+    const celdasPartido = partidosSel.map(p => {
+      const fila = cfg && cfg.frecuencia === "partido" ? pjFilaPartido(jid, p.id) : null;
+      if (!fila) return "";
+      // El ✓ de la tabla: ya se cobró en otra transferencia, así que no entra en el Total.
+      return fila.estado === "pagado" ? fila.montoFinal + " (pagado)" : String(fila.montoFinal);
+    });
+
+    const sueldo = pjFilasSueldoPendiente(jid).reduce((s,p) => s + Number(p.montoFinal||0), 0);
+
+    // Sólo los premios tildados: son los que suman al Total.
+    const premios = [...tr.querySelectorAll(".pj-premio-cb:checked")].map(cb => {
+      const p = pagosJugadores.find(x => x.id === cb.value);
+      if (!p) return "";
+      const par = p.partidoId ? " (" + pjPartidoLabel(p.partidoId) + ")" : "";
+      return (p.etiqueta || "Premio") + par + " " + Number(p.montoFinal||0);
+    }).filter(Boolean).join(" · ");
+
+    return [cfg ? cfg.nombre : jid]
+      .concat(celdasPartido)
+      .concat([sueldo || "", premios, tr.dataset.total, tr.dataset.alias, incluido ? "sí" : "no"])
+      .map(csvCell).join(",");
+  });
+
+  const texto = encabezado.map(csvCell).join(",") + "\n" + lineas.join("\n");
+  // BOM: sin él, Excel abre el CSV en ANSI y rompe los acentos de los nombres.
+  const blob = new Blob(["﻿" + texto], { type:"text/csv;charset=utf-8" });
   const url  = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = "transferencias_jugadores.csv"; a.click();

@@ -644,6 +644,43 @@ app.movimientos[1].vinculos = [{ egresoId: "otro-egreso", monto: 20 }];
 igual("un vínculo que apunta a otro egreso no se cuela",
       app.movToComprobante(app.movimientos[0]).items, [{ desc: "Junio", monto: 100 }]);
 
+// ══════════════════════════════════════════════════════════════
+// El botón de WhatsApp sólo aparece si el receptor es un jugador, y sólo se habilita si el celular
+// cargado da un número usable: wa.me con un número inválido no falla, abre un chat con nadie.
+seccion("22 · Botón de WhatsApp del comprobante");
+sembrar();
+app.configJugadores[0].celular = "3492 123456";   // j1, válido
+app.configJugadores[1].celular = "123";           // j2, inválido
+
+app.compData = { jugadorId: "j1", receptor: "PEREZ", items: [] };
+const btnOk = app.compBotonWhatsAppHTML();
+check("con celular válido se ofrece el botón", btnOk.includes('id="btn-comp-wa"'), btnOk);
+check("y queda habilitado",                   !btnOk.includes("disabled"), btnOk);
+
+app.compData = { jugadorId: "j2", receptor: "GOMEZ", items: [] };
+const btnMal = app.compBotonWhatsAppHTML();
+check("con celular inválido el botón queda deshabilitado", btnMal.includes("disabled"), btnMal);
+check("y el tooltip dice por qué", btnMal.includes("no es un número válido"), btnMal);
+
+app.configJugadores[1].celular = "";
+const btnSin = app.compBotonWhatsAppHTML();
+check("sin celular cargado también queda deshabilitado", btnSin.includes("disabled"), btnSin);
+check("con su propio motivo", btnSin.includes("no tiene celular cargado"), btnSin);
+
+app.compData = { jugadorId: "", receptor: "LOPEZ", items: [] };
+igual("un recibo de adherente no muestra el botón", app.compBotonWhatsAppHTML(), "");
+app.compData = { jugadorId: "sin-config", receptor: "X", items: [] };
+igual("un jugador sin config de cobro tampoco", app.compBotonWhatsAppHTML(), "");
+
+igual("el mensaje sale con los datos interpolados",
+      app.compMensajeWhatsApp("PEREZ", "Junio 2026", "$80.000"),
+      "Hola PEREZ, te paso el comprobante de la liquidación de Junio 2026.\n" +
+      "Total transferido: $80.000.\n" +
+      "Cualquier cosa avisame.");
+check("sin período no queda la preposición colgada",
+      !app.compMensajeWhatsApp("PEREZ", "", "$80.000").includes("liquidación de ."),
+      app.compMensajeWhatsApp("PEREZ", "", "$80.000"));
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

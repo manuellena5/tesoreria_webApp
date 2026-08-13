@@ -8246,7 +8246,7 @@ function renderPagoMensual() {
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p class="note">Los descuentos (multas, adelantos ya entregados) quedan pendientes como el resto y se netean contra el sueldo al confirmar el pago. El "Neto a pagar" ya los tiene descontados.</p>
+    <p class="note">Los descuentos quedan pendientes como el resto y se restan del sueldo al liquidar. El "Neto a pagar" ya los tiene descontados. Un descuento <b>sin rubro</b> (un adelanto ya entregado) se netea contra el egreso, como siempre; uno <b>con rubro</b> (una camiseta, una multa) deja el egreso por el sueldo bruto y registra además el ingreso en ese rubro.</p>
   `;
 }
 

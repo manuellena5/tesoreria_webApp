@@ -1588,6 +1588,10 @@ function handleAction(data) {
     // solo comprobante. Cada partido y cada premio/ajuste queda itemizado en ItemsDetalle (con su
     // propio partidoId cuando corresponde) para el generador de comprobantes y para que Resumen >
     // Por Partido pueda seguir imputando cada ítem a su partido en vez de al movimiento entero.
+    //
+    // Los descuentos con CodRubroContra son la excepción: no netean adentro del egreso sino que
+    // generan un INGRESO propio en el rubro elegido, vinculado al egreso. El egreso queda por el
+    // sueldo BRUTO. Ver el paso 4.
     case "confirmarPagosJugadores": {
       const sh    = getOrCreateSheet(PJ_SHEET, PJ_COLS);
       const movSh = getOrCreateSheet(MOV_SHEET, MOV_COLS);
@@ -1630,6 +1634,9 @@ function handleAction(data) {
           ajuste:        Number(all[i][5]||0),
           motivoAjuste:  String(all[i][6]||""),
           etiqueta:      String(all[i][11]||""),
+          // Sólo lo traen los descuentos con contrapartida real: salen del cálculo del egreso y
+          // generan un INGRESO propio en ese rubro (ver el paso 4).
+          codRubroContra: String(all[i][16]||"").trim(),
           esPartido,
           // Un premio se imputa al partido de su columna PartidoID; un pago de partido, al que
           // dice PartidosIncluidos (que es lo que escribe saveRoster desde siempre).
@@ -1659,12 +1666,29 @@ function handleAction(data) {
           return { ok: false, error: "Los descuentos de " + g.jugadorNombre + " (neto " + fmtMonto_(neto) +
                    ") superan lo que se le debe. Ajustá el descuento o dejalo pendiente para el mes que viene." };
         }
+        // Un lote de puros descuentos con contrapartida no tiene sueldo del cual descontarlos: el
+        // egreso saldría en cero y los ingresos quedarían colgados de un movimiento vacío. Se corta
+        // acá, junto con el resto de las validaciones, para no escribir nada a medias.
+        if (!g.filas.some(f => !f.codRubroContra)) {
+          return { ok: false, error: "El lote de " + g.jugadorNombre + " son sólo descuentos imputados a un rubro. " +
+                   "Incluí el sueldo o el partido del que se descuentan." };
+        }
       }
 
-      // 4) Un movimiento por jugador, sumando sus filas e itemizando partidos y premios/ajustes.
+      // 4) Un EGRESO por jugador, sumando sus filas e itemizando partidos y premios/ajustes, más
+      //    un INGRESO por cada descuento con contrapartida.
       let count = 0;
       const movimientosCreados = [];
       for (const g of Object.values(grupos)) {
+        // Los descuentos con CodRubroContra salen del cálculo del egreso: no son plata que el club
+        // deja de gastar, son plata que el club COBRÓ (una camiseta, una multa, una vianda). Al
+        // sacarlos, el egreso queda por el sueldo BRUTO sin ninguna lógica especial, y cada uno
+        // genera su propio INGRESO en el rubro elegido, más abajo.
+        // Los descuentos sin rubro —adelantos ya entregados y ya registrados como egreso el día
+        // que se dio la plata— siguen neteando acá adentro, que es lo correcto para ellos.
+        const filasContra  = g.filas.filter(f => f.codRubroContra);
+        const filasEgreso  = g.filas.filter(f => !f.codRubroContra);
+
         // Un ítem por fila, salvo el pago de partido con ajuste, que se parte en dos: el ajuste
         // vive en una columna de la misma fila (no en una fila propia como los premios) y sin
         // separarlo el comprobante dice "1 vs La Emilia — Adelanto $8" sin mostrar que el partido
@@ -1676,7 +1700,7 @@ function handleAction(data) {
         // emite antes de confirmar: si cambia acá, cambiarla allá.
         // for con push y no flatMap: no se puede depender del runtime de Apps Script.
         const items = [];
-        for (const f of g.filas) {
+        for (const f of filasEgreso) {
           if (!f.esPartido) {
             // partidoId también en los premios: así Resumen > Por Partido los imputa al partido en
             // que se ganaron en vez de prorratearlos entre los partidos del movimiento.
@@ -1697,8 +1721,8 @@ function handleAction(data) {
 
         // Concepto corto: numeroFecha de los partidos incluidos (no el desglose completo, que con
         // 2+ partidos queda kilométrico), + sufijo "premios" si hay ítems sueltos sin partido.
-        const partidosIds = [...new Set(g.filas.filter(f => f.partidoId).map(f => f.partidoId))];
-        const hayPremios   = g.filas.some(f => !f.esPartido);
+        const partidosIds = [...new Set(filasEgreso.filter(f => f.partidoId).map(f => f.partidoId))];
+        const hayPremios   = filasEgreso.some(f => !f.esPartido);
         let concepto;
         if (partidosIds.length) {
           const numerosFecha = partidosIds.map(pid => (partidoById[pid]||{}).numeroFecha || "").filter(Boolean);
@@ -1711,11 +1735,18 @@ function handleAction(data) {
         // Concepto sólo dice "+ premios"; acá va qué premio y por cuánto, que es lo que el tesorero
         // necesita para justificar la diferencia contra el monto del partido. Se concatena: los
         // motivos de ajuste ya venían escribiéndose en este campo y no se pisan.
-        const partes = [...new Set(g.filas.map(f => f.motivoAjuste).filter(Boolean))];
-        const premios = g.filas.filter(f => !f.esPartido);
+        const partes = [...new Set(filasEgreso.map(f => f.motivoAjuste).filter(Boolean))];
+        const premios = filasEgreso.filter(f => !f.esPartido);
         if (premios.length) {
           partes.push("Premios/ajustes: " +
             premios.map(f => (f.etiqueta || "Ajuste") + " " + fmtMonto_(f.montoFinal)).join(", "));
+        }
+        // Los descuentos con contrapartida no están en ItemsDetalle (romperían el invariante de
+        // que los ítems suman el MontoFinal), así que se nombran acá: es lo único que explica, en
+        // el movimiento mismo, por qué se transfirió menos que el egreso registrado.
+        if (filasContra.length) {
+          partes.push("Descontado y cobrado aparte: " +
+            filasContra.map(f => (f.etiqueta || "Descuento") + " " + fmtMonto_(Math.abs(f.montoFinal))).join(", "));
         }
         const observacion = partes.join(" · ");
 
@@ -1744,6 +1775,47 @@ function handleAction(data) {
         ]);
         movimientosCreados.push(mov);
 
+        // Un INGRESO por cada descuento con contrapartida. El egreso se escribió primero porque
+        // hace falta su id para el vínculo.
+        for (const f of filasContra) {
+          const info    = RUBROS_MAP[f.codRubroContra] || {};
+          const importe = Math.abs(Number(f.montoFinal || 0));
+          const ing = {
+            id: uid_gs(), mes, fecha: fechaPago,
+            codRubro: f.codRubroContra, rubro: info.nombre || "", categoria: info.cat || "",
+            concepto: (f.etiqueta || "Descuento") + " — " + g.jugadorNombre,
+            egreso: 0, ingreso: importe, montoFinal: importe,
+            cuenta, cuentaDestino: "", modoPago: medioPago,
+            jugadorCT: g.jugadorNombre, jugadorId: g.jugadorId, adherente: "",
+            observacion: "Descontado del sueldo", comprobante: "", seguroReintegro: 0,
+            tipo: "INGRESO", timestamp: ts,
+            // partidoId VACÍO a propósito. Resumen > Por Partido excluye las categorías de
+            // PARTIDO_RES_CATS_EXCLUIDAS, y el sueldo bruto cae ahí; pero "Indumentaria y
+            // Equipamiento" no está excluida: si el ingreso de la camiseta heredara el partido de
+            // la liquidación, esos $20 se sumarían a la recaudación de esa fecha (y al balance
+            // público) sin tener nada que ver con la jornada.
+            partidoId: "", eventoId: "",
+            // El array vive siempre en el movimiento INGRESO apuntando al egreso, misma convención
+            // que el reintegro de seguro (rubro 21): así la pantalla de vínculos muestra el par
+            // emparejado sin tocarla y checkIntegridad cubre el caso nuevo sin cambios.
+            vinculos: [{ egresoId: movId, monto: importe }],
+            itemsDetalle: []
+          };
+          movSh.appendRow([
+            ing.id, ing.mes, ing.fecha, ing.codRubro, ing.rubro, ing.categoria,
+            ing.concepto, ing.egreso, ing.ingreso, ing.montoFinal,
+            ing.cuenta, ing.cuentaDestino, ing.modoPago,
+            ing.jugadorCT, ing.adherente, ing.observacion, ing.comprobante, ing.seguroReintegro,
+            ing.tipo, ing.timestamp, ing.partidoId, ing.eventoId, stringifyVinculos(ing.vinculos),
+            stringifyItemsDetalle(ing.itemsDetalle), ing.jugadorId || "", ""
+          ]);
+          movimientosCreados.push(ing);
+        }
+
+        // Todas las filas del jugador —incluidas las de contrapartida— quedan apuntando al EGRESO.
+        // Es lo que hace que borrar el egreso revierta la liquidación entera (ver
+        // revertirPagosDeMovimiento_); el ingreso queda con el vínculo colgado, que es exactamente
+        // lo que checkIntegridad reporta.
         for (const f of g.filas) {
           sh.getRange(f.rowIndex + 1, PJ_IX.ESTADO, 1, 2).setValues([[ "pagado", fechaPago ]]);
           sh.getRange(f.rowIndex + 1, PJ_IX.MEDIO_PAGO).setValue(medioPago);

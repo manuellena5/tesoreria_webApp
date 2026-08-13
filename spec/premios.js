@@ -8,6 +8,8 @@
  *  3. El backfill de Tipo es idempotente y las filas viejas funcionan antes de correrlo.
  *  4. Los descuentos netean y no generan movimientos negativos en silencio.
  *  5. Nada de lo anterior rompió deleteMov ni checkIntegridad.
+ *  6. Un descuento con CodRubroContra NO netea: el egreso queda por el sueldo bruto y el cobro
+ *     del club sale como un ingreso propio, vinculado al egreso y sin partido.
  * ══════════════════════════════════════════════════════════════ */
 
 const H = require("./harness.js");
@@ -382,5 +384,152 @@ const idAdelanto = handleAction({ action: "savePagoJugador", pago: {
 }}).id;
 igual("un descuento sin rubro queda vacío, no undefined", leerPJ(idAdelanto).codRubroContra, "");
 igual("y un premio tampoco lo trae", leerPJ(altaPremio(3000, "Gol", "p1")).codRubroContra, "");
+
+// ══════════════════════════════════════════════════════════════
+// El corazón del cambio: un descuento con contrapartida deja de netear adentro del rubro 19.
+// El egreso pasa a ser el sueldo BRUTO y el cobro del club se registra en su propio rubro, que es
+// donde tiene que estar para que la imputación cierre además del saldo de la cuenta.
+seccion("9 · Descuento con contrapartida: sueldo bruto + ingreso propio");
+
+/** Alta de un descuento del sueldo, con o sin rubro de contrapartida. */
+function altaDescuento(monto, etiqueta, codRubroContra) {
+  return handleAction({ action: "savePagoJugador", pago: {
+    jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
+    montoBase: -monto, ajuste: 0, motivoAjuste: "", montoFinal: -monto,
+    estado: "pendiente", etiqueta, mes: "2026-06", tipo: "descuento", partidoId: "",
+    codRubroContra: codRubroContra || ""
+  }}).id;
+}
+/** Alta del sueldo mensual de j2. */
+function altaSueldo(monto) {
+  return handleAction({ action: "savePagoJugador", pago: {
+    jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
+    montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
+    estado: "pendiente", etiqueta: "Junio", mes: "2026-06", tipo: "periodico", partidoId: ""
+  }}).id;
+}
+const egresoDe  = () => movRows().find(m => m[18] === "EGRESO");
+const ingresosDe = () => movRows().filter(m => m[18] === "INGRESO");
+
+sembrar();
+const idSueldo9 = altaSueldo(100);
+const idCamiseta = altaDescuento(20, "Camiseta", "35"); // 35 = INDUMENTARIA Y MERCH.
+const r9 = confirmar([idSueldo9, idCamiseta]);
+check("la confirmación sale bien", r9.ok, JSON.stringify(r9));
+igual("se crean dos movimientos", movRows().length, 2);
+
+const egr9 = egresoDe(), ing9 = ingresosDe();
+igual("el EGRESO va por el sueldo BRUTO, sin netear", Number(egr9[7]), 100);
+igual("y sigue en el rubro 19",                        egr9[3], "19");
+igual("un solo INGRESO",                               ing9.length, 1);
+igual("por el monto del descuento, en positivo",       Number(ing9[0][8]), 20);
+igual("en el rubro elegido",                           ing9[0][3], "35");
+igual("con su nombre resuelto del catálogo",           ing9[0][4], "INDUMENTARIA Y MERCH.");
+igual("y su categoría",                                ing9[0][5], "Indumentaria y Equipamiento");
+igual("el concepto dice qué es y de quién",            ing9[0][6], "Camiseta — PEREZ");
+igual("la observación aclara de dónde salió",          ing9[0][15], "Descontado del sueldo");
+igual("misma cuenta que el egreso",                    ing9[0][10], egr9[10]);
+igual("misma fecha",                                   ing9[0][2],  egr9[2]);
+igual("mismo medio de pago",                           ing9[0][12], egr9[12]);
+igual("los dos movimientos vienen en la respuesta",    (r9.movimientos||[]).length, 2);
+
+// El Top 10 de jugadores del Resumen agrupa por JugadorCT y netea egr − ing, y el filtro por
+// jugador de Reportes busca por ese campo: si va vacío el ingreso se pierde de los dos lados.
+igual("el INGRESO lleva jugadorCT", ing9[0][13], "PEREZ");
+igual("y jugadorId",                ing9[0][24], "j2");
+
+// Vinculos en el INGRESO apuntando al egreso: misma convención que el reintegro de seguro.
+const vin9 = JSON.parse(ing9[0][22] || "[]");
+igual("el INGRESO trae un vínculo",         vin9.length, 1);
+igual("que apunta al egreso",               vin9[0].egresoId, egr9[0]);
+igual("por el monto del descuento",         vin9[0].monto, 20);
+igual("el EGRESO no lleva vínculos",        egr9[22], "");
+igual("el INGRESO no lleva ItemsDetalle",   ing9[0][23], "");
+
+// Invariante 2: la suma de ItemsDetalle es igual al MontoFinal del movimiento.
+igual("el ItemsDetalle del egreso suma 100",
+      items(egr9).reduce((s,it) => s + Number(it.monto||0), 0), 100);
+igual("y es una sola línea, la del sueldo", items(egr9).map(it => it.desc), ["Junio"]);
+// La observación conserva el desglose de premios/ajustes que ya escribía y le suma el aviso del
+// descuento: es lo único que, mirando el movimiento, explica por qué se transfirió menos.
+check("la observación del egreso nombra el descuento cobrado aparte",
+      egr9[15].indexOf("Descontado y cobrado aparte: Camiseta $20") >= 0, egr9[15]);
+
+// Las dos filas quedan pagadas y apuntando al EGRESO: borrar el egreso revierte la liquidación
+// entera, que es lo que hace revertirPagosDeMovimiento_.
+igual("la fila del sueldo apunta al egreso",   pjPorId(idSueldo9)[PJ_IX.MOV_ID], egr9[0]);
+igual("la del descuento también",              pjPorId(idCamiseta)[PJ_IX.MOV_ID], egr9[0]);
+igual("las dos quedaron pagadas",
+      [pjPorId(idSueldo9)[PJ_IX.ESTADO], pjPorId(idCamiseta)[PJ_IX.ESTADO]], ["pagado","pagado"]);
+
+// ── El mismo caso SIN rubro: nada cambia respecto de hoy ──────
+sembrar();
+const idSueldo9b = altaSueldo(100);
+const idAdelanto9 = altaDescuento(20, "Adelanto", "");
+confirmar([idSueldo9b, idAdelanto9]);
+igual("sin CodRubroContra sale un solo movimiento", movRows().length, 1);
+igual("un EGRESO por el neto, 80",                  Number(egresoDe()[7]), 80);
+igual("con las dos líneas en ItemsDetalle",         items(egresoDe()).map(it => it.desc), ["Junio","Adelanto"]);
+igual("que siguen sumando el MontoFinal",
+      items(egresoDe()).reduce((s,it) => s + Number(it.monto||0), 0), Number(egresoDe()[7]));
+
+// ── El INGRESO nunca hereda un partido ────────────────────────
+// "Indumentaria y Equipamiento" NO está en las categorías que Resumen > Por Partido excluye: un
+// partidoId heredado sumaría la camiseta a la recaudación de esa fecha y al balance público.
+sembrar();
+const idPart9 = altaPartido(10000);          // j1, con partido p1
+const idDescJ1 = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j1", jugadorNombre:"GOMEZ", partidosIncluidos: [], montoBase: -2000, ajuste: 0,
+  motivoAjuste: "", montoFinal: -2000, estado: "pendiente", etiqueta: "Multa", mes: "2026-06",
+  tipo: "descuento", partidoId: "", codRubroContra: "10"
+}}).id;
+confirmar([idPart9, idDescJ1]);
+igual("el EGRESO sí lleva el partido",  egresoDe()[20], "p1");
+igual("pero el INGRESO va sin partido", ingresosDe()[0][20], "");
+igual("el egreso queda por el bruto",   Number(egresoDe()[7]), 10000);
+igual("y el ingreso por la multa",      Number(ingresosDe()[0][8]), 2000);
+
+// ── Invariante 3: el neto negativo sigue cortando antes de escribir ──
+sembrar();
+const idSueldoChico = altaSueldo(100);
+const idDescExcesivo  = altaDescuento(150, "Camiseta", "35");
+const rNeg = confirmar([idSueldoChico, idDescExcesivo]);
+check("un neto negativo no confirma", !rNeg.ok, JSON.stringify(rNeg));
+igual("y no escribió ningún movimiento", movRows().length, 0);
+igual("las filas siguen pendientes",
+      [pjPorId(idSueldoChico)[PJ_IX.ESTADO], pjPorId(idDescExcesivo)[PJ_IX.ESTADO]],
+      ["pendiente","pendiente"]);
+
+// Un lote de puros descuentos con rubro no tiene sueldo del cual descontarlos.
+sembrar();
+const idSoloDesc = altaDescuento(0, "Camiseta", "35"); // monto 0: pasa la guarda del neto negativo
+const rSolo = confirmar([idSoloDesc]);
+check("un lote de puras contrapartidas no confirma", !rSolo.ok, JSON.stringify(rSolo));
+igual("tampoco escribió nada", movRows().length, 0);
+
+// ── Dos contrapartidas de rubros distintos en la misma liquidación ──
+sembrar();
+const idSueldo9c = altaSueldo(100);
+const idCam9c    = altaDescuento(20, "Camiseta", "35");
+const idMulta9c  = altaDescuento(5,  "Multa",    "10");
+confirmar([idSueldo9c, idCam9c, idMulta9c]);
+igual("un egreso y dos ingresos", movRows().length, 3);
+igual("el egreso sigue por el bruto", Number(egresoDe()[7]), 100);
+igual("cada ingreso en su rubro", ingresosDe().map(m => m[3]).sort(), ["10","35"]);
+igual("los dos vinculados al mismo egreso",
+      ingresosDe().map(m => JSON.parse(m[22])[0].egresoId), [egresoDe()[0], egresoDe()[0]]);
+check("la observación del egreso los nombra a los dos",
+      egresoDe()[15].indexOf("Descontado y cobrado aparte: Camiseta $20, Multa $5") >= 0, egresoDe()[15]);
+
+// ── Borrar el egreso revierte las dos filas ───────────────────
+const rDel9 = handleAction({ action: "deleteMov", id: egresoDe()[0] });
+igual("deleteMov revierte las tres filas del jugador", rDel9.revertido.jugadores.length, 3);
+igual("el sueldo volvió a pendiente",   pjPorId(idSueldo9c)[PJ_IX.ESTADO], "pendiente");
+igual("el descuento con rubro también", pjPorId(idCam9c)[PJ_IX.ESTADO],    "pendiente");
+// El ingreso sigue existiendo con el vínculo colgado — es exactamente lo que checkIntegridad
+// reporta, y por eso no hace falta lógica nueva para detectarlo.
+const rInt9 = handleAction({ action: "checkIntegridad" });
+check("checkIntegridad detecta los vínculos colgados del ingreso huérfano",
+      rInt9.problemas.some(p => p.grupo === "Reintegros"), JSON.stringify(rInt9.problemas));
 
 resumen();

@@ -7977,6 +7977,14 @@ function pjFilasSueldoPendiente(jugadorId) {
   return pjFilasAcumuladoPendiente(jugadorId).filter(p => pjTipoFila(p) !== "premio");
 }
 
+/** Nombre del rubro al que se imputa la contrapartida de un descuento. Devuelve el código pelado
+ *  si no está en el catálogo, para que un código viejo se vea igual en vez de desaparecer. */
+function pjRubroContraLabel(cod) {
+  if (!cod) return "";
+  const r = RUBROS.find(x => x.cod === String(cod));
+  return r ? r.nombre : String(cod);
+}
+
 /** Etiqueta corta del partido de un premio ("—" si no tiene ninguno asociado). */
 function pjPartidoLabel(partidoId) {
   if (!partidoId) return "—";
@@ -8043,6 +8051,9 @@ function renderPagoPartido() {
     return `<option value="${p.id}" ${p.id===pjPartidoSel?"selected":""}>${esc(p.rival)} — ${fd}</option>`;
   }).join("");
 
+  // Mes al que se imputa un descuento cargado desde acá: el del partido que se está mirando.
+  const mesPartidoSel = getMes((sorted.find(p => p.id === pjPartidoSel) || {}).fecha || "") || nowMes();
+
   const cfgPartido   = configJugadores.filter(c => c.frecuencia === "partido").sort((a,b)=>a.nombre.localeCompare(b.nombre));
   // Los "mensual" tienen su propia subtab ("Mensual") — acá solo quedan los quincenales.
   const cfgPeriodico = configJugadores.filter(c => c.frecuencia === "quincenal").sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -8072,9 +8083,13 @@ function renderPagoPartido() {
     const badge = !hayPendiente
       ? `<span class="pj-badge pj-badge-pagado">Pagado</span>`
       : `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`;
+    // "Otros" = pjAcumuladoPendiente, que incluye premios y descuentos: un jugador por partido
+    // también puede tener un descuento tipado (la columna Ajuste es otra cosa — corrige el monto
+    // del partido, no es un cobro del club). El mes del descuento es el del partido a la vista.
     const premiosCell = `
-      <td class="mono">${premiosPend ? fmt(premiosPend) : "—"}
+      <td class="mono">${premiosPend ? fmtSigned(premiosPend) : "—"}
         <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
+        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}')" title="Cargar descuento">− Descuento</button>
       </td>`;
     return `
     <tr class="${rol==='noJugo'?'pj-nojugo':''}" data-jug="${cfg.idJugador}" data-nombre="${esc(cfg.nombre)}"
@@ -8113,10 +8128,11 @@ function renderPagoPartido() {
       <td colspan="2" style="text-align:center">
         <button class="btn-sm" onclick="abrirAgregarMontoModal('${cfg.idJugador}','${esc(cfg.nombre)}')">+ Agregar monto</button>
       </td>
-      <td style="text-align:center">
+      <td style="text-align:center;white-space:nowrap">
         <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
+        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}')" title="Cargar descuento">− Descuento</button>
       </td>
-      <td class="mono">${fmt(acumulado)}</td>
+      <td class="mono">${fmtSigned(acumulado)}</td>
       <td>${badge}</td>
     </tr>`;
   }).join("");
@@ -8134,7 +8150,7 @@ function renderPagoPartido() {
     <div class="pj-table-wrap">
       <table class="pj-table">
         <thead><tr>
-          <th>Jugador</th><th>Rol</th><th>Base</th><th>Ajuste</th><th>Motivo</th><th>Premios</th><th>Final</th><th>Estado</th>
+          <th>Jugador</th><th>Rol</th><th>Base</th><th>Ajuste</th><th>Motivo</th><th>Otros</th><th>Final</th><th>Estado</th>
         </tr></thead>
         <tbody>${rowsPartido}${rowsPeriodico}</tbody>
       </table>
@@ -8183,7 +8199,10 @@ function renderPagoMensual() {
           const esDesc = pjTipoFila(p) === "descuento";
           const quitar = (esDesc && p.estado === "pendiente")
             ? ` <button class="btn-sm danger" style="padding:0 5px" title="Quitar descuento" onclick="quitarDescuento('${p.id}')">✕</button>` : "";
-          return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${quitar}`;
+          // El rubro de contrapartida se muestra: es lo que distingue un descuento que además
+          // genera un ingreso de uno que sólo netea, y de otro modo no se ve por ningún lado.
+          const rubro = p.codRubroContra ? ` <span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>` : "";
+          return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${rubro}${quitar}`;
         }).join(" · ")
       : `<span class="pj-acumulado">Sin cargos este mes</span>`;
 
@@ -8235,8 +8254,19 @@ function renderPagoMensual() {
 // Se guardan como una fila más de Pagos Jugadores, con Tipo "descuento" y MontoFinal NEGATIVO:
 // así restan de cualquier suma existente sin lógica especial, y viajan en el mismo lote de
 // confirmarPagosJugadores que el sueldo del mes.
+/** <option> de todos los rubros del catálogo, agrupados por categoría. Se saltean los legacy,
+ *  igual que el selector de rubro del form de movimientos: están sólo para leer datos viejos. */
+function opcionesRubroHTML(codSel) {
+  return [...new Set(RUBROS.filter(r => !r.legacy).map(r => r.cat))].map(cat => {
+    const items = RUBROS.filter(r => r.cat === cat && !r.legacy)
+      .map(r => `<option value="${esc(r.cod)}" ${r.cod===codSel?"selected":""}>${esc(r.nombre)}</option>`).join("");
+    return `<optgroup label="${esc(cat)}">${items}</optgroup>`;
+  }).join("");
+}
+
 function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault) {
   const mesSel = mesDefault || nowMes();
+  const opcionesRubro = opcionesRubroHTML("");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
@@ -8255,8 +8285,15 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault) {
             <label>Motivo</label>
             <input class="inp" id="pj-desc-motivo" type="text" placeholder="Multa, adelanto entregado…">
           </div>
+          <div class="field">
+            <label>Imputar a rubro</label>
+            <select class="inp" id="pj-desc-rubro">
+              <option value="">— Solo descontar (adelanto ya entregado) —</option>
+              ${opcionesRubro}
+            </select>
+          </div>
         </div>
-        <p class="note">Se descuenta del sueldo del mes cuando se confirme el pago. Queda pendiente hasta entonces y se puede quitar.</p>
+        <p class="note">Dejalo vacío si es un adelanto que ya le entregaste y ya registraste como egreso. Elegí un rubro si el club le vendió o le cobró algo (camiseta, multa, vianda): además del descuento se va a registrar el ingreso en ese rubro.</p>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
           <button class="btn-main" style="flex:1" id="btn-guardar-descuento" onclick="guardarDescuento('${jugadorId}','${esc(jugadorNombre)}')">Guardar</button>
@@ -8271,15 +8308,22 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
   const monto  = Math.abs(parseFloat(document.getElementById("pj-desc-monto")?.value || "0") || 0);
   const mes    = document.getElementById("pj-desc-mes")?.value || "";
   const motivo = (document.getElementById("pj-desc-motivo")?.value || "").trim();
+  // "" = adelanto ya entregado, netea contra el sueldo y no genera nada más. Con rubro, el
+  // descuento sale del egreso y se registra como ingreso propio (ver confirmarPagosJugadores).
+  const codRubroContra = document.getElementById("pj-desc-rubro")?.value || "";
   if (!monto)  { toast("Ingresá el monto a descontar", "err"); return; }
   if (!motivo) { toast("Poné el motivo del descuento", "err"); return; }
+  // El modal también se abre desde "Por partido", donde puede haber roles y ajustes tipeados
+  // sin guardar: el re-render de abajo los borraría.
+  const formPrevio = pjSnapshotFormPartido();
   setBtnState(btnId, "saving");
   try {
     // El monto se guarda negativo — es lo que hace que reste sin tocar ninguna suma existente.
     const pago = {
       jugadorId, jugadorNombre, partidosIncluidos: [],
       montoBase: -monto, ajuste: 0, motivoAjuste: "", montoFinal: -monto,
-      estado: "pendiente", etiqueta: motivo, mes, tipo: "descuento", partidoId: ""
+      estado: "pendiente", etiqueta: motivo, mes, tipo: "descuento", partidoId: "",
+      codRubroContra
     };
     const r = await Storage.savePagoJugador(pago);
     if (!r.ok) throw new Error(r.error || "Error");
@@ -8289,6 +8333,7 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
     toast("Descuento cargado ✓", "ok");
     closeModal();
     renderPagosJugadores();
+    pjRestoreFormPartido(formPrevio);
   } catch(e) { handleSaveError(btnId, e); }
 }
 
@@ -8579,7 +8624,7 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
   setBtnState(btnId, "saving");
   try {
     // Un monto suelto es el sueldo del período (para un descuento con motivo propio está
-    // "− Descuento" en la pantalla Mensual, que además lo tipa como tal).
+    // "− Descuento", que además lo tipa como tal y lo puede imputar a un rubro).
     const pago = {
       jugadorId, jugadorNombre, partidosIncluidos: [],
       montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,

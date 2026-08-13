@@ -578,6 +578,21 @@ igual("waCelularDeJugador devuelve lo guardado, sin normalizar",
 igual("un jugador sin celular cargado da vacío", app.waCelularDeJugador("j2"), "");
 igual("un jugador sin config tampoco explota",   app.waCelularDeJugador("nadie"), "");
 
+// ══════════════════════════════════════════════════════════════
+// El rubro de contrapartida se elige de RUBROS y se muestra en la pantalla Mensual y en el modal
+// de liquidación. Un código que ya no esté en el catálogo tiene que seguir viéndose.
+seccion("20 · Rubro de contrapartida de un descuento");
+igual("resuelve el nombre del catálogo", app.pjRubroContraLabel("35"), "INDUMENTARIA Y MERCH.");
+igual("otro del catálogo",               app.pjRubroContraLabel("10"), "LIGA - FICHAJES Y MULTAS");
+igual("un código desconocido se muestra igual", app.pjRubroContraLabel("999"), "999");
+igual("sin código, cadena vacía",        app.pjRubroContraLabel(""), "");
+
+const opts = app.opcionesRubroHTML("35");
+check("el selector ofrece INDUMENTARIA Y MERCH.", opts.includes('value="35"'), opts.slice(0, 200));
+check("y deja seleccionado el que se le pasa",    opts.includes('value="35" selected'), opts.slice(0, 200));
+check("agrupa por categoría",                     opts.includes('<optgroup label="Indumentaria y Equipamiento">'));
+check("no ofrece los rubros legacy",             !opts.includes('value="16"'));
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

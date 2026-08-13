@@ -895,6 +895,14 @@ const RUBROS = [
   {cod:"62",  nombre:"PEÑA-OTROS INGRESOS",                  cat:"Peñas y Eventos"},
 ];
 
+// Rubro al que se imputa el sueldo cuando la ficha del jugador no dice otra cosa, y fallback
+// cuando trae un código que ya no está en el catálogo. Espejo de CFGJ_RUBRO_SUELDO_DEFAULT en
+// Code.gs: si cambia uno, cambiar el otro.
+const CFGJ_RUBRO_SUELDO_DEFAULT = "19";
+// De esta categoría salen las opciones de "Rubro del sueldo". Se filtra RUBROS por la categoría en
+// vez de hardcodear 18/19: si mañana se agrega un rubro acá, aparece solo.
+const CFGJ_RUBRO_SUELDO_CAT = "Jugadores y Cuerpo Técnico";
+
 // Versión visible en Config (pestaña ⚙️). No se hardcodea acá: se lee directamente de
 // SW_VERSION en sw.js (ver loadAppVersion), así solo hay que tocar un número por cambio.
 let appVersionActual = null;
@@ -1317,7 +1325,9 @@ const Storage = {
                                      return r; },
   async savePagoJugador(p)         { return this._post({ action:"savePagoJugador", pago:p         }); },
   async deletePagoJugador(id)      { return this._post({ action:"deletePagoJugador", id           }); },
-  async confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago, cuenta }); },
+  // codRubroSueldo: override opcional del rubro del EGRESO (el default sale de la ficha del
+  // jugador). El backend sólo lo aplica si el lote es de un jugador solo — ver confirmarPagosJugadores.
+  async confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta, codRubroSueldo) { return this._post({ action:"confirmarPagosJugadores", ids, fechaPago, medioPago, cuenta, codRubroSueldo }); },
   async aplicarPremios(lista)      { return this._post({ action:"aplicarPremios", premios:lista  }); },
   async backfillTipoPagos()        { return this._post({ action:"backfillTipoPagos"              }); },
 };
@@ -7494,6 +7504,11 @@ function openConfigJugadorModal(idJugador) {
             <p class="note" style="margin:4px 0 0">Escribilo como lo tengas anotado. Se usa para mandarle el comprobante por WhatsApp.</p>
           </div>
           <div class="field">
+            <label>Rubro del sueldo</label>
+            <select class="inp" id="cfgjug-rubro-sueldo">${opcionesRubroSueldoHTML(c ? c.codRubroSueldo : "")}</select>
+            <p class="note" style="margin:4px 0 0">A qué rubro se imputa el egreso cuando se le liquida. El cuerpo técnico (DT, preparador físico, ayudante) va a "SUELDO DT Y CT".</p>
+          </div>
+          <div class="field">
             <label>Premios</label>
             <p class="note" style="margin:0 0 8px">Se cobran aparte de la frecuencia (gol, valla invicta…). Después se aplican desde 🏆 en Pagos Jugadores.</p>
             <div id="cfgjug-premios-lista">
@@ -7540,8 +7555,9 @@ async function saveConfigJugadorForm(idJugador) {
   const alias                = (document.getElementById("cfgjug-alias")?.value || "").trim();
   // Sin normalizar: ver el comentario de saveConfigJugador (Code.gs).
   const celular              = (document.getElementById("cfgjug-celular")?.value || "").trim();
+  const codRubroSueldo       = document.getElementById("cfgjug-rubro-sueldo")?.value || CFGJ_RUBRO_SUELDO_DEFAULT;
   const premiosCfg           = leerPremiosCfg();
-  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias, celular, premios: premiosCfg };
+  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias, celular, codRubroSueldo, premios: premiosCfg };
   setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveConfigJugador(config);
@@ -7987,6 +8003,32 @@ function pjPremiosDeVista(jugadorId) {
 /** Lo acumulado pendiente que NO son premios (sueldo periódico neto de descuentos). */
 function pjFilasSueldoPendiente(jugadorId) {
   return pjFilasAcumuladoPendiente(jugadorId).filter(p => pjTipoFila(p) !== "premio");
+}
+
+/**
+ * <option> de los rubros a los que puede imputarse un sueldo (los de "Jugadores y Cuerpo Técnico").
+ * Ofrecer los sesenta del catálogo no ayuda a nadie y habilita errores.
+ *
+ * Un código válido pero de otra categoría —puesto a mano en la planilla— se agrega a la lista en
+ * vez de ignorarse: si no, abrir la ficha lo pisaría en silencio con el default.
+ */
+function opcionesRubroSueldoHTML(codSel) {
+  const cod   = String(codSel || "");
+  const lista = RUBROS.filter(r => r.cat === CFGJ_RUBRO_SUELDO_CAT && !r.legacy);
+  const extra = RUBROS.find(r => r.cod === cod && lista.indexOf(r) < 0);
+  if (extra) lista.push(extra);
+  const sel = lista.some(r => r.cod === cod) ? cod : CFGJ_RUBRO_SUELDO_DEFAULT;
+  return lista.map(r =>
+    `<option value="${esc(r.cod)}" ${r.cod===sel?"selected":""}>${esc(r.nombre)}</option>`).join("");
+}
+
+/** Rubro al que se imputa el sueldo de un jugador: el de su ficha, o el default si está vacío o el
+ *  código no existe. Misma regla que confirmarPagosJugadores (Code.gs) — si divergen, la
+ *  previsualización del modal de liquidación miente sobre lo que se va a grabar. */
+function pjRubroSueldoDe(jugadorId) {
+  const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+  const cod = cfg ? String(cfg.codRubroSueldo || "") : "";
+  return RUBROS.some(r => r.cod === cod) ? cod : CFGJ_RUBRO_SUELDO_DEFAULT;
 }
 
 /** Nombre del rubro al que se imputa la contrapartida de un descuento. Devuelve el código pelado
@@ -8612,6 +8654,8 @@ function abrirLiquidacionModal(jugadorId, idsForzados) {
     cuenta:    cuentaDefault,
     medioPago: medioPagoPorCuenta(cuentaDefault),
     fechaPago: (pjLiqData && pjLiqData.fechaPago) || today(),
+    // A propósito NO se arrastra del jugador anterior: el rubro sale de la ficha de cada uno.
+    codRubroSueldo: "",
     reintento: false
   };
   renderLiquidacionModal();
@@ -8633,8 +8677,12 @@ function pjLiqMovimientosPreview() {
   const contras = filas.filter(p => p.codRubroContra);
   const bruto   = filas.filter(p => !p.codRubroContra)
                        .reduce((s,p) => s + Number(p.montoFinal||0), 0);
+  // El rubro del sueldo sale de la ficha (18 para el cuerpo técnico, 19 para el resto), salvo que
+  // se lo haya cambiado a mano en este modal. Misma regla que el backend: si divergen, esta
+  // previsualización miente sobre lo que se va a grabar.
+  const codRubro = pjLiqData.codRubroSueldo || pjRubroSueldoDe(pjLiqData.jugadorId);
   return [{
-    tipo: "EGRESO", codRubro: "19", rubro: "SUELDO JUGADORES", monto: bruto,
+    tipo: "EGRESO", codRubro, rubro: pjRubroContraLabel(codRubro), monto: bruto,
     concepto: "Pago jugador " + pjLiqData.nombre
   }].concat(contras.map(p => ({
     tipo: "INGRESO", codRubro: p.codRubroContra, rubro: pjRubroContraLabel(p.codRubroContra),
@@ -8687,11 +8735,16 @@ function renderLiquidacionModal() {
   const opcionesCuenta = cuentas.map(c => `<option value="${esc(c)}" ${c===d.cuenta?"selected":""}>${esc(c)}</option>`).join("");
 
   // 4) Qué se va a registrar. Que se vea antes de apretar, no después.
+  //    El rubro del EGRESO es editable como salida de emergencia: arranca con el de la ficha, que
+  //    es donde tiene que corregirse si está mal de verdad. Los INGRESOS de contrapartida no se
+  //    editan acá — su rubro se elige al cargar el descuento.
   const previewMovs = movs.map(m => `
     <div class="pj-desc-item">
       <span style="flex:1;min-width:0">
         <span class="pj-badge ${m.tipo==="INGRESO"?"pj-badge-pagado":"pj-badge-pendiente"}">${m.tipo}</span>
-        ${esc(m.rubro)}
+        ${m.tipo === "EGRESO"
+          ? `<select class="inp" style="display:inline-block;width:auto;max-width:100%" onchange="pjLiqCambiarRubroSueldo(this.value)">${opcionesRubroSueldoHTML(m.codRubro)}</select>`
+          : esc(m.rubro)}
       </span>
       <span class="mono ${m.tipo==="INGRESO"?"ing":"egr"}">${fmt(m.monto)}</span>
     </div>`).join("");
@@ -8775,6 +8828,16 @@ function pjLiqComprobanteData() {
     items:    pjItemsDeFilas(filas),
     mensaje:  ""
   };
+}
+
+/** Override del rubro del sueldo para ESTA liquidación. No se persiste entre jugadores como la
+ *  cuenta y la fecha: esas se repiten en toda una liquidación, el rubro no — al abrir el modal del
+ *  siguiente tiene que volver a salir de su ficha. Si hay que corregirlo siempre, va en la ficha. */
+function pjLiqCambiarRubroSueldo(cod) {
+  if (!pjLiqData) return;
+  pjLiqOnPago(true);
+  pjLiqData.codRubroSueldo = cod;
+  renderLiquidacionModal();
 }
 
 /** Lee los campos de pago al estado y repinta el comprobante (la fecha sale ahí). */
@@ -8863,7 +8926,7 @@ async function pjLiquidar() {
       }
     }
     if (status) status.textContent = "Registrando…";
-    const r = await Storage.confirmarPagosJugadores(d.ids, d.fechaPago, d.medioPago, d.cuenta);
+    const r = await Storage.confirmarPagosJugadores(d.ids, d.fechaPago, d.medioPago, d.cuenta, d.codRubroSueldo);
     if (!r.ok) throw new Error(r.error || "Error");
     d.ids.forEach(id => {
       const p = pagosJugadores.find(x => x.id === id);

@@ -39,9 +39,20 @@ const EVE_COLS  = ["ID","Nombre","Fecha","Activo"];
 
 // ── Pagos a Jugadores (módulo aparte, no integrado a Movimientos todavía) ──
 const CFGJ_SHEET = "Config Jugadores";
-// Celular va al final (índice 9): getOrCreateSheet completa los headers que falten, así que una
-// columna nueva agregada acá no rompe los índices posicionales de las que ya existían.
-const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios","Celular"];
+// Las columnas nuevas van al final (Celular en el 9, CodRubroSueldo en el 10): getOrCreateSheet
+// completa los headers que falten, así que agregar acá no rompe los índices posicionales de las
+// que ya existían.
+// CodRubroSueldo: rubro al que se imputa el EGRESO del sueldo de esta persona. Parte del plantel
+// es cuerpo técnico (DT, preparador físico, ayudante) y va al 18 (SUELDO DT Y CT) en vez del 19
+// (SUELDO JUGADORES). Vive en la ficha y no se elige en cada liquidación: un DT es siempre un DT,
+// y decidirlo en cada pago garantiza que tarde o temprano se pase uno.
+// Se guarda el código de rubro y no un campo "tipo: jugador | CT" porque el 18 vs 19 YA es esa
+// distinción y Reportes filtra por rubro; un "tipo" aparte sería dato duplicado que puede divergir
+// del rubro efectivamente imputado.
+// Vacío = "19", que es lo que hacía el código antes de existir la columna: no hay backfill.
+const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios","Celular","CodRubroSueldo"];
+// Rubro por defecto del sueldo, y fallback cuando la ficha trae un código que no está en RUBROS_MAP.
+const CFGJ_RUBRO_SUELDO_DEFAULT = "19";
 // Frecuencia: "partido" | "quincenal" | "mensual"
 // Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
 // independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
@@ -1319,7 +1330,8 @@ function handleAction(data) {
           premios:             safeParseJSON(String(r[8]||"[]"), []),
           // Se devuelve tal cual está escrito: la normalización al formato de wa.me se hace
           // recién al armar el link (index.html), no al guardar — ver saveConfigJugador.
-          celular:             String(r[9]||"")
+          celular:             String(r[9]||""),
+          codRubroSueldo:      String(r[10]||"")   // "" = 19 (SUELDO JUGADORES)
         }));
       return { ok: true, configJugadores };
     }
@@ -1336,7 +1348,7 @@ function handleAction(data) {
           sh.getRange(i + 1, 1, 1, CFGJ_COLS.length).setValues([[
             c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
             Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true",
-            JSON.stringify(c.premios||[]), c.celular||""
+            JSON.stringify(c.premios||[]), c.celular||"", c.codRubroSueldo||""
           ]]);
           return { ok: true, idJugador: c.idJugador };
         }
@@ -1344,7 +1356,7 @@ function handleAction(data) {
       sh.appendRow([
         c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
         Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true",
-        JSON.stringify(c.premios||[]), c.celular||""
+        JSON.stringify(c.premios||[]), c.celular||"", c.codRubroSueldo||""
       ]);
       return { ok: true, idJugador: c.idJugador };
     }
@@ -1638,6 +1650,23 @@ function handleAction(data) {
         };
       }
 
+      // Rubro del sueldo de cada persona, de su ficha. Se lee la hoja entera una sola vez, como
+      // la de Partidos de arriba: leerla por jugador adentro del loop multiplicaría las llamadas
+      // a la planilla, que es lo caro en Apps Script.
+      const cfgAll = getOrCreateSheet(CFGJ_SHEET, CFGJ_COLS).getDataRange().getValues();
+      const rubroSueldoPorJugador = {};
+      for (let i = 1; i < cfgAll.length; i++) {
+        const jid = String(cfgAll[i][0] || "").trim();
+        if (jid) rubroSueldoPorJugador[jid] = String(cfgAll[i][10] || "").trim();
+      }
+
+      // Override opcional desde el modal de liquidación (salida de emergencia: lo normal es que el
+      // rubro salga de la ficha). Se aplica SÓLO si el lote tiene un único grupo de jugador —
+      // desde la Fase 7 el front manda siempre uno solo, pero el backend sigue soportando lotes
+      // multi-jugador y un override global ahí sería ambiguo: no se sabría a quién corresponde.
+      const overrideRubro = RUBROS_MAP[String(data.codRubroSueldo || "").trim()]
+        ? String(data.codRubroSueldo).trim() : "";
+
       const all = sh.getDataRange().getValues();
 
       // 1) Junta las filas a confirmar con sus datos y su fila real en la hoja.
@@ -1782,9 +1811,19 @@ function handleAction(data) {
           ? partidosIds.reduce((a, b) => ((partidoById[b]||{}).fecha||"") > ((partidoById[a]||{}).fecha||"") ? b : a)
           : "";
 
+        // Rubro del EGRESO: el de la ficha del jugador (18 para el cuerpo técnico, 19 para el
+        // resto), o el override si vino y el lote es de un solo jugador. Cae al 19 si está vacío o
+        // si el código no existe en el catálogo, así nunca se escribe un rubro inventado.
+        // Los INGRESOS de contrapartida no se tocan: cada uno lleva el suyo.
+        const codRubroFicha = rubroSueldoPorJugador[g.jugadorId] || "";
+        const codRubroMov = (overrideRubro && Object.keys(grupos).length === 1) ? overrideRubro
+          : (RUBROS_MAP[codRubroFicha] ? codRubroFicha : CFGJ_RUBRO_SUELDO_DEFAULT);
+        const infoRubroMov = RUBROS_MAP[codRubroMov] || RUBROS_MAP[CFGJ_RUBRO_SUELDO_DEFAULT];
+
         const movId = uid_gs();
         const mov = {
-          id: movId, mes, fecha: fechaPago, codRubro: "19", rubro: "SUELDO JUGADORES", categoria: "Jugadores y Cuerpo Técnico",
+          id: movId, mes, fecha: fechaPago,
+          codRubro: codRubroMov, rubro: infoRubroMov.nombre, categoria: infoRubroMov.cat,
           concepto, egreso: montoFinal, ingreso: 0, montoFinal,
           cuenta, cuentaDestino: "", modoPago: medioPago,
           jugadorCT: g.jugadorNombre, jugadorId: g.jugadorId, adherente: "", observacion, comprobante: "",

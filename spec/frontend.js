@@ -740,6 +740,54 @@ check("los ítems no se editan a mano en este camino", compLiq.itemsBloqueados);
 igual("y el botón de volver apunta al jugador", compLiq.volverALiquidar, "j2");
 igual("la fecha del comprobante es la del pago elegido", compLiq.fecha, "20/06/2026");
 
+// ══════════════════════════════════════════════════════════════
+// El rubro del sueldo sale de la ficha (18 para el cuerpo técnico, 19 para el resto). La
+// previsualización del modal tiene que dar el MISMO codRubro que termina grabando el backend: su
+// propio docstring dice que si difieren es un bug. Los casos son los mismos que verifica
+// spec/premios.js §12-13 contra confirmarPagosJugadores.
+seccion("26 · El rubro del sueldo en la previsualización");
+sembrar();
+const liq = (jugadorId, override) => {
+  app.pjLiqData = { jugadorId, nombre: "X",
+                    ids: app.pjIdsDeSeleccion([{ jugadorId, incluido: true, premiosIds: [] }]),
+                    cuenta: "MACRO", medioPago: "TRANSFERENCIA", fechaPago: "2026-06-20",
+                    codRubroSueldo: override || "" };
+  return app.pjLiqMovimientosPreview();
+};
+
+igual("ficha vacía → 19, como antes de este cambio",
+      liq("j2")[0].codRubro, "19");
+igual("con el nombre resuelto del catálogo, no escrito a mano",
+      liq("j2")[0].rubro, "SUELDO JUGADORES");
+
+app.configJugadores.find(c => c.idJugador === "j2").codRubroSueldo = "18";
+igual("ficha en 18 → el egreso se previsualiza en 18", liq("j2")[0].codRubro, "18");
+igual("con su nombre",                                 liq("j2")[0].rubro, "SUELDO DT Y CT");
+
+app.configJugadores.find(c => c.idJugador === "j2").codRubroSueldo = "999";
+igual("un código que no está en el catálogo cae al 19", liq("j2")[0].codRubro, "19");
+
+app.configJugadores.find(c => c.idJugador === "j2").codRubroSueldo = "19";
+igual("el override del modal pisa a la ficha", liq("j2", "18")[0].codRubro, "18");
+
+igual("pjRubroSueldoDe: un jugador sin config da el default",
+      app.pjRubroSueldoDe("nadie"), "19");
+
+// El select de la ficha ofrece sólo la categoría de sueldos, y sale de RUBROS filtrado por
+// categoría: si mañana se agrega un rubro ahí, aparece solo.
+const optsSueldo = app.opcionesRubroSueldoHTML("18");
+check("ofrece SUELDO DT Y CT",    optsSueldo.includes('value="18"'), optsSueldo);
+check("y SUELDO JUGADORES",       optsSueldo.includes('value="19"'), optsSueldo);
+check("deja seleccionado el 18",  optsSueldo.includes('value="18" selected'), optsSueldo);
+check("no ofrece rubros de otras categorías (INDUMENTARIA)",
+      !optsSueldo.includes('value="35"'), optsSueldo);
+check("sin código válido, preselecciona el 19",
+      app.opcionesRubroSueldoHTML("").includes('value="19" selected'));
+// Un código válido pero de otra categoría (puesto a mano en la planilla) no se pisa en silencio.
+check("un código de otra categoría se agrega a la lista en vez de ignorarse",
+      app.opcionesRubroSueldoHTML("35").includes('value="35" selected'),
+      app.opcionesRubroSueldoHTML("35"));
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

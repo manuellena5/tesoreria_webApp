@@ -582,4 +582,82 @@ igual("la fila pagada sigue ahí", pjPorId(idPagado) !== undefined, true);
 igual("y sigue pagada",          pjPorId(idPagado)[PJ_IX.ESTADO], "pagado");
 igual("sin tocar los movimientos", movRows().length, movsAntesDeNoJugo);
 
+// ══════════════════════════════════════════════════════════════
+// Parte del plantel es cuerpo técnico y su sueldo va al rubro 18, no al 19. El rubro vive en la
+// ficha (Config Jugadores) y no se elige en cada liquidación: un DT es siempre un DT.
+seccion("12 · El rubro del sueldo sale de la ficha del jugador");
+
+/** Siembra la ficha de j2 (mensual) con un CodRubroSueldo puntual. */
+function fichaConRubro(cod) {
+  handleAction({ action: "saveConfigJugador", config: {
+    idJugador: "j2", nombre: "PEREZ", montoTitular: 50000, montoSuplenteConMin: 0,
+    montoSuplente: 0, frecuencia: "mensual", alias: "alias.perez", premios: [],
+    celular: "", codRubroSueldo: cod
+  }});
+}
+/** Sueldo mensual de j2, listo para liquidar. */
+function sueldoJ2(monto) {
+  return handleAction({ action: "savePagoJugador", pago: {
+    jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
+    montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
+    estado: "pendiente", etiqueta: "Junio", mes: "2026-06", tipo: "periodico", partidoId: ""
+  }}).id;
+}
+const egr12 = () => movRows().find(m => m[18] === "EGRESO");
+
+sembrar(); fichaConRubro("18");
+confirmar([sueldoJ2(100)]);
+igual("con la ficha en 18, el egreso sale en 18", egr12()[3], "18");
+igual("con el nombre del catálogo",               egr12()[4], "SUELDO DT Y CT");
+igual("y la categoría del catálogo",              egr12()[5], "Jugadores y Cuerpo Técnico");
+
+sembrar();  // sin tocar la ficha: el campo llega vacío
+confirmar([sueldoJ2(100)]);
+igual("sin el campo, sigue saliendo en 19, como antes de este cambio", egr12()[3], "19");
+igual("con su nombre",                                                 egr12()[4], "SUELDO JUGADORES");
+
+sembrar(); fichaConRubro("999");
+confirmar([sueldoJ2(100)]);
+igual("un código que no está en el catálogo cae al 19", egr12()[3], "19");
+igual("y no escribe un rubro inventado",                egr12()[4], "SUELDO JUGADORES");
+
+// El rubro de la ficha manda sobre el EGRESO; el INGRESO de contrapartida conserva el suyo.
+sembrar(); fichaConRubro("18");
+const idSueldo12 = sueldoJ2(100);
+const idCam12 = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [], montoBase: -20, ajuste: 0,
+  motivoAjuste: "", montoFinal: -20, estado: "pendiente", etiqueta: "Camiseta", mes: "2026-06",
+  tipo: "descuento", partidoId: "", codRubroContra: "35"
+}}).id;
+confirmar([idSueldo12, idCam12]);
+igual("el EGRESO toma el rubro de la ficha",   egr12()[3], "18");
+igual("y el INGRESO mantiene el suyo",         movRows().find(m => m[18] === "INGRESO")[3], "35");
+igual("el egreso sigue por el bruto",          Number(egr12()[7]), 100);
+
+seccion("13 · El override del modal de liquidación");
+const confirmarCon = (ids, cod) => handleAction({
+  action: "confirmarPagosJugadores", ids, cuenta: "MACRO", medioPago: "TRANSFERENCIA",
+  fechaPago: "2026-06-20", codRubroSueldo: cod
+});
+
+sembrar(); fichaConRubro("19");
+confirmarCon([sueldoJ2(100)], "18");
+igual("el override pisa a la ficha", egr12()[3], "18");
+igual("con el nombre correcto",      egr12()[4], "SUELDO DT Y CT");
+
+sembrar(); fichaConRubro("19");
+confirmarCon([sueldoJ2(100)], "999");
+igual("un override basura se ignora y vale la ficha", egr12()[3], "19");
+
+// Un lote de dos jugadores: el override sería ambiguo (no se sabe a quién corresponde), así que se
+// descarta y cada uno usa su ficha. El front manda siempre uno solo, pero el backend soporta lotes.
+sembrar(); fichaConRubro("18");
+const idJ1_13 = altaPartido(10000);          // j1, ficha sin rubro → 19
+const idJ2_13 = sueldoJ2(100);               // j2, ficha en 18
+confirmarCon([idJ1_13, idJ2_13], "18");
+const porJugador13 = {};
+movRows().filter(m => m[18] === "EGRESO").forEach(m => { porJugador13[m[24]] = m[3]; });
+igual("con dos jugadores el override se ignora: j1 usa su ficha (vacía → 19)", porJugador13["j1"], "19");
+igual("y j2 la suya (18)",                                                      porJugador13["j2"], "18");
+
 resumen();

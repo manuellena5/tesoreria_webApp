@@ -433,6 +433,12 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 .pj-premio-lbl .mono { font-family:var(--mono); }
 .pj-desc-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); }
 .pj-desc-item:last-child { border-bottom:0; }
+/* Modal de liquidación: se hace sentado frente a la computadora con el extracto a la vista, así
+   que va ancho y a dos columnas. En el celular (la app también se usa en la cancha) colapsa a una. */
+.pj-liq-card { max-width:900px; }
+.pj-liq-cols { display:grid; grid-template-columns:1fr 1fr; gap:0 18px; }
+@media (max-width:700px) { .pj-liq-cols { grid-template-columns:1fr; } }
+.pj-liq-lista { margin:0; padding-left:18px; font-size:13px; color:var(--text2); }
 
 /* ── Config sections ── */
 .cfg-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:16px; margin-bottom:12px; }
@@ -958,6 +964,12 @@ let pagosJugTab   = "partido";
 let pjPartidoSel  = null;
 let pjPartidosSel = null; // null = todavía no inicializado (se precarga con los partidos pendientes)
 let pjSoloPendientes = false; // filtro de Transferencias: esconder a los jugadores que ya están al día
+// Jugadores liquidados desde que se abrió la app. Con 15 jugadores de a uno hay que poder ver por
+// dónde se va sin contar de memoria: sus filas siguen en la tabla con el badge "Liquidado ✓" en vez
+// de desaparecer al quedarse sin nada pendiente (el de "por partido" se quedaba por la columna del
+// partido, el mensual se esfumaba). Es de la sesión a propósito — si fuera permanente la tabla
+// acumularía las liquidaciones de todos los meses.
+let pjLiquidadosSesion = new Set();
 let pjMesSel      = null; // null = todavía no inicializado (se precarga con el mes actual); "" = "Sin mes asignado"
 let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", evento: "", search: "" };
 let F             = buildDefaultF();
@@ -8237,10 +8249,6 @@ function renderPagoMensual() {
         ? `<span class="pj-badge pj-badge-pagado">Pagado</span>`
         : `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`;
 
-    const marcarBtn = pendientes.length
-      ? `<button class="btn-sm accent" onclick="marcarMesPagado('${cfg.idJugador}','${pjMesSel}')" title="Marcar pagado">✓</button>`
-      : "";
-
     return `
     <tr>
       <td>${esc(cfg.nombre)}</td>
@@ -8252,7 +8260,6 @@ function renderPagoMensual() {
       </td>
       <td class="mono" style="${totalNeto<0?'color:var(--red)':''}">${fmtSigned(totalNeto)}</td>
       <td>${badge}</td>
-      <td>${marcarBtn}</td>
     </tr>`;
   }).join("");
 
@@ -8267,7 +8274,7 @@ function renderPagoMensual() {
     <div class="pj-table-wrap">
       <table class="pj-table">
         <thead><tr>
-          <th>Jugador</th><th>Detalle</th><th colspan="2"></th><th>Total neto</th><th>Estado</th><th></th>
+          <th>Jugador</th><th>Detalle</th><th colspan="2"></th><th>Total neto</th><th>Estado</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -8290,18 +8297,25 @@ function opcionesRubroHTML(codSel) {
   }).join("");
 }
 
-function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault) {
-  const mesSel = mesDefault || nowMes();
-  const opcionesRubro = opcionesRubroHTML("");
+// Contexto del modal de descuento: qué fila se está editando (vacío = alta) y a dónde volver al
+// guardar. Va en una variable y no en el onclick para no serializarlo en el HTML.
+let pjDescCtx = { pagoId: "", volverALiquidar: "" };
+
+function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
+  pjDescCtx = { pagoId: (opciones && opciones.pagoId) || "",
+                volverALiquidar: (opciones && opciones.volverALiquidar) || "" };
+  const p = pjDescCtx.pagoId ? pagosJugadores.find(x => x.id === pjDescCtx.pagoId) : null;
+  const mesSel = (p && p.mes) || mesDefault || nowMes();
+  const opcionesRubro = opcionesRubroHTML(p ? (p.codRubroContra || "") : "");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
         <div class="modal-handle"></div>
-        <div class="modal-title">Cargar descuento — ${esc(jugadorNombre)}</div>
+        <div class="modal-title">${p ? "Editar" : "Cargar"} descuento — ${esc(jugadorNombre)}</div>
         <div class="fgrid">
           <div class="field">
             <label>Monto a descontar</label>
-            <input class="inp" id="pj-desc-monto" type="number" step="1" min="0" placeholder="0">
+            <input class="inp" id="pj-desc-monto" type="number" step="1" min="0" placeholder="0" value="${p ? Math.abs(Number(p.montoFinal||0)) : ""}">
           </div>
           <div class="field">
             <label>Mes</label>
@@ -8309,7 +8323,7 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault) {
           </div>
           <div class="field">
             <label>Motivo</label>
-            <input class="inp" id="pj-desc-motivo" type="text" placeholder="Multa, adelanto entregado…">
+            <input class="inp" id="pj-desc-motivo" type="text" placeholder="Multa, adelanto entregado…" value="${p ? esc(p.etiqueta||"") : ""}">
           </div>
           <div class="field">
             <label>Imputar a rubro</label>
@@ -8342,6 +8356,7 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
   // El modal también se abre desde "Por partido", donde puede haber roles y ajustes tipeados
   // sin guardar: el re-render de abajo los borraría.
   const formPrevio = pjSnapshotFormPartido();
+  const ctx = pjDescCtx;
   setBtnState(btnId, "saving");
   try {
     // El monto se guarda negativo — es lo que hace que reste sin tocar ninguna suma existente.
@@ -8351,15 +8366,24 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
       estado: "pendiente", etiqueta: motivo, mes, tipo: "descuento", partidoId: "",
       codRubroContra
     };
+    if (ctx.pagoId) pago.id = ctx.pagoId;
     const r = await Storage.savePagoJugador(pago);
     if (!r.ok) throw new Error(r.error || "Error");
-    pagosJugadores.push({ id: r.id, ...pago, fechaPago: "", medioPago: "", movimientoId: "" });
+    const idx = ctx.pagoId ? pagosJugadores.findIndex(x => x.id === ctx.pagoId) : -1;
+    if (idx >= 0) Object.assign(pagosJugadores[idx], pago);
+    else          pagosJugadores.push({ id: r.id, ...pago, fechaPago: "", medioPago: "", movimientoId: "" });
     saveSnapshotToCache();
     setBtnState(btnId, "saved");
-    toast("Descuento cargado ✓", "ok");
+    toast(ctx.pagoId ? "Descuento actualizado ✓" : "Descuento cargado ✓", "ok");
     closeModal();
     renderPagosJugadores();
     pjRestoreFormPartido(formPrevio);
+    // Editar el descuento desde la liquidación vuelve al modal, con el alta ya incorporada al
+    // desglose: la edición opera sobre las filas de Pagos Jugadores, no sobre el papel.
+    if (ctx.volverALiquidar) {
+      const ids = ctx.pagoId ? pjLiqData.ids : [...pjLiqData.ids, r.id];
+      abrirLiquidacionModal(ctx.volverALiquidar, ids);
+    }
   } catch(e) { handleSaveError(btnId, e); }
 }
 
@@ -8468,39 +8492,6 @@ async function guardarPagoPartido() {
   } catch(e) { handleSaveError(btnId, e); }
 }
 
-// ── Modal chico: medio de pago (reemplaza al prompt() nativo) ──
-let pjMedioPagoCallback = null;
-function abrirMedioPagoModalGenerico(titulo, onConfirm) {
-  pjMedioPagoCallback = onConfirm;
-  const opcionesMedio  = metodos.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
-  const opcionesCuenta = cuentas.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-  document.getElementById("modal-root").innerHTML = `
-    <div class="modal-overlay" onclick="closeModal(event)">
-      <div class="modal-card" onclick="event.stopPropagation()">
-        <div class="modal-handle"></div>
-        <div class="modal-title">${esc(titulo)}</div>
-        <div class="field">
-          <label>Cuenta</label>
-          <select class="inp" id="pj-cuenta" onchange="pjAutoMedioPago()">${opcionesCuenta}</select>
-        </div>
-        <div class="field">
-          <label>Medio de pago</label>
-          <select class="inp" id="pj-medio-pago">${opcionesMedio}</select>
-        </div>
-        <div class="field">
-          <label>Fecha de pago</label>
-          <input class="inp" id="pj-fecha-pago" type="date" value="${today()}">
-        </div>
-        <p class="note">Se va a generar un movimiento de egreso por cada pago confirmado (rubro "SUELDO JUGADORES"), con la fecha que pongas acá.</p>
-        <div class="modal-footer">
-          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" id="btn-confirmar-mediopago" onclick="confirmarMedioPagoModal()">Confirmar pago</button>
-        </div>
-      </div>
-    </div>`;
-  pjAutoMedioPago(); // también al abrir, no sólo al cambiar la cuenta
-}
-
 /** Default del medio de pago según la cuenta elegida (misma regla que el form de movimientos).
  *  Es un default: si el usuario ya lo cambió a mano, esto lo vuelve a pisar sólo cuando cambia
  *  la cuenta, que es cuando el default deja de tener sentido. */
@@ -8512,37 +8503,28 @@ function pjAutoMedioPago() {
   if ([...el.options].some(o => o.value === mp)) el.value = mp;
 }
 
-async function confirmarMedioPagoModal() {
-  const btnId = "btn-confirmar-mediopago";
-  if (document.getElementById(btnId)?.disabled) return;
-  const medioPago = document.getElementById("pj-medio-pago")?.value || "";
-  const cuenta    = document.getElementById("pj-cuenta")?.value || "";
-  const fechaPago = document.getElementById("pj-fecha-pago")?.value || "";
-  if (!cuenta) { toast("Elegí una cuenta", "err"); return; }
-  if (!fechaPago) { toast("Poné la fecha del pago", "err"); return; }
-  // Mismo criterio que guardarMovimiento: una fecha futura suele ser un error de tipeo.
-  if (fechaPago > today() && !confirm("La fecha (" + fechaPago + ") es posterior a hoy. ¿Confirmás que es correcta?")) return;
-  setBtnState(btnId, "saving");
-  try {
-    // El callback deja el modal-root con la pantalla de confirmación (o lo cierra si falta algo
-    // que guardar antes) — no lo pisamos acá con un closeModal() automático.
-    await pjMedioPagoCallback(medioPago, cuenta, fechaPago);
-    setBtnState(btnId, "saved");
-  } catch(e) { handleSaveError(btnId, e); }
-}
-
-// Pantalla final que muestra qué se acaba de pagar (jugador, partido/etiqueta, monto,
-// cuenta y medio de pago), con el mismo estilo que "Movimiento guardado" de Nuevo Movimiento.
+// Pantalla final que muestra qué se acaba de registrar, con el mismo estilo que "Movimiento
+// guardado" de Nuevo Movimiento. El monto grande es lo que se transfirió de verdad: el egreso
+// menos los ingresos de contrapartida, que salieron del mismo bolsillo del jugador.
 function mostrarConfirmacionPagosModal(movimientosCreados) {
   const lista = movimientosCreados || [];
   if (!lista.length) { closeModal(); return; }
-  const total = lista.reduce((s,m) => s + Number(m.egreso||0), 0);
-  const filas = lista.map(m => `
+  const egresos  = lista.filter(m => m.tipo !== "INGRESO");
+  const ingresos = lista.filter(m => m.tipo === "INGRESO");
+  const total = egresos.reduce((s,m) => s + Number(m.egreso||0), 0)
+              - ingresos.reduce((s,m) => s + Number(m.ingreso||0), 0);
+  const filas = egresos.map(m => `
     <div class="modal-detail-row">
       <span class="modal-detail-lbl">${esc(m.jugadorCT)}</span>
       <span class="modal-detail-val">${fmt(m.egreso)}</span>
     </div>
     <div class="pj-acumulado" style="margin:-6px 0 4px">${esc(m.concepto)} · ${esc(m.cuenta)} · ${esc(m.modoPago)}</div>
+    ${ingresos.filter(i => (i.vinculos||[]).some(v => v.egresoId === m.id)).map(i => `
+      <div class="modal-detail-row">
+        <span class="modal-detail-lbl" style="color:var(--text2)">− ${esc(i.concepto)}</span>
+        <span class="modal-detail-val ing">${fmt(i.ingreso)}</span>
+      </div>
+      <div class="pj-acumulado" style="margin:-6px 0 4px">Ingreso en ${esc(i.rubro || i.codRubro)}</div>`).join("")}
     <button class="btn-secondary" style="margin-bottom:10px;width:100%" onclick="abrirComprobanteModal('${m.id}')">🧾 Generar comprobante — ${esc(m.jugadorCT)}</button>
   `).join("");
   document.getElementById("modal-root").innerHTML = `
@@ -8550,7 +8532,7 @@ function mostrarConfirmacionPagosModal(movimientosCreados) {
       <div class="modal-card" onclick="event.stopPropagation()">
         <div class="modal-handle"></div>
         <div style="text-align:center;font-size:12px;font-weight:600;color:var(--green);letter-spacing:.05em;margin-bottom:2px">
-          ✓ PAGO${lista.length!==1?"S":""} CONFIRMADO${lista.length!==1?"S":""}
+          ✓ LIQUIDACIÓN REGISTRADA
         </div>
         <div class="modal-monto-big egr">−${fmt(total)}</div>
         ${filas}
@@ -8561,50 +8543,322 @@ function mostrarConfirmacionPagosModal(movimientosCreados) {
     </div>`;
 }
 
-function abrirMedioPagoModal(idsIniciales, jugadorId, partidoId, idsExtra) {
-  abrirMedioPagoModalGenerico("Confirmar pago", async (medioPago, cuenta, fechaPago) => {
-    let ids = (idsIniciales || []).filter(Boolean);
-    const extra = (idsExtra || []).filter(Boolean);
-    if (partidoId && !ids.length) {
-      // La fila no existía todavía (rol recién elegido y no guardado) — hay que guardar primero.
-      await guardarPagoPartido();
-      const fila = pjFilaPartido(jugadorId, partidoId);
-      if (fila) ids = [fila.id];
-    }
-    // Los premios (filas sin partido) se cobran junto con el resto.
-    ids = [...new Set([...ids, ...extra])];
-    if (!ids.length) throw new Error("Guardá el roster antes de marcar como pagado");
-    const r = await Storage.confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta);
-    if (!r.ok) throw new Error(r.error || "Error");
-    ids.forEach(id => {
-      const p = pagosJugadores.find(x => x.id === id);
-      if (p) { p.estado = "pagado"; p.fechaPago = fechaPago; p.medioPago = medioPago; }
-    });
-    aplicarMovimientosCreados(r.movimientos);
-    saveSnapshotToCache();
-    renderPagosJugadores();
-    mostrarConfirmacionPagosModal(r.movimientos);
-  });
-}
-
 /** Suma al array local movimientos los que el backend acaba de crear al confirmar un pago. */
 function aplicarMovimientosCreados(movimientosCreados) {
   (movimientosCreados || []).forEach(m => movimientos.push(m));
   updateBadge();
 }
 
-/** Marca como pagadas las filas pendientes de un jugador "mensual" en un mes puntual: sueldo,
- *  premios y descuentos del mes van en la misma transferencia, neteados. */
-function marcarMesPagado(jugadorId, mes) {
-  const filas = pjFilasMes(jugadorId, mes).filter(p => p.estado === "pendiente");
-  if (!filas.length) return;
-  const ids = filas.map(p => p.id);
-  const negativo = pjJugadorConNetoNegativo(ids);
+// ══════════════════════════════════════════════════════════════
+// LIQUIDACIÓN DE A UN JUGADOR
+//
+// Reemplaza al pago en lote. Las transferencias se hacen una por una en el homebanking y se
+// revisan de a un jugador con el extracto a la vista: la pantalla ahora refleja eso.
+//
+// Un solo modal con todo adentro, no una cadena de modales — encadenarlos es donde se pierde el
+// contexto y se confirma sin leer. Y un solo POST al final: cada acción de Apps Script es una
+// ejecución de 1-3 s y corren de a una.
+//
+// El backend no cambia por esto: confirmarPagosJugadores recibe N ids y agrupa por jugador; acá
+// simplemente se le mandan siempre los de uno solo. Si algún día hace falta volver al lote, lo
+// sigue soportando.
+// ══════════════════════════════════════════════════════════════
+
+let pjLiqData = null; // { jugadorId, nombre, ids, medioPago, cuenta, fechaPago, reintento }
+
+/**
+ * `idsForzados` se usa al volver de editar un descuento: la tabla se repinta al guardar y con ella
+ * se pierde qué premios estaban tildados, así que la selección se arrastra en vez de releerla.
+ */
+function abrirLiquidacionModal(jugadorId, idsForzados) {
+  const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+  // Se filtran contra pagosJugadores: un id arrastrado puede haber dejado de existir (descuento
+  // borrado) o haber quedado pagado en otra pestaña.
+  const ids = (idsForzados || pjIdsDeJugador(jugadorId))
+    .filter(id => (pagosJugadores.find(p => p.id === id) || {}).estado === "pendiente");
+  if (!ids.length) { toast("Este jugador no tiene nada pendiente", "err"); return; }
+  const cuentaDefault = pjLiqData && pjLiqData.cuenta ? pjLiqData.cuenta : (cuentas[0] || "");
+  pjLiqData = {
+    jugadorId,
+    nombre:    cfg ? cfg.nombre : (pjLiqFilas(ids)[0] || {}).jugadorNombre || "",
+    ids,
+    // La cuenta y la fecha se conservan entre jugadores: en una liquidación se usan las mismas
+    // para todos, y retipearlas 15 veces es donde se cuela el error.
+    cuenta:    cuentaDefault,
+    medioPago: medioPagoPorCuenta(cuentaDefault),
+    fechaPago: (pjLiqData && pjLiqData.fechaPago) || today(),
+    reintento: false
+  };
+  renderLiquidacionModal();
+}
+
+/** Las filas de Pagos Jugadores de un conjunto de ids, en el orden en que llegan. */
+function pjLiqFilas(ids) {
+  return (ids || []).map(id => pagosJugadores.find(p => p.id === id)).filter(Boolean);
+}
+
+/**
+ * Movimientos que va a crear la liquidación, calculados con la misma regla que
+ * confirmarPagosJugadores: un EGRESO por el bruto (todo menos las contrapartidas) y un INGRESO por
+ * cada descuento con rubro. Es una previsualización, no la fuente de verdad — pero si difiere de
+ * lo que termina grabando el backend, es un bug.
+ */
+function pjLiqMovimientosPreview() {
+  const filas   = pjLiqFilas(pjLiqData.ids);
+  const contras = filas.filter(p => p.codRubroContra);
+  const bruto   = filas.filter(p => !p.codRubroContra)
+                       .reduce((s,p) => s + Number(p.montoFinal||0), 0);
+  return [{
+    tipo: "EGRESO", codRubro: "19", rubro: "SUELDO JUGADORES", monto: bruto,
+    concepto: "Pago jugador " + pjLiqData.nombre
+  }].concat(contras.map(p => ({
+    tipo: "INGRESO", codRubro: p.codRubroContra, rubro: pjRubroContraLabel(p.codRubroContra),
+    monto: Math.abs(Number(p.montoFinal||0)), concepto: pjConceptoContra(p)
+  })));
+}
+
+/** Lo que el jugador efectivamente recibe: el neto de todas sus filas. */
+function pjLiqNeto() {
+  return pjLiqFilas(pjLiqData.ids).reduce((s,p) => s + Number(p.montoFinal||0), 0);
+}
+
+function renderLiquidacionModal() {
+  const d      = pjLiqData;
+  const filas  = pjLiqFilas(d.ids);
+  const neto   = pjLiqNeto();
+  const movs   = pjLiqMovimientosPreview();
+  const cfg    = configJugadores.find(c => c.idJugador === d.jugadorId);
+
+  // 1) Qué se está liquidando. Con el flujo de a uno ya no es obvio qué partidos entran: hay que
+  //    decirlo explícitamente.
+  const partidosIncluidos = [...new Set(filas
+    .filter(p => pjTipoFila(p) === "partido")
+    .map(p => (p.partidosIncluidos || [])[0] || p.partidoId).filter(Boolean))];
+  const listaPartidos = partidosIncluidos.length
+    ? partidosIncluidos.map(pid => `<li>${esc(pjPartidoLabel(pid))}</li>`).join("")
+    : `<li class="pj-acumulado">Sin partidos — sueldo, premios y descuentos</li>`;
+
+  // 2) Desglose editable. Los descuentos se editan acá mismo, y la edición opera sobre las filas
+  //    de Pagos Jugadores, no sobre el papel: si sólo cambiara el comprobante, el jugador se
+  //    llevaría un papel que no coincide con el movimiento.
+  const desglose = filas.map(p => {
+    const esDesc = pjTipoFila(p) === "descuento";
+    const rubro  = p.codRubroContra
+      ? `<span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>`
+      : (esDesc ? `<span class="pj-acumulado">adelanto (netea)</span>` : "");
+    const acciones = esDesc
+      ? `<button class="btn-sm" onclick="pjLiqEditarDescuento('${p.id}')" title="Editar">✏️</button>
+         <button class="btn-sm danger" onclick="pjLiqQuitarDescuento('${p.id}')" title="Quitar">✕</button>`
+      : "";
+    return `
+      <div class="pj-desc-item">
+        <span style="flex:1;min-width:0">${esc(p.etiqueta || pjDescPartido(p))} ${rubro}</span>
+        <span class="mono" style="${esDesc?'color:var(--red)':''}">${fmtSigned(p.montoFinal)}</span>
+        ${acciones}
+      </div>`;
+  }).join("");
+
+  const opcionesMedio  = metodos.map(m => `<option value="${esc(m)}" ${m===d.medioPago?"selected":""}>${esc(m)}</option>`).join("");
+  const opcionesCuenta = cuentas.map(c => `<option value="${esc(c)}" ${c===d.cuenta?"selected":""}>${esc(c)}</option>`).join("");
+
+  // 4) Qué se va a registrar. Que se vea antes de apretar, no después.
+  const previewMovs = movs.map(m => `
+    <div class="pj-desc-item">
+      <span style="flex:1;min-width:0">
+        <span class="pj-badge ${m.tipo==="INGRESO"?"pj-badge-pagado":"pj-badge-pendiente"}">${m.tipo}</span>
+        ${esc(m.rubro)}
+      </span>
+      <span class="mono ${m.tipo==="INGRESO"?"ing":"egr"}">${fmt(m.monto)}</span>
+    </div>`).join("");
+
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card pj-liq-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Liquidar — ${esc(d.nombre)}</div>
+
+        <div class="pj-liq-cols">
+          <div>
+            <div class="field">
+              <label>Se está liquidando</label>
+              <ul class="pj-liq-lista">${listaPartidos}</ul>
+            </div>
+
+            <div class="field">
+              <label>Desglose</label>
+              ${desglose || '<p class="note" style="margin:0">Sin conceptos</p>'}
+              <div class="pj-desc-item" style="border-bottom:0;font-weight:600">
+                <span style="flex:1">Neto a transferir</span>
+                <span class="mono ${neto<0?'egr':''}">${fmtSigned(neto)}</span>
+              </div>
+              <button class="btn-secondary" style="margin-top:6px" onclick="pjLiqEditarDescuento('')">− Agregar descuento</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="field">
+              <label>Cuenta</label>
+              <select class="inp" id="pj-cuenta" onchange="pjLiqOnPago()">${opcionesCuenta}</select>
+            </div>
+            <div class="field">
+              <label>Medio de pago</label>
+              <select class="inp" id="pj-medio-pago" onchange="pjLiqOnPago(true)">${opcionesMedio}</select>
+            </div>
+            <div class="field">
+              <label>Fecha de pago</label>
+              <input class="inp" id="pj-fecha-pago" type="date" value="${d.fechaPago}" onchange="pjLiqOnPago(true)">
+            </div>
+
+            <div class="field">
+              <label>Se va a registrar</label>
+              ${previewMovs}
+              ${movs.length > 1 ? `<p class="note" style="margin:6px 0 0">El egreso va por el sueldo bruto; lo que el club le cobró se registra aparte, en su rubro. El jugador recibe ${fmtSigned(neto)}.</p>` : ""}
+            </div>
+          </div>
+        </div>
+
+        <div class="comp-preview-label">Comprobante</div>
+        <div id="comp-preview-wrap" class="comp-preview-wrap">
+          <div id="comprobante-doc"></div>
+        </div>
+
+        <p class="note" id="pj-liq-status" style="text-align:center"></p>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="pjLiqEmitirComprobante()">Emitir comprobante</button>
+          <button class="btn-main" style="flex:1" id="btn-pj-liquidar" onclick="pjLiquidar()">Liquidar</button>
+        </div>
+      </div>
+    </div>`;
+
+  // 5) Vista previa del comprobante, armada de las MISMAS filas que se van a registrar.
+  compData = pjLiqComprobanteData();
+  escudoBN().then(() => compRefreshDoc());
+}
+
+/** compData del comprobante de esta liquidación. Sale de las filas, igual que abrirComprobantePrevio. */
+function pjLiqComprobanteData() {
+  const filas = pjLiqFilas(pjLiqData.ids);
+  const mes   = (filas.find(p => p.mes) || {}).mes || "";
+  return {
+    movId: "", jugadorId: pjLiqData.jugadorId, sinConfirmar: true,
+    itemsBloqueados: true, volverALiquidar: pjLiqData.jugadorId,
+    tipoDoc: "comprobante",
+    numero:  (Number(ultimoComprobante) || 0) + 1,
+    fecha:   fmtFechaDMY(pjLiqData.fechaPago),
+    receptor: pjLiqData.nombre,
+    periodo:  mes ? mesLabel(mes) : "",
+    items:    pjItemsDeFilas(filas),
+    mensaje:  ""
+  };
+}
+
+/** Lee los campos de pago al estado y repinta el comprobante (la fecha sale ahí). */
+function pjLiqOnPago(soloLeer) {
+  if (!pjLiqData) return;
+  pjLiqData.cuenta    = document.getElementById("pj-cuenta")?.value || "";
+  pjLiqData.fechaPago = document.getElementById("pj-fecha-pago")?.value || "";
+  if (!soloLeer) pjAutoMedioPago(); // default por cuenta; si ya lo cambió a mano no se pisa
+  pjLiqData.medioPago = document.getElementById("pj-medio-pago")?.value || "";
+  compData = pjLiqComprobanteData();
+  compRefreshDoc();
+}
+
+/** Abre el comprobante en su modal (flujo de la Fase 6) sin registrar nada. */
+function pjLiqEmitirComprobante() {
+  pjLiqOnPago(true);
+  abrirComprobantePrevio(pjLiqData.jugadorId, {
+    ids: pjLiqData.ids, desdeLiquidacion: true, fecha: pjLiqData.fechaPago
+  });
+}
+
+/** Alta o edición de un descuento sin salir de la liquidación: al guardar se vuelve al modal. */
+function pjLiqEditarDescuento(pagoId) {
+  pjLiqOnPago(true);
+  const mes = (pjLiqFilas(pjLiqData.ids).find(p => p.mes) || {}).mes || "";
+  abrirDescuentoModal(pjLiqData.jugadorId, pjLiqData.nombre, mes, {
+    pagoId, volverALiquidar: pjLiqData.jugadorId
+  });
+}
+
+async function pjLiqQuitarDescuento(pagoId) {
+  const jid = pjLiqData.jugadorId;
+  const ids = pjLiqData.ids.filter(id => id !== pagoId);
+  await quitarDescuento(pagoId);
+  // quitarDescuento repinta la tabla (y con ella se pierden los premios tildados): se vuelve con
+  // la selección que había, menos el descuento borrado.
+  abrirLiquidacionModal(jid, pagosJugadores.some(p => p.id === pagoId) ? pjLiqData.ids : ids);
+}
+
+/**
+ * Registra la liquidación: un solo POST con los ids de este jugador.
+ *
+ * Idempotencia: se pasó de 1 POST a N, y con señal intermitente uno puede cortarse después de
+ * escribir pero antes de responder. Reintentar duplicaría el movimiento, así que antes de un
+ * reintento se refresca listPagosJugadores y, si las filas ya quedaron en "pagado", se muestra el
+ * resultado en vez de volver a mandar.
+ */
+async function pjLiquidar() {
+  const btnId = "btn-pj-liquidar";
+  if (document.getElementById(btnId)?.disabled) return;
+  pjLiqOnPago(true);
+  const d = pjLiqData;
+  const status = document.getElementById("pj-liq-status");
+
+  if (!d.cuenta)    { toast("Elegí una cuenta", "err"); return; }
+  if (!d.fechaPago) { toast("Poné la fecha del pago", "err"); return; }
+  // Mismo criterio que guardarMovimiento: una fecha futura suele ser un error de tipeo.
+  if (d.fechaPago > today() && !confirm("La fecha (" + d.fechaPago + ") es posterior a hoy. ¿Confirmás que es correcta?")) return;
+  const negativo = pjJugadorConNetoNegativo(d.ids);
   if (negativo) {
-    toast("Los descuentos de " + negativo.nombre + " superan el sueldo del mes (" + fmtSigned(negativo.neto) + "). Ajustalos antes de confirmar.", "err");
+    toast("Los descuentos de " + negativo.nombre + " superan lo que se le debe (" + fmtSigned(negativo.neto) + "). Ajustalos antes de liquidar.", "err");
     return;
   }
-  abrirMedioPagoModal(ids, jugadorId, null);
+
+  setBtnState(btnId, "saving");
+  try {
+    if (d.reintento) {
+      if (status) status.textContent = "Verificando si ya se registró…";
+      const rPJ = await Storage.listPagosJugadores();
+      if (rPJ.ok) {
+        pagosJugadores = rPJ.pagosJugadores || [];
+        const yaPagadas = d.ids.map(id => pagosJugadores.find(p => p.id === id)).filter(Boolean);
+        if (yaPagadas.length && yaPagadas.every(p => p.estado === "pagado")) {
+          // El POST anterior sí había escrito: sólo se perdió la respuesta. Volver a mandarlo
+          // duplicaría el movimiento.
+          pjLiquidadosSesion.add(d.jugadorId);
+          saveSnapshotToCache();
+          setBtnState(btnId, "saved");
+          renderPagosJugadores();
+          const movId = yaPagadas[0].movimientoId;
+          const mov   = movimientos.find(m => m.id === movId);
+          toast("Ya estaba liquidado — no se volvió a registrar", "ok");
+          if (mov) mostrarConfirmacionPagosModal([mov]); else closeModal();
+          return;
+        }
+      }
+    }
+    if (status) status.textContent = "Registrando…";
+    const r = await Storage.confirmarPagosJugadores(d.ids, d.fechaPago, d.medioPago, d.cuenta);
+    if (!r.ok) throw new Error(r.error || "Error");
+    d.ids.forEach(id => {
+      const p = pagosJugadores.find(x => x.id === id);
+      if (p) {
+        p.estado = "pagado"; p.fechaPago = d.fechaPago; p.medioPago = d.medioPago;
+        const egr = (r.movimientos || []).find(m => m.tipo !== "INGRESO");
+        if (egr) p.movimientoId = egr.id;
+      }
+    });
+    aplicarMovimientosCreados(r.movimientos);
+    pjLiquidadosSesion.add(d.jugadorId);
+    saveSnapshotToCache();
+    setBtnState(btnId, "saved");
+    renderPagosJugadores();
+    mostrarConfirmacionPagosModal(r.movimientos);
+  } catch(e) {
+    // Puede haber llegado a escribir: el próximo intento verifica antes de mandar.
+    pjLiqData.reintento = true;
+    handleSaveError(btnId, e);
+  }
 }
 
 function abrirAgregarMontoModal(jugadorId, jugadorNombre, mesDefault) {
@@ -8855,7 +9109,7 @@ function renderTransferencias() {
     // "sueldo" = lo periódico + los descuentos (montoFinal negativo, netean solos).
     const sueldo  = pjFilasSueldoPendiente(cfg.idJugador);
     const premios = pjPremiosDeVista(cfg.idJugador);
-    if (tienePartido || sueldo.length || premios.length) {
+    if (tienePartido || sueldo.length || premios.length || pjLiquidadosSesion.has(cfg.idJugador)) {
       filasPorJugador[cfg.idJugador] = {
         nombre: cfg.nombre, alias: cfg.alias, porPartido,
         periodico: cfg.frecuencia !== "partido", sueldo, premios
@@ -8893,10 +9147,10 @@ function renderTransferencias() {
         return `<td class="mono">${fmt(fila.montoFinal)}${fila.estado==='pagado'?' <span class="pj-badge pj-badge-pagado" style="padding:1px 5px">✓</span>':''}</td>`;
       }).join("");
     }
-    const hayBase = info.sueldo.length > 0 ||
-      Object.values(info.porPartido).some(f => f.estado === "pendiente");
-    // Un checkbox por premio: tildar al jugador para pagarle el partido no le tiene que arrastrar
-    // los premios (antes se colaban solos y desaparecían de la pantalla sin que nadie los eligiera).
+    // Un checkbox por premio: liquidar el partido no le tiene que arrastrar los premios (antes se
+    // colaban solos y desaparecían de la pantalla sin que nadie los eligiera). Ya no hay checkbox
+    // de jugador —se liquida de a uno con el botón de la fila—, pero los de premio siguen
+    // decidiendo qué premios entran.
     // Los ya cobrados se muestran con ✓ y sin checkbox: están para consultarlos, no para volver
     // a pagarlos.
     const premiosCell = info.premios.length
@@ -8912,6 +9166,13 @@ function renderTransferencias() {
           </label>`;
         }).join("")
       : "—";
+    // La liquidación es de a un jugador: el botón de la fila abre el modal con todo lo suyo. Si no
+    // le queda nada pendiente, en su lugar va el badge y el 🧾 para reemitir el comprobante de la
+    // transferencia que ya se hizo — con 15 jugadores de a uno hay que poder ver por dónde se va.
+    const accion = tienePendiente(jid)
+      ? `<button class="btn-sm accent" onclick="abrirLiquidacionModal('${jid}')" title="Liquidar y registrar el pago de este jugador">Liquidar</button>`
+      : `<span class="pj-badge pj-badge-pagado">Liquidado ✓</span>
+         <button class="btn-sm pj-comp-btn" onclick="abrirComprobantePrevio('${jid}')" title="Reemitir el comprobante de lo ya liquidado">🧾</button>`;
     return `
     <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-base="${base}" data-total="0">
       <td>${esc(info.nombre)}</td>
@@ -8919,8 +9180,7 @@ function renderTransferencias() {
       <td class="pj-premios-cell">${premiosCell}</td>
       <td class="mono pj-total-cell">${fmt(0)}</td>
       <td>${esc(info.alias || "—")}</td>
-      <td style="text-align:center"><input type="checkbox" class="pj-transf-cb" value="${jid}" onchange="pjTransfRecalc()" ${hayBase?"":"disabled"}></td>
-      <td style="text-align:center"><button class="btn-sm pj-comp-btn" onclick="abrirComprobantePrevio('${jid}')" title="Generar el comprobante de lo tildado, sin confirmar el pago">🧾</button></td>
+      <td style="text-align:center;white-space:nowrap">${accion}</td>
     </tr>`;
   }).join("");
 
@@ -8935,7 +9195,7 @@ function renderTransferencias() {
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
       ${jugadorIds.length ? `
-        <button class="btn-sm" onclick="pjMarcarTodos(true)">Tildar todos</button>
+        <button class="btn-sm" onclick="pjMarcarTodos(true)">Tildar todos los premios</button>
         <button class="btn-sm" onclick="pjMarcarTodos(false)">Destildar todos</button>` : ""}
       <label class="pj-filtro-lbl">
         <input type="checkbox" ${pjSoloPendientes?"checked":""} onchange="pjSoloPendientes=this.checked; renderPagosJugadores()">
@@ -8945,20 +9205,19 @@ function renderTransferencias() {
     </div>${totalJugadores && !jugadorIds.length ? `<p class="note">No queda nada pendiente para los partidos seleccionados.</p>` : ""}
     <div class="pj-table-wrap pj-transf-wrap">
       <table class="pj-table" id="pj-transf-table">
-        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Incluir</th><th>Comprob.</th></tr></thead>
+        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Liquidación</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="99" class="note">Sin jugadores pendientes para los partidos seleccionados</td></tr>`}</tbody>
       </table>
     </div>
     <button class="btn-export" style="margin-bottom:10px" onclick="exportarTransferencias()">📋 Exportar lista de transferencias</button>
-    <button class="btn-main" id="btn-confirmar-transf" onclick="confirmarPagosSeleccionados()">Confirmar pagos seleccionados</button>
+    <p class="note">El flujo es: exportás el listado, hacés las transferencias en el homebanking, y después liquidás de a un jugador con el extracto a la vista.</p>
   `;
 }
 
-// Tilda o destilda todas las filas de la tabla de transferencias, incluidos los checkbox
-// de premios. Ignora los deshabilitados (jugadores sin nada pendiente): esos no se pueden
-// incluir en un pago.
+// Tilda o destilda todos los checkbox de premio de la tabla. Los ya cobrados están deshabilitados
+// y quedan afuera: están para consultarlos, no para volver a pagarlos.
 function pjMarcarTodos(valor) {
-  const cbs = [...document.querySelectorAll("#pj-transf-table .pj-transf-cb:not(:disabled), #pj-transf-table .pj-premio-cb:not(:disabled)")];
+  const cbs = [...document.querySelectorAll("#pj-transf-table .pj-premio-cb:not(:disabled)")];
   cbs.forEach(cb => cb.checked = valor);
   pjTransfRecalc();
   if (!cbs.length) toast("No hay filas para " + (valor ? "tildar" : "destildar"), "err");
@@ -8970,8 +9229,9 @@ function pjMarcarTodos(valor) {
 function pjTransfRecalc() {
   let totalGeneral = 0, jugadores = 0;
   document.querySelectorAll("#pj-transf-table tbody tr[data-jug]").forEach(tr => {
-    const main = tr.querySelector(".pj-transf-cb");
-    let total = (main && main.checked && !main.disabled) ? Number(tr.dataset.base || 0) : 0;
+    // Sin checkbox de jugador: el partido y el sueldo pendientes entran siempre (data-base) y lo
+    // único opcional son los premios.
+    let total = Number(tr.dataset.base || 0);
     tr.querySelectorAll(".pj-premio-cb:checked").forEach(cb => total += Number(cb.dataset.monto || 0));
     tr.dataset.total = total;
     const cell = tr.querySelector(".pj-total-cell");
@@ -8994,14 +9254,16 @@ function pjToggleChip(partidoId) {
   renderPagosJugadores();
 }
 
-// IDs de las filas de "Pagos Jugadores" que entran en el pago. El checkbox del jugador arrastra
-// sus partidos pendientes y su sueldo/descuentos; los premios entran SÓLO si están tildados uno
-// por uno, que es el punto de tener checkbox propio.
 /**
  * Traduce lo tildado en pantalla a IDs de filas de "Pagos Jugadores".
  *
+ * `incluido` arrastra los partidos pendientes de la selección y el sueldo/descuentos del jugador;
+ * los premios entran SÓLO si están tildados uno por uno, que es el punto de tener checkbox propio.
+ * Con la liquidación de a uno el jugador que se está liquidando va siempre con incluido:true — la
+ * regla sobrevive intacta al rediseño, que es lo que verifica spec/frontend.js.
+ *
  * Separada de la lectura del DOM a propósito: acá vive la regla de negocio que arregló el bug
- * de que un premio se cobrara solo, y así se puede verificar sin navegador (ver spec/frontend.js).
+ * de que un premio se cobrara solo, y así se puede verificar sin navegador.
  * `seleccion` es [{jugadorId, incluido, premiosIds}] — una entrada por fila de la tabla.
  */
 function pjIdsDeSeleccion(seleccion) {
@@ -9032,17 +9294,21 @@ function pjIdsDeSeleccion(seleccion) {
   return [...new Set(ids)];
 }
 
-/** Lee la tabla de transferencias y delega la regla en pjIdsDeSeleccion. */
-function pjFilasSeleccionadas() {
-  const seleccion = [...document.querySelectorAll("#pj-transf-table tbody tr[data-jug]")].map(tr => {
-    const main = tr.querySelector(".pj-transf-cb");
-    return {
-      jugadorId:  tr.dataset.jug,
-      incluido:   !!(main && main.checked && !main.disabled),
-      premiosIds: [...tr.querySelectorAll(".pj-premio-cb:checked")].map(cb => cb.value)
-    };
-  });
-  return pjIdsDeSeleccion(seleccion);
+/**
+ * IDs de las filas que entran en la liquidación de UN jugador, leyendo qué premios están tildados
+ * en su fila de la tabla. Delega la regla en pjIdsDeSeleccion para que el modal de liquidación y
+ * el comprobante no puedan discrepar.
+ *
+ * Si la fila no está en pantalla (el filtro "sólo pendientes" la escondió, o la tabla se repintó)
+ * se liquida sin premios: entran igual el partido y el sueldo, que es lo que arrastra `incluido`.
+ */
+function pjIdsDeJugador(jugadorId) {
+  const tr = document.querySelector(`#pj-transf-table tbody tr[data-jug="${jugadorId}"]`);
+  return pjIdsDeSeleccion([{
+    jugadorId,
+    incluido:   true,
+    premiosIds: tr ? [...tr.querySelectorAll(".pj-premio-cb:checked")].map(cb => cb.value) : []
+  }]);
 }
 
 /** Primer jugador del lote cuyo neto (sueldo + premios − descuentos) da negativo, o null.
@@ -9075,8 +9341,10 @@ function csvCell(v) {
  * explicar por qué no está sumado en el Total.
  *
  * Igual que en la tabla, las columnas de partido muestran lo que hay cargado y el Total muestra
- * lo que se va a transferir: si el jugador está destildado los montos se ven igual pero el Total
- * no los cuenta. Por eso va también la columna "Incluir".
+ * lo que se va a transferir: un partido ya pagado se ve igual pero no suma.
+ *
+ * Es el paso previo del flujo real: se exporta, se hacen las transferencias en el homebanking, y
+ * recién después se liquida de a un jugador con el extracto a la vista.
  */
 function exportarTransferencias() {
   const filas = [...document.querySelectorAll("#pj-transf-table tbody tr[data-jug]")]
@@ -9090,13 +9358,11 @@ function exportarTransferencias() {
 
   const encabezado = ["Jugador"]
     .concat(partidosSel.map(p => p.rival + (p.fecha ? " " + p.fecha.slice(8) + "/" + p.fecha.slice(5,7) : "")))
-    .concat(["Sueldo/Acumulado", "Premios/Ajustes", "Total", "Alias/CBU", "Incluir"]);
+    .concat(["Sueldo/Acumulado", "Premios/Ajustes", "Total", "Alias/CBU"]);
 
   const lineas = filas.map(tr => {
     const jid  = tr.dataset.jug;
     const cfg  = configJugadores.find(c => c.idJugador === jid);
-    const main = tr.querySelector(".pj-transf-cb");
-    const incluido = !!(main && main.checked && !main.disabled);
 
     const celdasPartido = partidosSel.map(p => {
       const fila = cfg && cfg.frecuencia === "partido" ? pjFilaPartido(jid, p.id) : null;
@@ -9117,7 +9383,7 @@ function exportarTransferencias() {
 
     return [cfg ? cfg.nombre : jid]
       .concat(celdasPartido)
-      .concat([sueldo || "", premios, tr.dataset.total, tr.dataset.alias, incluido ? "sí" : "no"])
+      .concat([sueldo || "", premios, tr.dataset.total, tr.dataset.alias])
       .map(csvCell).join(",");
   });
 
@@ -9129,28 +9395,6 @@ function exportarTransferencias() {
   a.href = url; a.download = "transferencias_jugadores.csv"; a.click();
   URL.revokeObjectURL(url);
   toast("Lista exportada ✓", "ok");
-}
-
-function confirmarPagosSeleccionados() {
-  const ids = pjFilasSeleccionadas();
-  if (!ids.length) { toast("No hay pagos pendientes seleccionados", "err"); return; }
-  const negativo = pjJugadorConNetoNegativo(ids);
-  if (negativo) {
-    toast("Los descuentos de " + negativo.nombre + " superan lo que se le debe (" + fmtSigned(negativo.neto) + "). Ajustalo antes de confirmar.", "err");
-    return;
-  }
-  abrirMedioPagoModalGenerico("Confirmar " + ids.length + " pago" + (ids.length!==1?"s":""), async (medioPago, cuenta, fechaPago) => {
-    const r = await Storage.confirmarPagosJugadores(ids, fechaPago, medioPago, cuenta);
-    if (!r.ok) throw new Error(r.error || "Error");
-    ids.forEach(id => {
-      const p = pagosJugadores.find(x => x.id === id);
-      if (p) { p.estado = "pagado"; p.fechaPago = fechaPago; p.medioPago = medioPago; }
-    });
-    aplicarMovimientosCreados(r.movimientos);
-    saveSnapshotToCache();
-    renderPagosJugadores();
-    mostrarConfirmacionPagosModal(r.movimientos);
-  });
 }
 
 function renderConfig() {
@@ -10233,32 +10477,24 @@ function abrirComprobanteModal(movId) {
  * se controló contra el banco. Por eso los ítems se arman de las filas de Pagos Jugadores y no
  * de un movimiento: acá no se graba nada, sólo se emite el papel.
  */
-function abrirComprobantePrevio(jugadorId) {
-  const tr = document.querySelector(`#pj-transf-table tbody tr[data-jug="${jugadorId}"]`);
-  if (!tr) return;
-  const main = tr.querySelector(".pj-transf-cb");
-  // Misma regla que el pago: reusa pjIdsDeSeleccion con una sola fila para que el comprobante
-  // y lo que después se confirme no puedan discrepar.
-  const ids = pjIdsDeSeleccion([{
-    jugadorId,
-    incluido:   !!(main && main.checked && !main.disabled),
-    premiosIds: [...tr.querySelectorAll(".pj-premio-cb:checked")].map(cb => cb.value)
-  }]);
+function abrirComprobantePrevio(jugadorId, opciones) {
+  // Misma regla que la liquidación: reusa pjIdsDeSeleccion para que el comprobante y lo que
+  // después se registre no puedan discrepar.
+  const ids   = (opciones && opciones.ids) || pjIdsDeJugador(jugadorId);
   const filas = ids.map(id => pagosJugadores.find(p => p.id === id)).filter(Boolean);
 
-  // Nada tildado: lo normal es que el pago ya se haya confirmado (las filas quedaron en
-  // "pagado" y sin checkbox). Ahí el comprobante sale del movimiento real, que tiene la fecha
-  // de la transferencia que de verdad se hizo y el detalle tal cual quedó grabado — más fiel
-  // que rearmarlo de las filas.
+  // Sin filas pendientes: el jugador ya está liquidado. Ahí el comprobante sale del movimiento
+  // real, que tiene la fecha de la transferencia que de verdad se hizo y el detalle tal cual quedó
+  // grabado — más fiel que rearmarlo de las filas.
   if (!filas.length) {
     const movId = pjUltimoMovimientoDe(jugadorId);
-    if (!movId) { toast("Tildá lo que querés incluir en el comprobante", "err"); return; }
+    if (!movId) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return; }
     const pagadas = pagosJugadores.filter(p => p.movimientoId === movId);
     if (movimientos.some(m => m.id === movId)) { abrirComprobanteModal(movId); return; }
     // El movimiento no está cargado (offline, o todavía no se refrescó la lista): se arma
     // con las filas que quedaron apuntando a él, que son las mismas que lo componen.
     filas.push(...pagadas);
-    if (!filas.length) { toast("Tildá lo que querés incluir en el comprobante", "err"); return; }
+    if (!filas.length) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return; }
   }
 
   const total = filas.reduce((s,p) => s + Number(p.montoFinal||0), 0);
@@ -10271,9 +10507,14 @@ function abrirComprobantePrevio(jugadorId) {
     movId:        "",
     jugadorId,
     sinConfirmar: filas.some(p => p.estado === "pendiente"),
+    // Desde el flujo de liquidación los ítems NO se editan a mano: se arman de las filas de Pagos
+    // Jugadores, que son las que después se registran. Editarlos acá produciría un comprobante que
+    // no coincide con el movimiento (ver el modal de liquidación).
+    itemsBloqueados: !!(opciones && opciones.desdeLiquidacion),
+    volverALiquidar: (opciones && opciones.desdeLiquidacion) ? jugadorId : "",
     tipoDoc:      "comprobante",
     numero:       (Number(ultimoComprobante) || 0) + 1,
-    fecha:        fmtFechaDMY(fechaPago || today()),
+    fecha:        fmtFechaDMY((opciones && opciones.fecha) || fechaPago || today()),
     receptor:     filas[0].jugadorNombre || "",
     periodo:      mes ? mesLabel(mes) : "",
     items:        pjItemsDeFilas(filas),
@@ -10322,8 +10563,17 @@ function renderComprobanteModal() {
           </div>
           <div class="field">
             <label>Detalle</label>
-            <div id="comp-items">${d.items.map(it => compItemRowHTML(it)).join("")}</div>
-            <button class="btn-secondary" style="margin-top:8px" onclick="compAgregarItem()">+ Agregar concepto</button>
+            ${d.itemsBloqueados ? `
+              <div id="comp-items">${d.items.map(it => `
+                <div class="entity-item" style="gap:6px">
+                  <span style="flex:1;min-width:0">${esc(it.desc || "Concepto")}</span>
+                  <span class="mono">${fmtComp(it.monto)}</span>
+                </div>`).join("")}</div>
+              <p class="note" style="margin:6px 0 0">El detalle sale de lo que se está liquidando y no se edita acá: si lo cambiaras, el papel diría una cosa y el movimiento otra. Para corregirlo, editá el desglose en el modal de liquidación.</p>
+            ` : `
+              <div id="comp-items">${d.items.map(it => compItemRowHTML(it)).join("")}</div>
+              <button class="btn-secondary" style="margin-top:8px" onclick="compAgregarItem()">+ Agregar concepto</button>
+            `}
           </div>
           <div class="field">
             <label>Mensaje (opcional)</label>
@@ -10337,6 +10587,8 @@ function renderComprobanteModal() {
         </div>
 
         <p class="note" id="comp-status" style="text-align:center"></p>
+        ${d.volverALiquidar ? `<button class="btn-secondary" style="width:100%;margin-bottom:8px"
+            onclick="abrirLiquidacionModal('${d.volverALiquidar}')">← Volver a la liquidación</button>` : ""}
         <div class="modal-footer">
           ${compBotonWhatsAppHTML()}
           <button class="btn-main" style="flex:1;background:#25d366;color:#0b3d20" id="btn-comp-share" onclick="compExportar('share')">Compartir</button>
@@ -10460,6 +10712,9 @@ function compOnInput() {
   compData.receptor = (document.getElementById("comp-receptor")?.value || "").trim();
   compData.periodo  = (document.getElementById("comp-periodo")?.value || "").trim();
   compData.mensaje  = (document.getElementById("comp-mensaje")?.value || "").trim();
+  // Con los ítems bloqueados no hay inputs que leer: releerlos los borraría. Receptor, fecha,
+  // período y mensaje se siguen editando, que no afectan montos.
+  if (compData.itemsBloqueados) { compRefreshDoc(); return; }
   compData.items    = [...document.querySelectorAll(".comp-item-row")].map(row => ({
     desc:  (row.querySelector(".comp-item-desc")?.value || "").trim(),
     monto: parseFloat(row.querySelector(".comp-item-monto")?.value || "0") || 0,

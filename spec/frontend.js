@@ -681,6 +681,65 @@ check("sin período no queda la preposición colgada",
       !app.compMensajeWhatsApp("PEREZ", "", "$80.000").includes("liquidación de ."),
       app.compMensajeWhatsApp("PEREZ", "", "$80.000"));
 
+// ══════════════════════════════════════════════════════════════
+// El pago en lote se reemplazó por una liquidación jugador por jugador. La regla de que un premio
+// no se cobra solo tiene que sobrevivir al rediseño: ahora el jugador va siempre con incluido:true
+// (no hay más checkbox de jugador) y lo único opcional siguen siendo los premios.
+seccion("23 · La selección de la liquidación de a uno");
+sembrar();
+// pjIdsDeJugador lee los checkbox del DOM, que en las pruebas no existe: se verifica la regla
+// contra pjIdsDeSeleccion, que es donde vive y lo que aquella delega.
+igual("liquidar un jugador por partido trae su partido, sin los premios",
+      app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: [] }]), ["f-part"]);
+igual("con el premio tildado entra también",
+      app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: ["f-prem1"] }]).sort(),
+      ["f-part", "f-prem1"]);
+igual("un jugador mensual trae su sueldo y su descuento",
+      app.pjIdsDeSeleccion([{ jugadorId: "j2", incluido: true, premiosIds: [] }]).sort(),
+      ["f-desc", "f-sueldo"]);
+igual("y sigue sin traer el partido que no está en la selección de chips",
+      app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: [] }]).indexOf("f-part2"), -1);
+
+// Los dos tipos de jugador producen la misma estructura de liquidación.
+seccion("24 · El modal de liquidación: mensual y por partido dan lo mismo");
+sembrar();
+app.pagosJugadores.find(p => p.id === "f-desc").codRubroContra = "35";  // camiseta, con contrapartida
+
+app.pjLiqData = { jugadorId: "j2", nombre: "GOMEZ",
+                  ids: app.pjIdsDeSeleccion([{ jugadorId: "j2", incluido: true, premiosIds: [] }]),
+                  cuenta: "MACRO", medioPago: "TRANSFERENCIA", fechaPago: "2026-06-20" };
+const movsMensual = app.pjLiqMovimientosPreview();
+igual("el mensual da un EGRESO por el bruto y un INGRESO por la contrapartida",
+      movsMensual.map(m => [m.tipo, m.codRubro, m.monto]),
+      [["EGRESO", "19", 80000], ["INGRESO", "35", 8000]]);
+igual("y el neto es lo que el jugador recibe", app.pjLiqNeto(), 72000);
+
+app.pjLiqData = { jugadorId: "j1", nombre: "PEREZ",
+                  ids: app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: ["f-prem1"] }]),
+                  cuenta: "MACRO", medioPago: "TRANSFERENCIA", fechaPago: "2026-06-20" };
+const movsPartido = app.pjLiqMovimientosPreview();
+igual("el de partido da la misma estructura: un EGRESO en el rubro 19",
+      movsPartido.map(m => [m.tipo, m.codRubro]), [["EGRESO", "19"]]);
+igual("por el partido más el premio tildado", movsPartido[0].monto, 60000);
+igual("y su neto coincide con el egreso, porque no tiene contrapartidas",
+      app.pjLiqNeto(), movsPartido[0].monto);
+
+// El comprobante del modal sale de las MISMAS filas que se van a registrar: es lo que impide que
+// el jugador se lleve un papel que no coincide con el movimiento.
+seccion("25 · El comprobante del modal sale de las filas que se registran");
+app.pjLiqData = { jugadorId: "j2", nombre: "GOMEZ",
+                  ids: app.pjIdsDeSeleccion([{ jugadorId: "j2", incluido: true, premiosIds: [] }]),
+                  cuenta: "MACRO", medioPago: "TRANSFERENCIA", fechaPago: "2026-06-20" };
+app.ultimoComprobante = 0;
+const compLiq = app.pjLiqComprobanteData();
+igual("los ítems son los de las filas, con la contrapartida en negativo",
+      compLiq.items, [{ desc: "Junio", monto: 80000 }, { desc: "Multa — GOMEZ", monto: -8000 }]);
+igual("el total del comprobante es el neto",
+      compLiq.items.reduce((s,it) => s + it.monto, 0), app.pjLiqNeto());
+check("los ítems no se editan a mano en este camino", compLiq.itemsBloqueados);
+igual("y el botón de volver apunta al jugador", compLiq.volverALiquidar, "j2");
+igual("la fecha del comprobante es la del pago elegido", compLiq.fecha, "20/06/2026");
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

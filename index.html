@@ -8181,9 +8181,9 @@ function renderPagoPartido() {
       <select class="inp" id="pj-partido-sel" onchange="pjPartidoSel=this.value; renderPagosJugadores()">${opciones}</select>
     </div>
     <div class="sum-grid three">
-      <div class="stat-card"><div class="stat-label">Total a pagar</div><div class="stat-val acc">${fmt(totalPartido)}</div></div>
-      <div class="stat-card"><div class="stat-label">Ya pagado</div><div class="stat-val ing">${fmt(pagadoPartido)}</div></div>
-      <div class="stat-card"><div class="stat-label">Pendiente</div><div class="stat-val egr">${fmt(pendientePartido)}</div></div>
+      <div class="stat-card"><div class="stat-label">Total a pagar</div><div class="stat-val acc" id="pj-part-total">${fmt(totalPartido)}</div></div>
+      <div class="stat-card"><div class="stat-label">Ya pagado</div><div class="stat-val ing" id="pj-part-pagado">${fmt(pagadoPartido)}</div></div>
+      <div class="stat-card"><div class="stat-label">Pendiente</div><div class="stat-val egr" id="pj-part-pendiente">${fmt(pendientePartido)}</div></div>
     </div>
     <div class="pj-table-wrap">
       <table class="pj-table">
@@ -8425,6 +8425,31 @@ function pjRecalcRow(el) {
   const premios = Number(tr.dataset.premios || 0); // se cobran junto con el partido
   tr.querySelector(".pj-base").textContent  = fmt(base);
   tr.querySelector(".pj-final").textContent = fmt(base + ajuste + premios);
+  pjRecalcTotalesPartido();
+}
+
+/** Totales de arriba de "Por partido", recalculados de lo que hay en pantalla.
+ *  Se computan al renderizar, así que sin esto un cambio de rol actualiza la fila pero deja las
+ *  tarjetas mostrando lo de antes hasta guardar. Misma regla que renderPagoPartido: el que no jugó
+ *  no suma su monto, pero sus premios se cobran igual y siguen contando como pendientes. */
+function pjRecalcTotalesPartido() {
+  let total = 0, pagado = 0, pendiente = 0;
+  document.querySelectorAll("#pagosjug-content .pj-table tbody tr[data-jug]").forEach(tr => {
+    const rolSel = tr.querySelector(".pj-rol");
+    if (!rolSel) return; // fila de otra tabla (quincenales, transferencias): no entra en estos totales
+    const premios = Number(tr.dataset.premios || 0);
+    const monto   = pjBaseDeFila(tr) + Number(tr.querySelector(".pj-ajuste")?.value || 0);
+    if (rolSel.value !== "noJugo") {
+      total += monto;
+      if (tr.dataset.estado === "pagado") pagado += monto; else pendiente += monto;
+    }
+    total     += premios;
+    pendiente += premios;
+  });
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = fmt(v); };
+  set("pj-part-total", total);
+  set("pj-part-pagado", pagado);
+  set("pj-part-pendiente", pendiente);
 }
 
 /** Guarda lo que el usuario tiene cargado (sin grabar) en la tabla "Por partido",

@@ -1416,11 +1416,37 @@ function handleAction(data) {
         rosSh.appendRow([partidoId, r.jugadorId, r.jugadorNombre||"", r.rol||"noJugo"]);
       }
 
-      // Upsert de la fila de pago pendiente por jugador (salvo "noJugo").
+      const partidosDelPartido = JSON.stringify([partidoId]);
+
+      // Un jugador que vuelve a "No jugó" tiene que PERDER su fila de pago pendiente. Si sobrevive,
+      // la columna Final de "Por partido" sigue mostrando el monto viejo y —lo grave— el jugador
+      // queda en Transferencias listo para cobrar un partido que no jugó.
+      // Sólo se borran las pendientes: una ya pagada dejaría un egreso registrado sin la fila que
+      // lo explica, y al jugador cobrable de nuevo por algo que ya se le transfirió.
+      // La condición es la misma que usa el upsert de abajo, así que se borra exactamente la fila
+      // que ese upsert habría actualizado — los premios, que van en filas propias con
+      // PartidosIncluidos "[]", no se tocan.
+      // Va ANTES del upsert y recorriendo hacia atrás: deleteRow corre los índices de las filas
+      // siguientes, y el upsert escribe por índice sobre su propia lectura.
+      let quitados = 0;
+      const noJugaron = {};
+      for (const r of roster) if (r.rol === "noJugo") noJugaron[String(r.jugadorId)] = true;
+      if (Object.keys(noJugaron).length) {
+        const pjPrev = pjSh.getDataRange().getValues();
+        for (let i = pjPrev.length - 1; i >= 1; i--) {
+          if (!noJugaron[String(pjPrev[i][1])]) continue;
+          if (String(pjPrev[i][3]) !== partidosDelPartido) continue;
+          if (String(pjPrev[i][8]) !== "pendiente") continue;
+          pjSh.deleteRow(i + 1);
+          quitados++;
+        }
+      }
+
+      // Upsert de la fila de pago pendiente por jugador (salvo "noJugo", que ya se limpió arriba).
       const pjAll = pjSh.getDataRange().getValues();
       for (const r of roster) {
         if (r.rol === "noJugo") continue;
-        const partidosStr = JSON.stringify([partidoId]);
+        const partidosStr = partidosDelPartido;
         let found = false;
         for (let i = 1; i < pjAll.length; i++) {
           if (String(pjAll[i][1]) === String(r.jugadorId) && String(pjAll[i][3]) === partidosStr && String(pjAll[i][8]) === "pendiente") {
@@ -1444,7 +1470,7 @@ function handleAction(data) {
           ]);
         }
       }
-      return { ok: true };
+      return { ok: true, quitados };
     }
 
     // ─── PAGOS JUGADORES ──────────────────────────────────────

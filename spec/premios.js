@@ -532,4 +532,54 @@ const rInt9 = handleAction({ action: "checkIntegridad" });
 check("checkIntegridad detecta los vínculos colgados del ingreso huérfano",
       rInt9.problemas.some(p => p.grupo === "Reintegros"), JSON.stringify(rInt9.problemas));
 
+// ══════════════════════════════════════════════════════════════
+// Volver a poner "No jugó" a un jugador que ya estaba cargado tiene que deshacer su pago, no
+// dejarlo pendiente: si la fila sobrevive, la columna Final sigue mostrando el monto viejo y —lo
+// grave— el jugador queda en Transferencias listo para cobrar un partido que no jugó.
+seccion("10 · Cambiar el rol a 'No jugó' quita la fila de pago");
+sembrar();
+const guardarRol = rol => handleAction({ action: "saveRoster", partidoId: "p1", roster: [
+  { jugadorId:"j1", jugadorNombre:"GOMEZ", rol,
+    montoBase: rol === "noJugo" ? 0 : 10000, ajuste: 0, motivoAjuste: "",
+    montoFinal: rol === "noJugo" ? 0 : 10000, mes: "2026-06" }
+]});
+const filasPartido = () => pjRows().filter(r => r[PJ_IX.TIPO] === "partido");
+
+guardarRol("titular");
+igual("cargarlo como titular deja su fila pendiente", filasPartido().length, 1);
+igual("por el monto del rol", Number(filasPartido()[0][7]), 10000);
+
+guardarRol("noJugo");
+igual("volver a 'No jugó' le saca la fila", filasPartido().length, 0);
+igual("y el roster lo deja como no jugó",
+      filas(S.ROS).filter(r => r[0] === "p1" && r[1] === "j1").map(r => r[3]), ["noJugo"]);
+
+// Y se puede volver a cargar sin que queden dos filas.
+guardarRol("suplente");
+igual("volver a cargarlo crea una sola fila", filasPartido().length, 1);
+igual("con el monto nuevo", Number(filasPartido()[0][7]), 10000);
+
+// El premio del partido NO se toca: vive en su propia fila (PartidosIncluidos "[]") y se maneja
+// desde 🏆. Que el jugador no haya jugado no es motivo para borrarle un premio ya cargado.
+sembrar();
+guardarRol("titular");
+const idPremioDelPartido = altaPremio(3000, "Gol", "p1");
+guardarRol("noJugo");
+igual("la fila del partido se fue", filasPartido().length, 0);
+igual("pero el premio sigue ahí",   pjPorId(idPremioDelPartido)[PJ_IX.ESTADO], "pendiente");
+igual("con su monto intacto",       Number(pjPorId(idPremioDelPartido)[7]), 3000);
+
+// Una fila YA PAGADA no se toca: borrarla dejaría un egreso registrado sin la fila que lo explica,
+// y el jugador figuraría cobrable de nuevo por algo que ya se le transfirió.
+seccion("11 · Una fila ya pagada no se borra al marcar 'No jugó'");
+sembrar();
+const idPagado = altaPartido(10000);
+confirmar([idPagado]);
+igual("quedó pagada", pjPorId(idPagado)[PJ_IX.ESTADO], "pagado");
+const movsAntesDeNoJugo = movRows().length;
+guardarRol("noJugo");
+igual("la fila pagada sigue ahí", pjPorId(idPagado) !== undefined, true);
+igual("y sigue pagada",          pjPorId(idPagado)[PJ_IX.ESTADO], "pagado");
+igual("sin tocar los movimientos", movRows().length, movsAntesDeNoJugo);
+
 resumen();

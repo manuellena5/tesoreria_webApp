@@ -329,4 +329,29 @@ igual("la suma cierra con el total",
       items(movRows()[0]).reduce((s,it) => s + Number(it.monto||0), 0), Number(movRows()[0][7]));
 igual("que es 10000 - 2000 + 3000", Number(movRows()[0][7]), 11000);
 
+// ══════════════════════════════════════════════════════════════
+// El Celular del jugador viaja tal cual se escribió: la normalización a formato wa.me vive en el
+// front (waNormalizarCelular) y se aplica recién al armar el link, no al guardar.
+seccion("7 · Celular del jugador");
+sembrar();
+handleAction({ action: "saveConfigJugador", config: {
+  idJugador: "j1", nombre: "GOMEZ", montoTitular: 10000, montoSuplenteConMin: 7000,
+  montoSuplente: 5000, frecuencia: "partido", alias: "alias.gomez", premios: [],
+  celular: "03492 15 123456"
+}});
+const cfgJ1 = () => handleAction({ action: "listConfigJugadores" }).configJugadores.find(c => c.idJugador === "j1");
+igual("el update guarda el celular sin tocarlo", cfgJ1().celular, "03492 15 123456");
+igual("y no pisó el resto de la config",         cfgJ1().alias,   "alias.gomez");
+
+handleAction({ action: "saveConfigJugador", config: {
+  idJugador: "j3", nombre: "NUEVO", montoTitular: 0, montoSuplenteConMin: 0, montoSuplente: 0,
+  frecuencia: "mensual", alias: "", premios: [], celular: "+54 9 3492 123456"
+}});
+const cfgJ3 = handleAction({ action: "listConfigJugadores" }).configJugadores.find(c => c.idJugador === "j3");
+igual("el alta también lo escribe", cfgJ3.celular, "+54 9 3492 123456");
+
+// Una fila anterior a la columna (planilla sin migrar) tiene que seguir leyéndose.
+igual("un jugador sin celular cargado da vacío",
+      handleAction({ action: "listConfigJugadores" }).configJugadores.find(c => c.idJugador === "j2").celular, "");
+
 resumen();

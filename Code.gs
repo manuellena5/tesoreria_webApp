@@ -39,7 +39,9 @@ const EVE_COLS  = ["ID","Nombre","Fecha","Activo"];
 
 // ── Pagos a Jugadores (módulo aparte, no integrado a Movimientos todavía) ──
 const CFGJ_SHEET = "Config Jugadores";
-const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios"];
+// Celular va al final (índice 9): getOrCreateSheet completa los headers que falten, así que una
+// columna nueva agregada acá no rompe los índices posicionales de las que ya existían.
+const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios","Celular"];
 // Frecuencia: "partido" | "quincenal" | "mensual"
 // Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
 // independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
@@ -1305,11 +1307,17 @@ function handleAction(data) {
           montoSuplente:       Number(r[4]||0),
           frecuencia:          String(r[5]||"partido"),
           alias:               String(r[6]||""),
-          premios:             safeParseJSON(String(r[8]||"[]"), [])
+          premios:             safeParseJSON(String(r[8]||"[]"), []),
+          // Se devuelve tal cual está escrito: la normalización al formato de wa.me se hace
+          // recién al armar el link (index.html), no al guardar — ver saveConfigJugador.
+          celular:             String(r[9]||"")
         }));
       return { ok: true, configJugadores };
     }
 
+    // El Celular se guarda TAL CUAL lo escribió el usuario. Normalizarlo acá dejaría un número
+    // mal tipeado corrupto en la celda y sin forma de corregirlo mirándola: la conversión al
+    // formato de wa.me se hace al armar el link (waNormalizarCelular en index.html).
     case "saveConfigJugador": {
       const sh  = getOrCreateSheet(CFGJ_SHEET, CFGJ_COLS);
       const c   = data.config;
@@ -1319,7 +1327,7 @@ function handleAction(data) {
           sh.getRange(i + 1, 1, 1, CFGJ_COLS.length).setValues([[
             c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
             Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true",
-            JSON.stringify(c.premios||[])
+            JSON.stringify(c.premios||[]), c.celular||""
           ]]);
           return { ok: true, idJugador: c.idJugador };
         }
@@ -1327,7 +1335,7 @@ function handleAction(data) {
       sh.appendRow([
         c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
         Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true",
-        JSON.stringify(c.premios||[])
+        JSON.stringify(c.premios||[]), c.celular||""
       ]);
       return { ok: true, idJugador: c.idJugador };
     }

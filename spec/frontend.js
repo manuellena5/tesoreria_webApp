@@ -552,6 +552,32 @@ app.pjPartidosSel = ["p2"];
 igual("acotado a los partidos tildados: con otro partido elegido, el cobrado no aparece",
       app.pjPremiosDeVista("j1").map(p => p.id), ["f-prem2"]);
 
+// ══════════════════════════════════════════════════════════════
+// El celular se guarda tal cual lo escribe el usuario, así que la normalización tiene que
+// aguantar los cuatro formatos con los que se anota un número acá: con y sin 0 de larga
+// distancia, con y sin el 15 viejo de celular, y ya en formato internacional.
+seccion("19 · Normalización del celular para wa.me");
+igual("sin prefijos: se le agrega 54 y 9", app.waNormalizarCelular("3492 123456"), "5493492123456");
+igual("con 0 de larga distancia y 15 de celular", app.waNormalizarCelular("03492 15 123456"), "5493492123456");
+igual("ya internacional con separadores", app.waNormalizarCelular("+54 9 3492 123456"), "5493492123456");
+igual("ya normalizado: no lo toca", app.waNormalizarCelular("5493492123456"), "5493492123456");
+igual("área de 2 dígitos (11) con 15", app.waNormalizarCelular("011 15 4444 5555"), "5491144445555");
+igual("vacío da vacío", app.waNormalizarCelular(""), "");
+igual("null da vacío", app.waNormalizarCelular(null), "");
+
+check("los cuatro formatos de la tabla son válidos",
+      ["3492 123456", "03492 15 123456", "+54 9 3492 123456", "5493492123456"].every(app.waCelularValido));
+check("un número corto no es válido",  !app.waCelularValido("123"));
+check("un número larguísimo tampoco",  !app.waCelularValido("54 9 3492 123456 7890"));
+check("vacío no es válido",            !app.waCelularValido(""));
+
+sembrar();
+app.configJugadores[0].celular = "3492 123456";
+igual("waCelularDeJugador devuelve lo guardado, sin normalizar",
+      app.waCelularDeJugador("j1"), "3492 123456");
+igual("un jugador sin celular cargado da vacío", app.waCelularDeJugador("j2"), "");
+igual("un jugador sin config tampoco explota",   app.waCelularDeJugador("nadie"), "");
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

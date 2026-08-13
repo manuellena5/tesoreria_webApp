@@ -7477,6 +7477,11 @@ function openConfigJugadorModal(idJugador) {
             <input class="inp" id="cfgjug-alias" type="text" placeholder="jugador.mp / CBU…" value="${esc(c?c.alias:"")}">
           </div>
           <div class="field">
+            <label>Celular (WhatsApp)</label>
+            <input class="inp" id="cfgjug-celular" type="text" placeholder="3492 123456" value="${esc(c?c.celular:"")}">
+            <p class="note" style="margin:4px 0 0">Escribilo como lo tengas anotado. Se usa para mandarle el comprobante por WhatsApp.</p>
+          </div>
+          <div class="field">
             <label>Premios</label>
             <p class="note" style="margin:0 0 8px">Se cobran aparte de la frecuencia (gol, valla invicta…). Después se aplican desde 🏆 en Pagos Jugadores.</p>
             <div id="cfgjug-premios-lista">
@@ -7521,8 +7526,10 @@ async function saveConfigJugadorForm(idJugador) {
   const montoSuplenteConMin = parseFloat(document.getElementById("cfgjug-supmin")?.value    || "0") || 0;
   const montoSuplente       = parseFloat(document.getElementById("cfgjug-suplente")?.value  || "0") || 0;
   const alias                = (document.getElementById("cfgjug-alias")?.value || "").trim();
+  // Sin normalizar: ver el comentario de saveConfigJugador (Code.gs).
+  const celular              = (document.getElementById("cfgjug-celular")?.value || "").trim();
   const premiosCfg           = leerPremiosCfg();
-  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias, premios: premiosCfg };
+  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias, celular, premios: premiosCfg };
   setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveConfigJugador(config);
@@ -9934,6 +9941,57 @@ document.addEventListener("keydown", (e) => {
     if (map[e.key]) { e.preventDefault(); goTab(map[e.key]); }
   }
 });
+
+// ══════════════════════════════════════════════════════════════
+// WHATSAPP
+//
+// El celular del jugador se guarda tal cual lo escribe el usuario (ver saveConfigJugador en
+// Code.gs). La conversión al formato que exige wa.me —sólo dígitos, con código de país— se hace
+// acá, recién al armar el link, así un número mal tipeado se sigue viendo como se tipeó y se
+// puede corregir.
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Pasa lo que sea que haya escrito el usuario al formato de wa.me (dígitos pelados con el 54 y
+ * el 9 de celular argentino). Devuelve "" si no había nada.
+ *
+ *   "3492 123456"       → "5493492123456"
+ *   "03492 15 123456"   → "5493492123456"
+ *   "+54 9 3492 123456" → "5493492123456"
+ *
+ * No valida: eso lo hace waCelularValido, que es lo que decide si el botón se habilita.
+ */
+function waNormalizarCelular(raw) {
+  let s = String(raw || "").replace(/\D/g, "");
+  if (!s) return "";
+  // El 0 de larga distancia nacional no va en el número internacional.
+  if (s[0] === "0") s = s.slice(1);
+  // El "15" del formato viejo de celular va DESPUÉS del código de área, que puede ser de 2, 3 o
+  // 4 dígitos. Se lo reconoce porque sacándolo el número queda en los 10 dígitos de siempre
+  // (área + abonado): así no se le come un "15" a un número que lo tenga de verdad.
+  if (!/^54/.test(s) && s.length === 12) {
+    for (const areaLen of [2, 3, 4]) {
+      if (s.substr(areaLen, 2) === "15") { s = s.slice(0, areaLen) + s.slice(areaLen + 2); break; }
+    }
+  }
+  if (!/^54/.test(s)) s = "54" + s;
+  // WhatsApp exige el 9 entre el código de país y el de área para los celulares argentinos.
+  if (s[2] !== "9") s = s.slice(0, 2) + "9" + s.slice(2);
+  return s;
+}
+
+/** Un número sirve para wa.me si quedó con largo de número internacional plausible. Fuera de
+ *  ese rango es un error de carga y el link saldría roto, así que se prefiere no ofrecerlo. */
+function waCelularValido(raw) {
+  const n = waNormalizarCelular(raw);
+  return n.length >= 12 && n.length <= 14;
+}
+
+/** Celular cargado de un jugador ("" si no tiene config o no lo cargaron). */
+function waCelularDeJugador(jugadorId) {
+  const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+  return cfg ? String(cfg.celular || "") : "";
+}
 
 // ══════════════════════════════════════════════════════════════
 // COMPROBANTES  (reemplaza a la webapp aparte comprobantes.html)

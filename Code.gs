@@ -1783,6 +1783,9 @@ function handleAction(data) {
           const ing = {
             id: uid_gs(), mes, fecha: fechaPago,
             codRubro: f.codRubroContra, rubro: info.nombre || "", categoria: info.cat || "",
+            // El concepto es lo que el comprobante muestra como línea negativa: está duplicado en
+            // pjConceptoContra (index.html), que arma el comprobante ANTES de liquidar. Si cambia
+            // el formato acá, cambiarlo allá.
             concepto: (f.etiqueta || "Descuento") + " — " + g.jugadorNombre,
             egreso: 0, ingreso: importe, montoFinal: importe,
             cuenta, cuentaDestino: "", modoPago: medioPago,

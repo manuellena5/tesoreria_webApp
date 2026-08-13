@@ -593,6 +593,57 @@ check("y deja seleccionado el que se le pasa",    opts.includes('value="35" sele
 check("agrupa por categoría",                     opts.includes('<optgroup label="Indumentaria y Equipamiento">'));
 check("no ofrece los rubros legacy",             !opts.includes('value="16"'));
 
+// ══════════════════════════════════════════════════════════════
+// Invariante 1: el comprobante emitido ANTES de liquidar dice exactamente lo mismo que el que
+// sale después. Con un descuento con contrapartida hay dos caminos distintos para llegar al mismo
+// papel —las filas de Pagos Jugadores por un lado, el movimiento ya grabado más sus INGRESO
+// vinculados por el otro— y tienen que dar los mismos ítems, en el mismo orden.
+seccion("21 · Los dos caminos del comprobante dan los mismos ítems");
+sembrar();
+// GOMEZ: sueldo 100 y una camiseta de 20 imputada a INDUMENTARIA Y MERCH.
+app.pagosJugadores = [
+  { id: "s1", jugadorId: "j2", jugadorNombre: "GOMEZ", partidosIncluidos: [], montoBase: 100,
+    ajuste: 0, motivoAjuste: "", montoFinal: 100, estado: "pendiente", etiqueta: "Junio",
+    mes: "2026-06", tipo: "periodico", partidoId: "", codRubroContra: "" },
+  { id: "d1", jugadorId: "j2", jugadorNombre: "GOMEZ", partidosIncluidos: [], montoBase: -20,
+    ajuste: 0, motivoAjuste: "", montoFinal: -20, estado: "pendiente", etiqueta: "Camiseta",
+    mes: "2026-06", tipo: "descuento", partidoId: "", codRubroContra: "35" }
+];
+const filasPrevio = app.pagosJugadores.slice();
+const itemsPrevio = app.pjItemsDeFilas(filasPrevio);
+igual("antes de liquidar: el sueldo bruto y la camiseta en negativo",
+      itemsPrevio, [{ desc: "Junio", monto: 100 }, { desc: "Camiseta — GOMEZ", monto: -20 }]);
+igual("y el total es lo que el jugador recibe",
+      itemsPrevio.reduce((s,it) => s + it.monto, 0), 80);
+
+// Lo que queda grabado después de liquidar: EGRESO por el bruto (ItemsDetalle de una sola línea,
+// invariante 2) + INGRESO de 20 vinculado a él.
+app.movimientos = [
+  { id: "mov-egr", tipo: "EGRESO", fecha: "2026-06-20", mes: "202606", codRubro: "19",
+    rubro: "SUELDO JUGADORES", concepto: "Pago jugador GOMEZ — Junio", egreso: 100, ingreso: 0,
+    montoFinal: 100, cuenta: "MACRO", jugadorCT: "GOMEZ", partidoId: "", eventoId: "",
+    vinculos: [], itemsDetalle: [{ desc: "Junio", monto: 100 }] },
+  { id: "mov-ing", tipo: "INGRESO", fecha: "2026-06-20", mes: "202606", codRubro: "35",
+    rubro: "INDUMENTARIA Y MERCH.", concepto: "Camiseta — GOMEZ", egreso: 0, ingreso: 20,
+    montoFinal: 20, cuenta: "MACRO", jugadorCT: "GOMEZ", partidoId: "", eventoId: "",
+    vinculos: [{ egresoId: "mov-egr", monto: 20 }], itemsDetalle: [] }
+];
+app.ultimoComprobante = 0;
+const compPost = app.movToComprobante(app.movimientos[0]);
+igual("después de liquidar: los mismos ítems, en el mismo orden", compPost.items, itemsPrevio);
+igual("y el mismo total", compPost.items.reduce((s,it) => s + it.monto, 0), 80);
+
+// Invariante 2 desde el lado del comprobante: el ItemsDetalle del egreso sigue sumando su
+// MontoFinal — el descuento NO está adentro, se agrega recién al armar el papel.
+igual("el ItemsDetalle del egreso sigue sumando el MontoFinal",
+      app.movimientos[0].itemsDetalle.reduce((s,it) => s + it.monto, 0),
+      app.movimientos[0].montoFinal);
+
+// Un egreso sin contrapartidas no cambia en nada.
+app.movimientos[1].vinculos = [{ egresoId: "otro-egreso", monto: 20 }];
+igual("un vínculo que apunta a otro egreso no se cuela",
+      app.movToComprobante(app.movimientos[0]).items, [{ desc: "Junio", monto: 100 }]);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

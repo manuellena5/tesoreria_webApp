@@ -8041,6 +8041,32 @@ function pjItemsDeFila(p) {
   return [{ desc: p.motivoAjuste ? desc + " — " + p.motivoAjuste : desc, monto: montoFinal }];
 }
 
+/**
+ * Concepto del INGRESO que genera un descuento con contrapartida.
+ *
+ * Duplicado a propósito con confirmarPagosJugadores (Code.gs), por el mismo motivo que
+ * pjItemsDeFila: el comprobante emitido antes de liquidar tiene que decir exactamente lo mismo
+ * que el que sale después, y antes de liquidar no hay movimiento del cual leerlo.
+ */
+function pjConceptoContra(p) {
+  return (p.etiqueta || "Descuento") + " — " + (p.jugadorNombre || "");
+}
+
+/**
+ * Ítems del comprobante de un conjunto de filas de "Pagos Jugadores".
+ *
+ * Reproduce el orden y las descripciones con las que va a salir el comprobante una vez liquidado:
+ * primero lo que entra en el egreso, y al final los descuentos con contrapartida como líneas
+ * negativas —igual que compContraItems, que los agrega leyendo los INGRESO vinculados—. Es lo que
+ * hace que el papel que el jugador tiene en la mano diga lo mismo antes y después.
+ */
+function pjItemsDeFilas(filas) {
+  const normales = (filas || []).filter(p => !p.codRubroContra);
+  const contras  = (filas || []).filter(p =>  p.codRubroContra);
+  return normales.reduce((acc, p) => acc.concat(pjItemsDeFila(p)), [])
+    .concat(contras.map(p => ({ desc: pjConceptoContra(p), monto: -Math.abs(Number(p.montoFinal || 0)) })));
+}
+
 function renderPagoPartido() {
   const sorted = [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha));
   if (!sorted.length) return '<p class="note">Todavía no hay partidos cargados (Entidades → Partidos).</p>';
@@ -10132,13 +10158,38 @@ function movsMismoCobro(mov) {
   return (mismos.length > 1 && cuentas.size === mismos.length) ? mismos : [mov];
 }
 
+/**
+ * Descuentos con contrapartida de un egreso, como ítems NEGATIVOS del comprobante.
+ *
+ * Desde la Fase 4 el egreso del sueldo va por el bruto y el cobro del club (la camiseta, la
+ * multa) es un INGRESO aparte vinculado a él. Sin esto el comprobante diría $100 cuando el
+ * jugador recibió $80. No se pueden meter las dos líneas en ItemsDetalle: la suma de los ítems
+ * de un movimiento tiene que seguir siendo igual a su MontoFinal (de eso depende el prorrateo de
+ * Resumen > Por Partido). Así que se agregan acá, al armar el papel.
+ */
+function compContraItems(movIds) {
+  const ids = new Set(movIds.map(String));
+  return movimientos
+    .filter(m => m.tipo === "INGRESO" && (m.vinculos || []).some(v => ids.has(String(v.egresoId || ""))))
+    .map(m => ({
+      desc:  m.concepto || m.rubro || "Descuento",
+      monto: -Math.abs(Number(m.ingreso || m.montoFinal || 0))
+    }));
+}
+
 function movToComprobante(mov) {
   const esAdh  = (mov.rubro || "").toUpperCase().includes("ADHERENTE");
   // El comprobante va por el total del cobro: a quien lo recibe no le importa que una parte haya
   // entrado en efectivo y otra por Mercado Pago, le importa cuánto pagó.
   const montoDe = m => m.tipo === "INGRESO" ? Number(m.ingreso || 0) : Number(m.egreso || m.montoFinal || 0);
-  const monto  = movsMismoCobro(mov).reduce((s, m) => s + montoDe(m), 0);
+  const mismos = movsMismoCobro(mov);
+  const monto  = mismos.reduce((s, m) => s + montoDe(m), 0);
   const mesKey = mov.mes ? mov.mes.slice(0,4) + "-" + mov.mes.slice(4) : "";
+  // Movimientos con desglose (ej. pago de jugador que sumó partido + premios/ajustes)
+  // precargan un ítem por concepto en vez de uno solo con el total.
+  const items = (mov.itemsDetalle && mov.itemsDetalle.length)
+    ? mov.itemsDetalle.map(it => ({ desc: it.desc||"Concepto", monto: Number(it.monto||0) }))
+    : [{ desc: mov.concepto || mov.rubro || "Concepto", monto }];
   return {
     movId:    mov.id,
     tipoDoc:  esAdh ? "recibo" : "comprobante",
@@ -10146,10 +10197,9 @@ function movToComprobante(mov) {
     fecha:    fmtFechaDMY(mov.fecha),
     receptor: mov.jugadorCT || mov.adherente || mov.concepto || "",
     periodo:  mesLabel(mesKey),
-    // Movimientos con desglose (ej. pago de jugador que sumó partido + premios/ajustes)
-    // precargan un ítem por concepto en vez de uno solo con el total.
-    items:    (mov.itemsDetalle && mov.itemsDetalle.length) ? mov.itemsDetalle.map(it => ({ desc: it.desc||"Concepto", monto: Number(it.monto||0) }))
-             : [{ desc: mov.concepto || mov.rubro || "Concepto", monto }],
+    // Los descuentos con contrapartida van al final, en negativo: el total del comprobante pasa a
+    // ser lo que el jugador efectivamente recibió.
+    items:    items.concat(compContraItems(mismos.map(m => m.id))),
     // El agradecimiento solo tiene sentido en el recibo de adhesión.
     mensaje:  esAdh ? "Gracias por su colaboración." : "",
   };
@@ -10214,7 +10264,7 @@ function abrirComprobantePrevio(jugadorId) {
     fecha:        fmtFechaDMY(fechaPago || today()),
     receptor:     filas[0].jugadorNombre || "",
     periodo:      mes ? mesLabel(mes) : "",
-    items:        filas.reduce((acc, p) => acc.concat(pjItemsDeFila(p)), []),
+    items:        pjItemsDeFilas(filas),
     mensaje:      "",
   };
   renderComprobanteModal();

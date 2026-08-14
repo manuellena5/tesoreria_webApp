@@ -736,7 +736,9 @@ igual("los ítems son los de las filas, con la contrapartida en negativo",
       compLiq.items, [{ desc: "Junio", monto: 80000 }, { desc: "Multa — GOMEZ", monto: -8000 }]);
 igual("el total del comprobante es el neto",
       compLiq.items.reduce((s,it) => s + it.monto, 0), app.pjLiqNeto());
-check("los ítems no se editan a mano en este camino", compLiq.itemsBloqueados);
+// Los ítems se editan a mano —el comprobante es el papel, no el asiento—, pero el modal lleva
+// contra qué comparar para poder avisar si el total se despega de lo que se va a registrar.
+igual("informa el neto que se va a registrar", compLiq.netoEsperado, app.pjLiqNeto());
 igual("y el botón de volver apunta al jugador", compLiq.volverALiquidar, "j2");
 igual("la fecha del comprobante es la del pago elegido", compLiq.fecha, "20/06/2026");
 

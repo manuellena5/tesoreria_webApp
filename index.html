@@ -8819,7 +8819,10 @@ function pjLiqComprobanteData() {
   const mes   = (filas.find(p => p.mes) || {}).mes || "";
   return {
     movId: "", jugadorId: pjLiqData.jugadorId, sinConfirmar: true,
-    itemsBloqueados: true, volverALiquidar: pjLiqData.jugadorId,
+    volverALiquidar: pjLiqData.jugadorId,
+    // Contra esto se compara el total si se editan los ítems a mano: el papel se puede retocar,
+    // pero el movimiento se graba por el desglose de la liquidación (ver compAvisoTotal).
+    netoEsperado: pjLiqNeto(),
     tipoDoc: "comprobante",
     numero:  (Number(ultimoComprobante) || 0) + 1,
     fecha:   fmtFechaDMY(pjLiqData.fechaPago),
@@ -10595,11 +10598,11 @@ function abrirComprobantePrevio(jugadorId, opciones) {
     movId:        "",
     jugadorId,
     sinConfirmar: filas.some(p => p.estado === "pendiente"),
-    // Desde el flujo de liquidación los ítems NO se editan a mano: se arman de las filas de Pagos
-    // Jugadores, que son las que después se registran. Editarlos acá produciría un comprobante que
-    // no coincide con el movimiento (ver el modal de liquidación).
-    itemsBloqueados: !!(opciones && opciones.desdeLiquidacion),
     volverALiquidar: (opciones && opciones.desdeLiquidacion) ? jugadorId : "",
+    // Desde la liquidación los ítems se pueden editar, pero se avisa si el total se despega de lo
+    // que se va a registrar: el papel es editable, el asiento sale del desglose (ver compAvisoTotal).
+    netoEsperado: (opciones && opciones.desdeLiquidacion)
+      ? filas.reduce((s,p) => s + Number(p.montoFinal||0), 0) : null,
     tipoDoc:      "comprobante",
     numero:       (Number(ultimoComprobante) || 0) + 1,
     fecha:        fmtFechaDMY((opciones && opciones.fecha) || fechaPago || today()),
@@ -10651,17 +10654,9 @@ function renderComprobanteModal() {
           </div>
           <div class="field">
             <label>Detalle</label>
-            ${d.itemsBloqueados ? `
-              <div id="comp-items">${d.items.map(it => `
-                <div class="entity-item" style="gap:6px">
-                  <span style="flex:1;min-width:0">${esc(it.desc || "Concepto")}</span>
-                  <span class="mono">${fmtComp(it.monto)}</span>
-                </div>`).join("")}</div>
-              <p class="note" style="margin:6px 0 0">El detalle sale de lo que se está liquidando y no se edita acá: si lo cambiaras, el papel diría una cosa y el movimiento otra. Para corregirlo, editá el desglose en el modal de liquidación.</p>
-            ` : `
-              <div id="comp-items">${d.items.map(it => compItemRowHTML(it)).join("")}</div>
-              <button class="btn-secondary" style="margin-top:8px" onclick="compAgregarItem()">+ Agregar concepto</button>
-            `}
+            <div id="comp-items">${d.items.map(it => compItemRowHTML(it)).join("")}</div>
+            <button class="btn-secondary" style="margin-top:8px" onclick="compAgregarItem()">+ Agregar concepto</button>
+            <p class="note" id="comp-aviso-total" style="display:none;border-left:3px solid var(--warn);padding-left:8px;margin:8px 0 0"></p>
           </div>
           <div class="field">
             <label>Mensaje (opcional)</label>
@@ -10800,9 +10795,6 @@ function compOnInput() {
   compData.receptor = (document.getElementById("comp-receptor")?.value || "").trim();
   compData.periodo  = (document.getElementById("comp-periodo")?.value || "").trim();
   compData.mensaje  = (document.getElementById("comp-mensaje")?.value || "").trim();
-  // Con los ítems bloqueados no hay inputs que leer: releerlos los borraría. Receptor, fecha,
-  // período y mensaje se siguen editando, que no afectan montos.
-  if (compData.itemsBloqueados) { compRefreshDoc(); return; }
   compData.items    = [...document.querySelectorAll(".comp-item-row")].map(row => ({
     desc:  (row.querySelector(".comp-item-desc")?.value || "").trim(),
     monto: parseFloat(row.querySelector(".comp-item-monto")?.value || "0") || 0,
@@ -10814,7 +10806,31 @@ function compRefreshDoc() {
   const doc = document.getElementById("comprobante-doc");
   if (!doc || !compData) return;
   doc.innerHTML = comprobanteDocHTML(compData);
+  compAvisoTotal();
   compFitPreview();
+}
+
+/**
+ * Aviso cuando el total del comprobante dejó de coincidir con lo que se va a registrar.
+ *
+ * Los ítems se editan libremente: el comprobante es el papel, no el asiento. Pero editarlos NO
+ * cambia el movimiento —eso sale del desglose de la liquidación—, así que una diferencia tiene que
+ * verse ANTES de mandarlo, no descubrirse cuando el jugador reclama. Para que el movimiento diga
+ * otra cosa hay que corregir el desglose, que es lo que el aviso señala.
+ *
+ * Sólo aplica cuando el comprobante viene del flujo de liquidación (es el único que sabe cuánto se
+ * va a registrar); emitido suelto desde un movimiento ya grabado, no hay nada contra qué comparar.
+ */
+function compAvisoTotal() {
+  const el = document.getElementById("comp-aviso-total");
+  if (!el || !compData) return;
+  const esperado = compData.netoEsperado;
+  const total    = (compData.items || []).reduce((s, it) => s + Number(it.monto || 0), 0);
+  if (esperado == null || Math.abs(total - esperado) < 0.005) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.innerHTML = "El total del comprobante (<b>" + esc(fmtComp(total)) + "</b>) no coincide con lo que se " +
+    "va a registrar (<b>" + esc(fmtComp(esperado)) + "</b>). El movimiento se graba por el segundo — " +
+    "si la diferencia no es a propósito, corregí el desglose en la liquidación.";
 }
 
 // El documento se arma siempre a COMP_ANCHO px reales (así la imagen exportada

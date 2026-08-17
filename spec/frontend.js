@@ -937,6 +937,101 @@ check("y aparece seleccionado en las opciones", optsMes.includes('value="2026-06
 igual("mesesEntre cuenta cruzando el año", app.mesesEntre("2025-11", "2026-02"), 3);
 igual("y hacia atrás da negativo",         app.mesesEntre("2026-02", "2025-11"), -3);
 
+// ══════════════════════════════════════════════════════════════
+// Cada fila de Transferencias tiene que tener exactamente tantas celdas como el encabezado. Con
+// una de menos el navegador no avisa nada: corre el resto de la fila una columna a la izquierda y
+// el premio aparece bajo "Monto", el total bajo "Premios/Ajustes" y el botón bajo "Alias/CBU".
+seccion("30 · La tabla de Transferencias no se desalinea");
+
+/** Celdas de una fila de HTML, contando el colspan de cada una. */
+function celdas(trHtml) {
+  let n = 0, m;
+  const re = /<t[dh]\b([^>]*)>/g;
+  while ((m = re.exec(trHtml))) {
+    const cs = /colspan="(\d+)"/.exec(m[1]);
+    n += cs ? Number(cs[1]) : 1;
+  }
+  return n;
+}
+/** [celdasDelHeader, [celdasDeCadaFilaDeJugador]] de lo que devuelve renderTransferencias. */
+function anchoTabla() {
+  const html  = app.renderTransferencias();
+  const filas = html.split(/<tr\b/).slice(1);
+  const head  = celdas(filas[0]);
+  const cuerpo = filas.slice(1).filter(f => f.includes("data-jug=")).map(celdas);
+  return [head, cuerpo];
+}
+
+sembrar();
+app.pjSoloPendientes = false;
+
+// El caso de la captura: ninguna fecha tildada. El encabezado cae en una sola columna "Monto" y
+// el jugador por partido no emitía ninguna.
+app.pjPartidosSel = [];
+let [head, cuerpo] = anchoTabla();
+igual("sin fechas tildadas el encabezado tiene 6 columnas", head, 6);
+check("y todas las filas tienen esas mismas 6",
+      cuerpo.length > 0 && cuerpo.every(n => n === head), `head=${head} filas=${cuerpo.join(",")}`);
+
+// Con una fecha, y con dos: el jugador mensual usa colspan y el por partido una celda por fecha.
+app.pjPartidosSel = ["p1"];
+[head, cuerpo] = anchoTabla();
+check("con una fecha tildada siguen cuadrando",
+      cuerpo.length > 0 && cuerpo.every(n => n === head), `head=${head} filas=${cuerpo.join(",")}`);
+app.pjPartidosSel = ["p1", "p2"];
+[head, cuerpo] = anchoTabla();
+igual("con dos fechas el encabezado crece a 7", head, 7);
+check("y las filas también",
+      cuerpo.length > 0 && cuerpo.every(n => n === head), `head=${head} filas=${cuerpo.join(",")}`);
+
+// ══════════════════════════════════════════════════════════════
+// El filtro por fecha decía estar y no estaba: se aplicaba sólo a los premios ya cobrados y los
+// pendientes se colaban todos. Con "La Emilia" tildado aparecía el gol de otra fecha, y "Tildar
+// todos los premios" se lo llevaba puesto en esa liquidación.
+seccion("31 · Los premios se acotan a las fechas tildadas");
+sembrar();
+// f-prem1 es de p1; f-prem2 no tiene partido; se agrega uno de p2 y uno ya cobrado de p1.
+app.pagosJugadores.push(
+  { id: "f-prem3", jugadorId: "j1", jugadorNombre: "PEREZ", partidosIncluidos: [], montoFinal: 7000,
+    estado: "pendiente", etiqueta: "Gol p2", mes: "2026-06", tipo: "premio", partidoId: "p2" },
+  { id: "f-prem4", jugadorId: "j1", jugadorNombre: "PEREZ", partidosIncluidos: [], montoFinal: 2000,
+    estado: "pagado",   etiqueta: "Cobrado p1", mes: "2026-06", tipo: "premio", partidoId: "p1" });
+
+app.pjPartidosSel = ["p1"];
+let vistos = app.pjPremiosDeVista("j1").map(p => p.id);
+check("el premio de la fecha tildada está",        vistos.includes("f-prem1"), vistos.join(","));
+check("el ya cobrado de esa fecha también, para poder consultarlo", vistos.includes("f-prem4"), vistos.join(","));
+check("el premio sin partido no lo esconde ninguna fecha", vistos.includes("f-prem2"), vistos.join(","));
+check("PERO el de la otra fecha NO aparece",      !vistos.includes("f-prem3"), vistos.join(","));
+
+app.pjPartidosSel = ["p2"];
+vistos = app.pjPremiosDeVista("j1").map(p => p.id);
+check("al tildar la otra fecha, aparece el suyo",  vistos.includes("f-prem3"), vistos.join(","));
+check("y se va el de p1",                         !vistos.includes("f-prem1"), vistos.join(","));
+check("el ya cobrado de p1 tampoco se cuela",     !vistos.includes("f-prem4"), vistos.join(","));
+
+app.pjPartidosSel = ["p1", "p2"];
+vistos = app.pjPremiosDeVista("j1").map(p => p.id);
+check("con las dos tildadas están los dos", vistos.includes("f-prem1") && vistos.includes("f-prem3"), vistos.join(","));
+
+// Sin ninguna fecha tildada no hay contra qué filtrar: se ven todos los pendientes, que es el modo
+// "cobrar premios sueltos". Los ya cobrados sí se van: no hay fecha que los justifique en pantalla.
+app.pjPartidosSel = [];
+vistos = app.pjPremiosDeVista("j1").map(p => p.id);
+check("sin fechas tildadas se ven todos los pendientes",
+      ["f-prem1","f-prem2","f-prem3"].every(id => vistos.includes(id)), vistos.join(","));
+check("y ninguno ya cobrado", !vistos.includes("f-prem4"), vistos.join(","));
+
+// Lo que el filtro esconde se cuenta para poder avisarlo: un premio que desaparece sin decir por
+// qué no se cobra nunca.
+app.pjPartidosSel = ["p1"];
+igual("se avisa el premio de la fecha no tildada",
+      app.pjPremiosOcultosPorFecha().map(p => p.id), ["f-prem3"]);
+app.pjPartidosSel = ["p1", "p2"];
+igual("con todas las fechas tildadas no hay nada oculto", app.pjPremiosOcultosPorFecha(), []);
+app.pjPartidosSel = [];
+igual("y sin fechas tampoco: ahí se muestran todos", app.pjPremiosOcultosPorFecha(), []);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

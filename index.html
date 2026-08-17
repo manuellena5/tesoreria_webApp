@@ -8118,14 +8118,41 @@ function pjPremiosPendientes(jugadorId) {
     && pjTipoFila(p) === "premio");
 }
 
-/** Premios que muestra la tabla de Transferencias: los pendientes, más los ya cobrados del
- *  partido que se está mirando. Los pagados quedan a la vista (con ✓, como las columnas de
- *  partido) en vez de desaparecer al confirmar: si no, después de pagar no hay forma de ver
- *  qué premios entraron. Se acotan a los partidos tildados para que la celda no acumule todo
- *  el historial del jugador. */
+/**
+ * Premios que muestra la tabla de Transferencias, acotados a las fechas tildadas.
+ *
+ * Los pagados de esas fechas quedan a la vista (con ✓, como las columnas de partido) en vez de
+ * desaparecer al confirmar: si no, después de pagar no hay forma de ver qué premios entraron.
+ *
+ * El filtro por fecha antes decía estar y no estaba: se aplicaba sólo a los premios ya cobrados, y
+ * los pendientes se colaban todos. Con "La Emilia" tildado aparecía el gol de otra fecha, y
+ * "Tildar todos los premios" se lo llevaba puesto en esa liquidación.
+ *
+ * Dos excepciones, las dos porque el premio no tendría dónde cobrarse nunca:
+ *  - Sin ninguna fecha tildada no hay contra qué filtrar: se muestran todos los pendientes.
+ *  - Un premio sin partido asociado no pertenece a ninguna fecha, así que ninguna lo esconde.
+ * Los pendientes que el filtro deja afuera se cuentan y se avisan en la tabla (ver
+ * renderTransferencias): un premio que desaparece sin decir por qué no se cobra nunca.
+ */
 function pjPremiosDeVista(jugadorId) {
-  return pagosJugadores.filter(p => p.jugadorId === jugadorId && pjTipoFila(p) === "premio"
-    && (p.estado === "pendiente" || (p.partidoId && (pjPartidosSel || []).includes(p.partidoId))));
+  const sel = pjPartidosSel || [];
+  return pagosJugadores.filter(p => {
+    if (p.jugadorId !== jugadorId || pjTipoFila(p) !== "premio") return false;
+    if (!p.partidoId || !sel.length) return p.estado === "pendiente";
+    return sel.includes(p.partidoId);
+  });
+}
+
+/** Premios pendientes que la selección de fechas está dejando fuera de la tabla. Se avisan en vez
+ *  de desaparecer en silencio. Sólo los de jugadores que la tabla podría listar: un premio de
+ *  alguien que ya no está en Config Jugadores no se puede cobrar desde acá de ninguna forma. */
+function pjPremiosOcultosPorFecha() {
+  const sel = pjPartidosSel || [];
+  if (!sel.length) return [];
+  return pagosJugadores.filter(p =>
+    p.estado === "pendiente" && pjTipoFila(p) === "premio"
+    && p.partidoId && !sel.includes(p.partidoId)
+    && configJugadores.some(c => c.idJugador === p.jugadorId));
 }
 
 /** Lo acumulado pendiente que NO son premios (sueldo periódico neto de descuentos). */
@@ -9582,6 +9609,12 @@ function renderTransferencias() {
     let cols;
     if (info.periodico) {
       cols = `<td class="mono" colspan="${partidosSel.length||1}">${fmtSigned(sueldoNeto)} <span class="pj-acumulado">acumulado</span></td>`;
+    } else if (!partidosSel.length) {
+      // Sin ninguna fecha tildada el encabezado cae en una sola columna "Monto" (ver partidoCols),
+      // así que la fila tiene que emitir esa celda igual. Sin ella el jugador por partido quedaba
+      // una columna corta y toda su fila se corría: el premio aparecía bajo "Monto", el total bajo
+      // "Premios/Ajustes" y el botón de liquidar bajo "Alias/CBU".
+      cols = `<td class="mono">—</td>`;
     } else {
       cols = partidosSel.map(p => {
         const fila = info.porPartido[p.id];
@@ -9629,6 +9662,18 @@ function renderTransferencias() {
 
   const partidoCols = partidosSel.map(p => `<th>${esc(p.rival)}<br>${p.fecha?p.fecha.slice(8)+"/"+p.fecha.slice(5,7):""}</th>`).join("");
 
+  // Los premios de fechas no tildadas no se muestran, pero tampoco se esconden en silencio: sin
+  // este aviso, un premio de una fecha vieja no se cobra nunca y nadie sabe que existe.
+  const ocultosPremio = pjPremiosOcultosPorFecha();
+  const fechasOcultas = [...new Set(ocultosPremio.map(p => pjPartidoLabel(p.partidoId)))];
+  const avisoPremiosOcultos = ocultosPremio.length
+    ? `<p class="note">${ocultosPremio.length === 1
+         ? "Hay 1 premio pendiente de otra fecha"
+         : `Hay ${ocultosPremio.length} premios pendientes de otras fechas`}
+         (${esc(fechasOcultas.join(", "))}) que no se muestran acá.
+         Tildá esa fecha arriba para poder cobrarlos.</p>`
+    : "";
+
   return `
     <div class="pj-chip-row">${chips}</div>
     <div class="sum-grid three">
@@ -9645,7 +9690,7 @@ function renderTransferencias() {
         Sólo pendientes de pagar
       </label>
       ${pjSoloPendientes && ocultos ? `<span class="pj-acumulado">${ocultos} jugador${ocultos!==1?"es":""} al día sin mostrar</span>` : ""}
-    </div>${totalJugadores && !jugadorIds.length ? `<p class="note">No queda nada pendiente para los partidos seleccionados.</p>` : ""}
+    </div>${totalJugadores && !jugadorIds.length ? `<p class="note">No queda nada pendiente para los partidos seleccionados.</p>` : ""}${avisoPremiosOcultos}
     <div class="pj-table-wrap pj-transf-wrap">
       <table class="pj-table" id="pj-transf-table">
         <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Liquidación</th></tr></thead>

@@ -7,3 +7,7 @@ PROMPT_premios_descuentos_pagos.md
 # comodín y no un nombre puntual (ya se colaron dos al repo por listarlos de a uno).
 .fuse_hidden*
 PROMPT_desglose_ajuste_comprobante.md
+*.md
+PROMPT_liquidacion_por_jugador.md
+PROMPT_pagos_multipartido.md
+PROMPT_liquidacion_por_jugador.md

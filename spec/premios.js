@@ -10,6 +10,8 @@
  *  5. Nada de lo anterior rompió deleteMov ni checkIntegridad.
  *  6. Un descuento con CodRubroContra NO netea: el egreso queda por el sueldo bruto y el cobro
  *     del club sale como un ingreso propio, vinculado al egreso y sin partido.
+ *  7. Un descuento con MovimientoOrigenID (adelanto ya entregado) NO crea ninguna contabilidad:
+ *     el egreso ya está asentado y el vínculo es sólo documental.
  * ══════════════════════════════════════════════════════════════ */
 
 const H = require("./harness.js");
@@ -34,7 +36,9 @@ const COLS = {
   ADH: ["ID","Nombre","Activo","CuotaMensual","CuotasAnuales"],
   PAG: ["ID","AdherenteID","AdherenteNombre","Mes","Estado","MovimientoID","timestamp"]
 };
-const PJ_IX = { ESTADO: 8, MOV_ID: 12, TIPO: 14, PARTIDO_ID: 15 }; // índices 0-based en la fila
+// Índices 0-based en la fila. MOV_ID es el movimiento que la liquidación GENERÓ con esta fila;
+// MOV_ORIGEN es el que la JUSTIFICA (el egreso del adelanto que ya se le entregó). Van al revés.
+const PJ_IX = { ESTADO: 8, MOV_ID: 12, TIPO: 14, PARTIDO_ID: 15, CONTRA: 16, MOV_ORIGEN: 17 };
 
 /** Planilla base: dos jugadores (uno por partido, uno mensual) y un partido. */
 function sembrar() {
@@ -659,5 +663,206 @@ const porJugador13 = {};
 movRows().filter(m => m[18] === "EGRESO").forEach(m => { porJugador13[m[24]] = m[3]; });
 igual("con dos jugadores el override se ignora: j1 usa su ficha (vacía → 19)", porJugador13["j1"], "19");
 igual("y j2 la suya (18)",                                                      porJugador13["j2"], "18");
+
+// ══════════════════════════════════════════════════════════════
+// El punto entero de esta fase: descontar un adelanto YA REGISTRADO no genera contabilidad nueva.
+// El circuito completo: el 1/8 se le dan $20 y se cargan como EGRESO rubro 19; a fin de mes se
+// liquida 100 − 20 → EGRESO 80. Total del rubro 19 en el mes: 20 + 80 = 100. Si el descuento
+// además generara un movimiento, el rubro sumaría 120 y el jugador figuraría cobrando de más.
+seccion("14 · El adelanto se marca al cargarlo, en un solo POST");
+
+/** El EGRESO del adelanto, tal como lo manda el formulario de movimientos. */
+function altaAdelanto(monto, concepto, descontarDelSueldo) {
+  return handleAction({ action: "saveMov",
+    mov: { id: "", mes: "202606", fecha: "2026-06-01", codRubro: "19", concepto,
+           egreso: monto, cuenta: "MACRO", modoPago: "TRANSFERENCIA",
+           jugadorCT: "PEREZ", jugadorId: "j2", tipo: "EGRESO" },
+    descontarDelSueldo });
+}
+const descuentos = () => pjRows().filter(r => r[PJ_IX.TIPO] === "descuento");
+
+sembrar();
+const rAd = altaAdelanto(20, "Adelanto de sueldo", { mes: "2026-06" });
+check("el alta sale bien", rAd.ok, JSON.stringify(rAd));
+igual("se creó UNA fila de descuento", descuentos().length, 1);
+const filaAd = descuentos()[0];
+igual("con el monto en negativo",                Number(filaAd[7]), -20);
+igual("y el montoBase también",                  Number(filaAd[4]), -20);
+igual("tipada como descuento",                   filaAd[PJ_IX.TIPO], "descuento");
+igual("pendiente",                               filaAd[PJ_IX.ESTADO], "pendiente");
+igual("del jugador del movimiento",              filaAd[1], "j2");
+igual("con el concepto como etiqueta",           filaAd[11], "Adelanto de sueldo");
+igual("en el mes elegido",                       filaAd[13], "2026-06");
+igual("apuntando al movimiento recién creado",   filaAd[PJ_IX.MOV_ORIGEN], rAd.id);
+igual("sin rubro de contrapartida",              filaAd[PJ_IX.CONTRA], "");
+igual("y sin MovimientoID: todavía no se liquidó nada", filaAd[PJ_IX.MOV_ID], "");
+igual("el movimiento del adelanto es UNO SOLO",  movRows().length, 1);
+check("la respuesta trae la fila entera para el front",
+      rAd.descuento && rAd.descuento.id === filaAd[0] && rAd.descuento.montoFinal === -20,
+      JSON.stringify(rAd.descuento));
+igual("listPagosJugadores la devuelve con el link",
+      handleAction({ action: "listPagosJugadores" }).pagosJugadores[0].movimientoOrigenId, rAd.id);
+
+// Regresión: sin la marca, saveMov tiene que seguir haciendo exactamente lo de antes.
+sembrar();
+altaAdelanto(20, "Adelanto de sueldo");
+igual("sin la marca no se crea ninguna fila", pjRows().length, 0);
+igual("y el movimiento se guarda igual",      movRows().length, 1);
+
+// El mes es opcional: sin él cae en el de la fecha del movimiento, que es lo que el formulario
+// propone por defecto.
+sembrar();
+altaAdelanto(20, "Adelanto", { mes: "" });
+igual("sin mes elegido, se imputa al de la fecha del movimiento", descuentos()[0][13], "2026-06");
+
+// Un movimiento sin jugador identificable no puede generar la fila: una fila con el nombre suelto
+// no la arrastra un renombre y queda huérfana. Avisa en vez de inventarla.
+sembrar();
+const rSinJug = handleAction({ action: "saveMov",
+  mov: { id: "", mes: "202606", fecha: "2026-06-01", codRubro: "19", concepto: "Adelanto",
+         egreso: 20, cuenta: "MACRO", tipo: "EGRESO", jugadorCT: "NO EXISTE" },
+  descontarDelSueldo: { mes: "2026-06" } });
+check("el movimiento se guarda igual", rSinJug.ok, JSON.stringify(rSinJug));
+igual("pero no se inventa la fila", pjRows().length, 0);
+check("y avisa por qué", (rSinJug.avisoDescuento || "").indexOf("NO EXISTE") >= 0, rSinJug.avisoDescuento);
+
+// Movimiento viejo sin JugadorID: se resuelve por nombre contra la hoja Jugadores. El nombre sirve
+// para ENCONTRAR el id, nunca para reemplazarlo.
+sembrar();
+handleAction({ action: "saveMov",
+  mov: { id: "", mes: "202606", fecha: "2026-06-01", codRubro: "18", concepto: "Adelanto",
+         egreso: 20, cuenta: "MACRO", tipo: "EGRESO", jugadorCT: "PEREZ" },
+  descontarDelSueldo: { mes: "2026-06" } });
+igual("sin JugadorID, el jugador se resuelve por nombre", descuentos()[0][1], "j2");
+
+// ══════════════════════════════════════════════════════════════
+seccion("15 · Liquidar con el adelanto descontado no crea contabilidad nueva");
+sembrar();
+const rAd15 = altaAdelanto(20, "Adelanto de sueldo", { mes: "2026-06" });
+const idDesc15   = descuentos()[0][0];
+const idSueldo15 = altaSueldo(100);
+const r15 = confirmar([idSueldo15, idDesc15]);
+check("la liquidación sale bien", r15.ok, JSON.stringify(r15));
+igual("hay DOS movimientos: el adelanto y el sueldo, ninguno más", movRows().length, 2);
+igual("y ninguno es un INGRESO", movRows().filter(m => m[18] === "INGRESO").length, 0);
+const egr15 = movRows().find(m => m[0] !== rAd15.id);
+igual("el egreso del sueldo sale por el bruto MENOS el adelanto", Number(egr15[7]), 80);
+igual("los ítems cierran con ese neto",
+      items(egr15).reduce((s,it) => s + Number(it.monto||0), 0), 80);
+igual("el total del rubro 19 en el mes es el sueldo entero, ni más ni menos",
+      movRows().filter(m => m[3] === "19").reduce((s,m) => s + Number(m[7]||0), 0), 100);
+igual("el descuento queda pagado contra el egreso del sueldo", pjPorId(idDesc15)[PJ_IX.MOV_ID], egr15[0]);
+igual("y conserva el link a su adelanto",  pjPorId(idDesc15)[PJ_IX.MOV_ORIGEN], rAd15.id);
+
+// ══════════════════════════════════════════════════════════════
+seccion("16 · Rubro de contrapartida y movimiento de origen son excluyentes");
+sembrar();
+const r16 = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [], montoBase: -20, ajuste: 0,
+  motivoAjuste: "", montoFinal: -20, estado: "pendiente", etiqueta: "Camiseta", mes: "2026-06",
+  tipo: "descuento", partidoId: "", codRubroContra: "35", movimientoOrigenId: "mX"
+}});
+check("los dos juntos se rechazan", !r16.ok, JSON.stringify(r16));
+igual("y no se escribió nada",      pjRows().length, 0);
+check("cada uno por separado sí entra",
+      handleAction({ action: "savePagoJugador", pago: {
+        jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [], montoBase: -20, ajuste: 0,
+        motivoAjuste: "", montoFinal: -20, estado: "pendiente", etiqueta: "Camiseta", mes: "2026-06",
+        tipo: "descuento", partidoId: "", codRubroContra: "35"
+      }}).ok);
+
+// ══════════════════════════════════════════════════════════════
+seccion("17 · Borrar el adelanto deja vivo el descuento, sin referencia colgada");
+sembrar();
+const rAd17 = altaAdelanto(20, "Adelanto de sueldo", { mes: "2026-06" });
+const idDesc17 = descuentos()[0][0];
+
+// Antes de borrar: si el link apuntara a la nada, checkIntegridad tiene que gritarlo. Se prueba
+// primero con un link falso, para verificar que el chequeo nuevo realmente detecta algo.
+SHEETS[S.PJ].set(2, PJ_IX.MOV_ORIGEN + 1, "m-inexistente");
+const rIntColgado = handleAction({ action: "checkIntegridad" });
+check("un MovimientoOrigenID colgado se reporta como error",
+      rIntColgado.problemas.some(p => p.nivel === "error" && p.detalle.indexOf("movimiento que ya no existe") >= 0),
+      JSON.stringify(rIntColgado.problemas));
+check("con el nombre del jugador y el monto, para poder encontrarlo",
+      rIntColgado.problemas.some(p => p.detalle.indexOf("PEREZ") >= 0 && p.detalle.indexOf("20") >= 0),
+      JSON.stringify(rIntColgado.problemas));
+SHEETS[S.PJ].set(2, PJ_IX.MOV_ORIGEN + 1, rAd17.id);   // se restaura el link bueno
+
+const rDel17 = handleAction({ action: "deleteMov", id: rAd17.id });
+check("el borrado sale bien", rDel17.ok, JSON.stringify(rDel17));
+igual("informa cuántos descuentos quedaron sin link", (rDel17.revertido.desvinculados||[]).length, 1);
+igual("el descuento SIGUE existiendo", pjRows().filter(r => r[0] === idDesc17).length, 1);
+igual("con su monto intacto",          Number(pjPorId(idDesc17)[7]), -20);
+igual("pero sin la referencia colgada", pjPorId(idDesc17)[PJ_IX.MOV_ORIGEN], "");
+igual("y checkIntegridad ya no reporta nada", handleAction({ action: "checkIntegridad" }).errores, 0);
+
+// Para los links que quedaron colgados con una versión anterior a este cascade: repararlos limpia
+// la referencia sin tocar el descuento, que sigue siendo plata que el jugador debe.
+SHEETS[S.PJ].set(2, PJ_IX.MOV_ORIGEN + 1, "m-inexistente");
+const rRep = handleAction({ action: "repararPagosHuerfanos" });
+igual("repararPagosHuerfanos informa el link limpiado", (rRep.desvinculados||[]).length, 1);
+igual("el descuento sigue cargado",   pjRows().filter(r => r[0] === idDesc17).length, 1);
+igual("con su monto",                 Number(pjPorId(idDesc17)[7]), -20);
+igual("y sin la referencia",          pjPorId(idDesc17)[PJ_IX.MOV_ORIGEN], "");
+igual("no vuelve a reparar nada",     (handleAction({ action: "repararPagosHuerfanos" }).desvinculados||[]).length, 0);
+
+// ══════════════════════════════════════════════════════════════
+seccion("18 · Editar el movimiento del adelanto sincroniza su descuento");
+const editarAdelanto = (movId, campos, descontarDelSueldo) => handleAction({ action: "updateMov",
+  mov: Object.assign({ id: movId, mes: "202606", fecha: "2026-06-01", codRubro: "19",
+                       concepto: "Adelanto de sueldo", egreso: 20, cuenta: "MACRO",
+                       jugadorCT: "PEREZ", jugadorId: "j2", tipo: "EGRESO" }, campos),
+  descontarDelSueldo });
+
+// Destildado → tildado: se crea.
+sembrar();
+const rAd18 = altaAdelanto(20, "Adelanto de sueldo");
+igual("sin marca no hay descuento", descuentos().length, 0);
+const rTildar = editarAdelanto(rAd18.id, {}, { mes: "2026-06" });
+check("tildarla al editar sale bien", rTildar.ok, JSON.stringify(rTildar));
+igual("y crea la fila", descuentos().length, 1);
+igual("apuntando al movimiento", descuentos()[0][PJ_IX.MOV_ORIGEN], rAd18.id);
+
+// Sigue tildado y cambia el monto/concepto: la fila pendiente se actualiza para que no queden
+// desalineados (el jugador vería descontado un monto que no es el del adelanto).
+const rCambio = editarAdelanto(rAd18.id, { egreso: 35, concepto: "Adelanto (corregido)" }, { mes: "2026-06" });
+check("el cambio sale bien", rCambio.ok, JSON.stringify(rCambio));
+igual("no se duplicó la fila", descuentos().length, 1);
+igual("el descuento sigue el monto nuevo", Number(descuentos()[0][7]), -35);
+igual("y el concepto nuevo",               descuentos()[0][11], "Adelanto (corregido)");
+check("la respuesta devuelve la fila actualizada",
+      rCambio.descuento && rCambio.descuento.montoFinal === -35, JSON.stringify(rCambio.descuento));
+
+// Tildado → destildado con el descuento pendiente: se borra.
+const idDesc18 = descuentos()[0][0];
+const rDestildar = editarAdelanto(rAd18.id, { egreso: 35 }, false);
+check("destildarla sale bien", rDestildar.ok, JSON.stringify(rDestildar));
+igual("la fila se borró",      descuentos().length, 0);
+igual("y se avisa cuál, para sacarla de la vista sin refrescar", rDestildar.descuentoBorradoId, idDesc18);
+
+// Editar un movimiento cualquiera (sin mandar el campo) no toca ningún descuento.
+sembrar();
+const rAd18b = altaAdelanto(20, "Adelanto", { mes: "2026-06" });
+editarAdelanto(rAd18b.id, { concepto: "Otra cosa" });
+igual("omitir el campo deja el descuento donde estaba", descuentos().length, 1);
+
+// ══════════════════════════════════════════════════════════════
+seccion("19 · Un descuento ya liquidado no se puede desmarcar");
+sembrar();
+const rAd19 = altaAdelanto(20, "Adelanto de sueldo", { mes: "2026-06" });
+const idDesc19 = descuentos()[0][0];
+confirmar([altaSueldo(100), idDesc19]);
+igual("el descuento quedó pagado", pjPorId(idDesc19)[PJ_IX.ESTADO], "pagado");
+
+const movsAntes19 = movRows().length;
+const rNo = editarAdelanto(rAd19.id, {}, false);
+check("destildar la marca se rechaza", !rNo.ok, JSON.stringify(rNo));
+check("el error dice que ya se liquidó", (rNo.error||"").indexOf("ya se aplicó en la liquidación") >= 0, rNo.error);
+igual("el descuento sigue ahí",   pjRows().filter(r => r[0] === idDesc19).length, 1);
+igual("y sigue pagado",           pjPorId(idDesc19)[PJ_IX.ESTADO], "pagado");
+igual("no se tocó ningún movimiento", movRows().length, movsAntes19);
+igual("y el movimiento del adelanto conserva su concepto original",
+      movRows().find(m => m[0] === rAd19.id)[6], "Adelanto de sueldo");
 
 resumen();

@@ -790,6 +790,153 @@ check("un código de otra categoría se agrega a la lista en vez de ignorarse",
       app.opcionesRubroSueldoHTML("35").includes('value="35" selected'),
       app.opcionesRubroSueldoHTML("35"));
 
+// ══════════════════════════════════════════════════════════════
+// El camino de recuperación: buscar el adelanto desde el modal de descuento, para los egresos que
+// se cargaron sin marcar "Descontar del sueldo". La lista sólo sirve si está bien filtrada — con
+// las liquidaciones adentro ofrece el sueldo del mes pasado como si fuera un adelanto.
+seccion("27 · Candidatos a movimiento de origen de un descuento");
+
+function sembrarMovs() {
+  sembrar();
+  app.jugadores = [{ id: "j1", nombre: "PEREZ" }, { id: "j2", nombre: "GOMEZ" }];
+  app.movimientos = [
+    // Adelantos de GOMEZ, uno reciente y uno viejo.
+    { id: "m-ade1", fecha: "2026-06-10", tipo: "EGRESO", codRubro: "19", concepto: "Adelanto",
+      egreso: 20000, montoFinal: 20000, jugadorCT: "GOMEZ", jugadorId: "j2" },
+    { id: "m-ade2", fecha: "2026-02-02", tipo: "EGRESO", codRubro: "19", concepto: "Adelanto viejo",
+      egreso: 5000, montoFinal: 5000, jugadorCT: "GOMEZ", jugadorId: "j2" },
+    // Movimiento viejo sin JugadorID: se reconoce por el nombre, como hace movEsDeEntidad.
+    { id: "m-viejo", fecha: "2026-06-05", tipo: "EGRESO", codRubro: "19", concepto: "Adelanto sin ID",
+      egreso: 3000, montoFinal: 3000, jugadorCT: "gomez", jugadorId: "" },
+    // La liquidación del mes pasado: es un EGRESO suyo, pero NO es un adelanto.
+    { id: "m-liq", fecha: "2026-06-01", tipo: "EGRESO", codRubro: "19", concepto: "Pago jugador GOMEZ",
+      egreso: 80000, montoFinal: 80000, jugadorCT: "GOMEZ", jugadorId: "j2" },
+    // De otro jugador.
+    { id: "m-otro", fecha: "2026-06-11", tipo: "EGRESO", codRubro: "19", concepto: "Adelanto",
+      egreso: 9000, montoFinal: 9000, jugadorCT: "PEREZ", jugadorId: "j1" },
+    // Un ingreso suyo: tampoco es un adelanto.
+    { id: "m-ing", fecha: "2026-06-12", tipo: "INGRESO", codRubro: "35", concepto: "Camiseta",
+      ingreso: 4000, montoFinal: 4000, jugadorCT: "GOMEZ", jugadorId: "j2" }
+  ];
+  // La fila que quedó pagada contra la liquidación es lo que la delata como liquidación.
+  app.pagosJugadores = [
+    { id: "pj-liq", jugadorId: "j2", jugadorNombre: "GOMEZ", partidosIncluidos: [], montoFinal: 80000,
+      estado: "pagado", etiqueta: "Mayo", mes: "2026-05", tipo: "periodico", partidoId: "",
+      movimientoId: "m-liq", movimientoOrigenId: "" }
+  ];
+}
+
+sembrarMovs();
+let cands = app.pjMovsCandidatosDescuento("j2", 30, "2026-06-15").map(m => m.id);
+igual("los adelantos del jugador, más nuevos primero", cands, ["m-ade1", "m-viejo"]);
+check("no ofrece la liquidación como si fuera un adelanto", cands.indexOf("m-liq") < 0, cands.join(","));
+check("ni los movimientos de otro jugador",                 cands.indexOf("m-otro") < 0, cands.join(","));
+check("ni los ingresos",                                    cands.indexOf("m-ing")  < 0, cands.join(","));
+check("el de 2 meses atrás queda fuera de la ventana de 30 días",
+      cands.indexOf("m-ade2") < 0, cands.join(","));
+
+cands = app.pjMovsCandidatosDescuento("j2", 0, "2026-06-15").map(m => m.id);
+igual("con la ventana en 'todos' aparece el viejo", cands, ["m-ade1", "m-viejo", "m-ade2"]);
+check("pero la liquidación sigue afuera", cands.indexOf("m-liq") < 0, cands.join(","));
+
+igual("el otro jugador ve sólo lo suyo",
+      app.pjMovsCandidatosDescuento("j1", 30, "2026-06-15").map(m => m.id), ["m-otro"]);
+igual("un id que no es de nadie no tiene candidatos",
+      app.pjMovsCandidatosDescuento("nadie", 0, "2026-06-15"), []);
+// La ventana acota hacia atrás, no hacia adelante: un egreso con fecha posterior a hoy sigue
+// siendo un adelanto (se carga con la fecha en que se va a entregar) y tiene que poder elegirse.
+igual("un egreso con fecha futura no se pierde por la ventana",
+      app.pjMovsCandidatosDescuento("j2", 30, "2026-05-20").map(m => m.id), ["m-ade1", "m-viejo"]);
+
+// ══════════════════════════════════════════════════════════════
+// Los descuentos parciales funcionan solos —dos filas apuntando al mismo egreso— y el aviso de
+// exceso es lo único que separa "lo descuento en dos veces" de "lo descuento dos veces".
+seccion("28 · Descuentos parciales sobre un mismo adelanto");
+sembrarMovs();
+const parcial = (id, monto) => ({ id, jugadorId: "j2", jugadorNombre: "GOMEZ", partidosIncluidos: [],
+  montoBase: -monto, ajuste: 0, motivoAjuste: "", montoFinal: -monto, estado: "pendiente",
+  etiqueta: "Adelanto", mes: "2026-06", tipo: "descuento", partidoId: "", codRubroContra: "",
+  movimientoOrigenId: "m-ade1" });
+
+igual("sin descuentos cargados, no hay nada descontado", app.pjDescontadoDeMov("m-ade1"), 0);
+igual("y queda el adelanto entero",                      app.pjRestanteDeMov("m-ade1"), 20000);
+
+app.pagosJugadores.push(parcial("d1", 8000));
+igual("un descuento parcial suma su valor absoluto", app.pjDescontadoDeMov("m-ade1"), 8000);
+igual("y el restante baja",                          app.pjRestanteDeMov("m-ade1"), 12000);
+
+app.pagosJugadores.push(parcial("d2", 12000));
+igual("los dos parciales suman el adelanto entero", app.pjDescontadoDeMov("m-ade1"), 20000);
+igual("sin restante",                               app.pjRestanteDeMov("m-ade1"), 0);
+igual("los descuentos de ese movimiento son los dos",
+      app.pjDescuentosDeMovimiento("m-ade1").map(p => p.id), ["d1", "d2"]);
+igual("y ninguno cuelga del adelanto viejo", app.pjDescuentosDeMovimiento("m-ade2"), []);
+
+// El aviso se dispara por la SUMA, no por el monto suelto: es lo que detecta el mismo adelanto
+// descontado dos veces.
+app.pagosJugadores = app.pagosJugadores.filter(p => p.id !== "d2");
+check("8.000 + 12.000 sobre un adelanto de 20.000 no avisa",
+      !app.pjExcedeElAdelanto("m-ade1", 12000), "12000");
+check("8.000 + 13.000 sí avisa",
+       app.pjExcedeElAdelanto("m-ade1", 13000), "13000");
+check("un descuento por el total, con otro ya cargado, avisa",
+       app.pjExcedeElAdelanto("m-ade1", 20000), "20000");
+// Editando una fila que ya está cargada no se la puede contar contra sí misma.
+check("editando la propia fila, su monto viejo no se suma",
+      !app.pjExcedeElAdelanto("m-ade1", 20000, "d1"), "excluyendo d1");
+check("sin movimiento de origen no hay nada que exceder", !app.pjExcedeElAdelanto("", 999999));
+check("contra un movimiento que ya no está, tampoco avisa",
+      !app.pjExcedeElAdelanto("m-borrado", 999999));
+
+igual("el label del origen sale del movimiento",
+      app.pjMovOrigenLabel("m-ade1"), "10/06/2026 · Adelanto");
+igual("y un movimiento borrado se nombra igual, sin romper el render",
+      app.pjMovOrigenLabel("m-borrado"), "movimiento borrado");
+
+// ══════════════════════════════════════════════════════════════
+seccion("29 · El bloque de movimiento de origen del modal");
+sembrarMovs();
+app.pagosJugadores.push(parcial("d1", 8000));
+// La ventana va en "todos": los movimientos sembrados son de junio de 2026 y la ventana de días se
+// mide contra la fecha real del día en que corre la prueba.
+app.pjDescCtx = { pagoId: "", volverALiquidar: "", jugadorId: "j2", movOrigenId: "", dias: 0 };
+let html = app.pjDescOrigenHTML();
+check("ofrece el adelanto reciente",     html.includes('value="m-ade1"'), html);
+check("no ofrece la liquidación",       !html.includes('value="m-liq"'),  html);
+check("dice cuánto se descontó ya y cuánto queda",
+      html.includes("ya descontado") && html.includes("queda"), html);
+check("y ofrece ampliar la ventana",     html.includes('value="90"') && html.includes('value="0"'), html);
+
+// Un movimiento ya elegido que cae fuera de la ventana no puede desaparecer del select: el
+// descuento quedaría guardado sin el link sin que nadie lo note.
+app.pjDescCtx.movOrigenId = "m-ade2";
+app.pjDescCtx.dias = 30;                  // ninguno de los sembrados entra en esta ventana
+html = app.pjDescOrigenHTML();
+check("el elegido fuera de la ventana se sigue mostrando", html.includes('value="m-ade2"'), html);
+check("y sigue seleccionado", html.includes('value="m-ade2" selected'), html);
+
+// ── El bloque "Descontar del sueldo" del formulario de movimientos ──
+app.F = app.buildDefaultF();
+app.F.tipo = "EGRESO"; app.F.codRubro = "19"; app.F.jugadorCT = "GOMEZ";
+check("aplica en un EGRESO de sueldo a nombre de un jugador", app.adelantoDescontableAplica());
+app.F.jugadorCT = "";
+check("sin jugador elegido, no aplica", !app.adelantoDescontableAplica());
+app.F.jugadorCT = "GOMEZ"; app.F.codRubro = "35";
+check("con otro rubro, tampoco",        !app.adelantoDescontableAplica());
+app.F.codRubro = "18";
+check("el 18 (cuerpo técnico) también aplica", app.adelantoDescontableAplica());
+app.F.tipo = "INGRESO";
+check("y un INGRESO nunca", !app.adelantoDescontableAplica());
+
+// El mes por defecto es el de la fecha del movimiento, y tiene que estar en la lista aunque el
+// adelanto sea de hace medio año y se esté cargando recién ahora.
+app.F.tipo = "EGRESO"; app.F.fecha = "2026-06-10";
+igual("el mes por defecto es el de la fecha", app.mesDescuentoDefault(), "2026-06");
+const optsMes = app.opcionesMesDescuentoHTML("2026-06");
+check("y aparece seleccionado en las opciones", optsMes.includes('value="2026-06" selected'), optsMes);
+igual("mesesEntre cuenta cruzando el año", app.mesesEntre("2025-11", "2026-02"), 3);
+igual("y hacia atrás da negativo",         app.mesesEntre("2026-02", "2025-11"), -3);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

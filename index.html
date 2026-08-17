@@ -1218,6 +1218,10 @@ function buildDefaultF() {
     cuenta: (cuentas[0] || "EFECTIVO"), cuentaDestino: "",
     modoPago: (metodos[0] || "EFECTIVO"),
     jugadorCT:"", adherente:"", observacion:"", comprobante:"", seguroReintegro: 0, saldoReal:"", partidoId:"", eventoId:"",
+    // Adelanto a descontar del sueldo: el EGRESO que se está cargando ES la plata que se le
+    // entregó al jugador, y `descontarDelSueldo` deja anotado que hay que netearla en la próxima
+    // liquidación. No genera ningún movimiento más — ver la fila que crea saveMov en Code.gs.
+    descontarDelSueldo: 0, descuentoMes: "",
     // Cobro dividido: un mismo cobro que entró partido entre varias cuentas (la recaudación de un
     // partido suele venir en efectivo + Mercado Pago). `reparto` es null salvo que esté activado.
     // Al guardar se emite UN movimiento por fila, no uno solo con dos cuentas: `cuenta` es un campo
@@ -1278,8 +1282,12 @@ const Storage = {
                               if (r && r.pagosJugadores) r.pagosJugadores = normPagosJugadores(r.pagosJugadores);
                               return r; },
   async listMov(mes)        { return this._post({ action:"listMov",      mes }); },
-  async saveMov(mov)        { return this._post({ action:"saveMov",      mov }); },
-  async updateMov(mov)      { return this._post({ action:"updateMov",    mov }); },
+  // descontarDelSueldo: { mes } marca el adelanto para netearlo en la liquidación de ese mes,
+  // `false` desvincula el descuento que tuviera, y omitirlo lo deja como está. El backend crea o
+  // borra la fila de Pagos Jugadores en la MISMA ejecución — encadenar un segundo POST duplicaría
+  // la espera de Apps Script y dejaría el estado a medias si fallara.
+  async saveMov(mov, descontarDelSueldo)   { return this._post({ action:"saveMov",   mov, descontarDelSueldo }); },
+  async updateMov(mov, descontarDelSueldo) { return this._post({ action:"updateMov", mov, descontarDelSueldo }); },
   async deleteMov(id)       { return this._post({ action:"deleteMov",    id  }); },
   async listJugadores()     { return this._post({ action:"listJugadores"      }); },
   async saveJugador(j)      { return this._post({ action:"saveJugador",   jugador:j }); },
@@ -1488,9 +1496,11 @@ function getPendingMovs() {
 function setPendingMovs(arr) {
   localStorage.setItem(PENDING_KEY, JSON.stringify(arr));
 }
-function addPendingMov(mov, isEdit) {
+// `descontar` viaja con el movimiento a la cola: si se pierde, el adelanto se sincroniza como un
+// egreso más y el descuento que el usuario marcó no existe en ningún lado.
+function addPendingMov(mov, isEdit, descontar) {
   const q = getPendingMovs();
-  q.push({ mov, isEdit, queuedAt: Date.now() });
+  q.push({ mov, isEdit, descontar, queuedAt: Date.now() });
   setPendingMovs(q);
 }
 function removePendingMov(id) {
@@ -1510,8 +1520,10 @@ async function syncPendingMovs() {
   try {
     for (const item of pending) {
       try {
-        const r = item.isEdit ? await Storage.updateMov(item.mov) : await Storage.saveMov(item.mov);
+        const r = item.isEdit ? await Storage.updateMov(item.mov, item.descontar)
+                              : await Storage.saveMov(item.mov, item.descontar);
         if (!r.ok) throw new Error(r.error || "Error al sincronizar");
+        pjAplicarCambioDescuento(r);
         removePendingMov(item.mov.id);
         const idx = movimientos.findIndex(m => m.id === item.mov.id);
         if (idx >= 0) { movimientos[idx] = { ...movimientos[idx] }; delete movimientos[idx]._pending; }
@@ -1886,6 +1898,9 @@ function renderNuevo() {
   const isAdh = !isAdj && F.rubro && F.rubro.toUpperCase().includes("ADHERENTE");
   const mesNum = F.fecha ? F.fecha.slice(0,7).replace("-","") : "";
   const mesDisplay = F.fecha ? mesLabel(F.fecha.slice(0,7)) : "";
+  // Editando: los descuentos que ya netean este movimiento. Con más de uno (descuentos parciales
+  // cargados a mano) la casilla no puede representar el estado, así que se muestra y se bloquea.
+  const descuentosDelMov = editId ? pjDescuentosDeMovimiento(editId) : [];
 
   setContent(`
     <div class="fgrid">
@@ -1961,6 +1976,23 @@ function renderNuevo() {
         </label>
       </div>` : ""}
 
+      ${adelantoDescontableAplica() ? `
+      <div class="field">
+        <label style="cursor:pointer">
+          <input type="checkbox" id="f-descontar-sueldo" style="width:16px;height:16px;accent-color:var(--accent);vertical-align:middle;margin-right:6px;cursor:pointer;"
+                 ${F.descontarDelSueldo ? 'checked' : ''} ${descuentosDelMov.length > 1 ? 'disabled' : ''}
+                 onchange="toggleDescontarDelSueldo(this.checked)">
+          Descontar del sueldo
+        </label>
+        ${descuentosDelMov.length > 1 ? `
+        <span style="font-size:11px;color:var(--text3);margin-top:2px">Este movimiento ya tiene ${descuentosDelMov.length} descuentos parciales cargados. Se editan desde Pagos a jugadores.</span>`
+        : F.descontarDelSueldo ? `
+        <select class="inp" id="f-descuento-mes" style="margin-top:6px" onchange="F.descuentoMes=this.value">
+          ${opcionesMesDescuentoHTML(F.descuentoMes)}
+        </select>
+        <span style="font-size:11px;color:var(--text3);margin-top:2px">Queda como descuento pendiente en ese mes y se resta del sueldo al liquidar. No se registra ningún movimiento más: este egreso ya es la plata que le entregaste.</span>` : ""}
+      </div>` : ""}
+
       ${isAdj ? `
       <div class="field">
         <label>Cuenta</label>
@@ -1991,7 +2023,7 @@ function renderNuevo() {
       ${!isAdj ? `
       <div class="field">
         <label>Jugador / CT (opcional)</label>
-        <select class="inp" id="f-jugador" onchange="F.jugadorCT=this.value">
+        <select class="inp" id="f-jugador" onchange="setJugadorCTForm(this.value)">
           <option value="">— Ninguno —</option>
           ${jugCTOrphan}
           ${jugOptions ? `<optgroup label="Jugadores / CT">${jugOptions}</optgroup>` : ""}
@@ -2081,6 +2113,55 @@ function setTipo(tipo) {
 function updateMesDisplay() {
   const el = document.getElementById("f-mes-display");
   if (el && F.fecha) el.value = mesLabel(F.fecha.slice(0,7));
+}
+
+// ── Adelanto a descontar del sueldo ───────────────────────────────────────
+// Un EGRESO imputado a un rubro de sueldo y a nombre de un jugador es, casi siempre, un adelanto:
+// plata que se le entrega ahora y que a fin de mes hay que descontarle. Marcarlo acá —en el momento
+// en que el adelanto está fresco— es el camino principal; buscarlo después desde el modal de
+// descuento es la recuperación para los que se cargaron sin marcar.
+const ADELANTO_RUBROS = ["18", "19"];
+
+function adelantoDescontableAplica() {
+  return F.tipo === "EGRESO" && ADELANTO_RUBROS.includes(F.codRubro) && !!F.jugadorCT;
+}
+
+/** Mes al que se imputa el descuento por defecto: el de la fecha del movimiento. */
+function mesDescuentoDefault() {
+  return (F.fecha || "").slice(0, 7) || nowMes();
+}
+
+/** Meses entre dos claves "YYYY-MM" (b − a; negativo si b es anterior). */
+function mesesEntre(a, b) {
+  if (!a || !b) return 0;
+  const [ya, ma] = a.split("-").map(Number);
+  const [yb, mb] = b.split("-").map(Number);
+  return (yb - ya) * 12 + (mb - ma);
+}
+
+/** Opciones de mes del descuento. El rango habitual de generarOpcionesMes va de −2 a +3, que deja
+ *  afuera el mes de un adelanto viejo que recién ahora se está cargando: se amplía lo justo para
+ *  que el mes por defecto siempre esté en la lista (acotado, para no generar un select infinito
+ *  con una fecha absurda). */
+function opcionesMesDescuentoHTML(sel) {
+  const objetivo = sel || mesDescuentoDefault();
+  const d = Math.max(-60, Math.min(60, mesesEntre(nowMes(), objetivo)));
+  return generarOpcionesMes(objetivo, Math.max(2, -d), Math.max(3, d));
+}
+
+function toggleDescontarDelSueldo(on) {
+  F.descontarDelSueldo = on ? 1 : 0;
+  if (on && !F.descuentoMes) F.descuentoMes = mesDescuentoDefault();
+  renderNuevo();
+}
+
+// El bloque del adelanto depende de que haya un jugador elegido, así que elegirlo tiene que
+// repintar el formulario — pero sólo cuando el bloque aparece o desaparece: un re-render de más
+// pierde los inputs que no viven en F (las entradas vendidas del partido).
+function setJugadorCTForm(v) {
+  const antes = adelantoDescontableAplica();
+  F.jugadorCT = v;
+  if (adelantoDescontableAplica() !== antes) renderNuevo();
 }
 
 function cancelEdit() { resetF(); renderNuevo(); }
@@ -2272,8 +2353,17 @@ async function guardarEntradasDelPartido(partidoId, damasRaw, caballerosRaw) {
   }
 }
 
+// Firma de los bloques del formulario que dependen del rubro: el reintegro del seguro (21) y el
+// adelanto a descontar (18/19). Se compara antes y después de elegir para repintar sólo cuando
+// alguno aparece o desaparece — repintar de más pierde los inputs que no viven en F.
+function firmaCamposDelRubro() {
+  return (F.codRubro === "21" && F.tipo === "EGRESO" ? "reintegro" : "") + "|" +
+         (adelantoDescontableAplica() ? "adelanto" : "");
+}
+
 function selectRubroItem(item, input, drop, blurAfter) {
   if (!item) return;
+  const firmaAntes = firmaCamposDelRubro();
   F.codRubro  = item.dataset.cod;
   F.rubro     = item.dataset.nombre;
   F.categoria = item.dataset.cat;
@@ -2282,8 +2372,7 @@ function selectRubroItem(item, input, drop, blurAfter) {
   if (blurAfter) input.blur(); // Forzamos el blur después de seleccionar (clic / Enter)
   // Auto-set tipo to INTERNO if rubro 49
   if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
-  // Re-render for rubro 21 to show/hide conditional checkbox
-  if (F.codRubro === "21" || F.codRubro === "49") { renderNuevo(); return; }
+  if (F.codRubro === "49" || firmaCamposDelRubro() !== firmaAntes) { renderNuevo(); return; }
   // Highlight adherente row
   const adhRow = document.getElementById("adherente-row");
   if (adhRow) {
@@ -2408,6 +2497,16 @@ async function saveMovimiento() {
     };
   }
 
+  // Adelanto a descontar del sueldo. Viaja en el mismo POST que el movimiento: el backend crea la
+  // fila de Pagos Jugadores en la misma ejecución (ver saveMov en Code.gs). Se manda sólo cuando el
+  // movimiento puede llevar descuento — `false` desvincula el que tenga, `{mes}` lo vincula, y
+  // omitirlo deja el vínculo como está: editar un movimiento cualquiera no tiene por qué borrar un
+  // descuento que se cargó desde otro lado.
+  // Nunca en las filas 2..N de un cobro dividido: son clones y descontarían el adelanto N veces.
+  const descontar = adelantoDescontableAplica()
+    ? (F.descontarDelSueldo ? { mes: F.descuentoMes || mesDescuentoDefault() } : false)
+    : undefined;
+
   // Las entradas se leen del DOM ahora, antes de cualquier await: resetF() y el re-render posterior
   // vacían los inputs, así que después del guardado ya no estarían.
   const entradasPend = entradasRowAplica()
@@ -2457,12 +2556,13 @@ async function saveMovimiento() {
   let principalGuardado = false;
   try {
     const r = editId
-      ? await Storage.updateMov(mov)
-      : await Storage.saveMov(mov);
+      ? await Storage.updateMov(mov, descontar)
+      : await Storage.saveMov(mov, descontar);
     if (!r.ok) throw new Error(r.error || "Error al guardar");
     // saveMov puede devolver un ID distinto al enviado si detectó una colisión
     // (reintento con F.id viejo, etc.) — usamos siempre el que confirmó el backend.
     if (r.id) mov.id = r.id;
+    pjAplicarCambioDescuento(r);
 
     // Update local state
     if (editId) {
@@ -2508,7 +2608,7 @@ async function saveMovimiento() {
         } else {
           movimientos.push(mov);
         }
-        addPendingMov(mov, wasEdit);
+        addPendingMov(mov, wasEdit, descontar);
       }
       // Las filas del reparto que todavía no se guardaron van a la misma cola. Se filtran las que
       // ya entraron antes de que se cortara la conexión, para no encolarlas dos veces.
@@ -2959,9 +3059,21 @@ function changeMes(delta) {
   }
 }
 
-function openMovModal(id) {
+/**
+ * `volverALiquidar` es el jugadorId de la liquidación desde la que se abrió: el detalle pisa el
+ * mismo #modal-root, así que sin un camino de vuelta abrir el adelanto desde la liquidación la
+ * cierra. pjLiqData sobrevive intacto (es global y closeModal no lo toca), así que volver es
+ * repintar el modal con lo que ya había.
+ */
+function openMovModal(id, volverALiquidar) {
   const m = movimientos.find(x => x.id === id);
   if (!m) return;
+  // Descuentos que netean este movimiento: si están, este egreso es un adelanto que ya se le va a
+  // restar del sueldo, y eso tiene que verse acá o no se ve en ningún lado.
+  const descuentosMov = pjDescuentosDeMovimiento(id);
+  const descuentoTxt  = descuentosMov.map(d =>
+    (d.mes ? mesLabel(d.mes) : "sin mes") + " · " + fmt(Math.abs(d.montoFinal)) +
+    (d.estado === "pagado" ? " · ya liquidado" : " · pendiente")).join(" · ");
   const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : m.tipo==="AJUSTE" ? "adj" : "int";
   const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
   const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : m.tipo==="AJUSTE" ? (m.montoFinal>=0?"⊙+":"⊙−") : "⇄";
@@ -2978,6 +3090,7 @@ function openMovModal(id) {
     ["Adherente",   m.adherente || "—"],
     ["Partido",     m.partidoId ? partidoLabel(m.partidoId) : "—"],
     (m.codRubro === "21" && m.tipo === "EGRESO") ? ["Reintegro", m.seguroReintegro ? "SÍ" : "NO"] : null,
+    descuentosMov.length ? ["Descontado del sueldo", descuentoTxt] : null,
     ["Observación", m.observacion || "—"],
     ["Comprobante", m.comprobante || "—"],
     ["Cargado",     fmtTimestamp(m.timestamp)],
@@ -2991,6 +3104,7 @@ function openMovModal(id) {
         <div class="modal-handle"></div>
         <div class="modal-monto-big ${montoClass}">${montoSign}${fmt(montoVal)}</div>
         ${rows}
+        ${volverALiquidar ? `<button class="btn-secondary" style="width:100%;margin-top:8px" onclick="renderLiquidacionModal()">← Volver a la liquidación</button>` : ""}
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="abrirComprobanteModal('${id}')">🧾 Comprobante</button>
           <button class="btn-secondary" style="flex:1" onclick="editMovimiento('${id}')">✏️ Editar</button>
@@ -3074,11 +3188,16 @@ async function deleteMovimiento(id) {
 
     // Espejo local de lo que el backend revirtió, para que Transferencias y el estado de
     // cuotas queden al día sin tener que recargar todo.
-    const rev = r.revertido || { jugadores: [], cuotas: [] };
+    const rev = r.revertido || { jugadores: [], cuotas: [], desvinculados: [] };
     if ((rev.jugadores || []).length) {
       pagosJugadores.forEach(p => {
         if (p.movimientoId === id) { p.estado = "pendiente"; p.fechaPago = ""; p.medioPago = ""; p.movimientoId = ""; }
       });
+    }
+    // Los descuentos que netean ESTE movimiento no se borran: el adelanto se entregó igual y el
+    // descuento sigue siendo legítimo. Lo que se limpia es la referencia, que quedaría colgada.
+    if ((rev.desvinculados || []).length) {
+      pagosJugadores.forEach(p => { if (p.movimientoOrigenId === id) p.movimientoOrigenId = ""; });
     }
     if ((rev.cuotas || []).length) {
       pagos.forEach(p => {
@@ -3093,6 +3212,10 @@ async function deleteMovimiento(id) {
       nC ? `${nC} cuota${nC!==1?"s":""}` : ""
     ].filter(Boolean).join(" y ");
     toast(detalle ? `Movimiento eliminado — ${detalle} volvió a pendiente` : "Movimiento eliminado", "ok");
+    const nD = (rev.desvinculados || []).length;
+    if (nD) toast(nD === 1
+      ? "Un descuento salía de ese movimiento: sigue cargado, pero ya sin el vínculo"
+      : `${nD} descuentos salían de ese movimiento: siguen cargados, pero ya sin el vínculo`, "err");
     renderMovimientos();
   } catch(e) { toast("Error: " + e.message, "err"); }
   finally { hideOverlay(); }
@@ -3120,6 +3243,11 @@ function editMovimiento(id) {
   F.saldoReal = "";
   F.partidoId = m.partidoId || "";
   F.eventoId  = m.eventoId || "";
+  // La casilla del adelanto no se guarda en el movimiento: el vínculo ES la fila de Pagos
+  // Jugadores que le apunta, así que el estado se deriva de ahí (ver PJ_COLS en Code.gs).
+  const descuentosMov  = pjDescuentosDeMovimiento(id);
+  F.descontarDelSueldo = descuentosMov.length ? 1 : 0;
+  F.descuentoMes       = descuentosMov.length ? (descuentosMov[0].mes || "") : "";
   editId = id;
   closeModal();
   goTab("nuevo");
@@ -8057,6 +8185,114 @@ function pjUltimoMovimientoDe(jugadorId) {
   return pagadas.length ? pagadas[0].movimientoId : "";
 }
 
+// ── Descuentos vinculados a un movimiento ya registrado ───────────────────
+// Un adelanto se carga como EGRESO el día que se entrega la plata. El descuento que lo netea a fin
+// de mes NO genera contabilidad —ese egreso ya está asentado—: sólo lleva el id del movimiento en
+// MovimientoOrigenID, igual que el vínculo de los reintegros de seguro. Es documental: sirve para
+// auditar de qué adelanto sale cada descuento, y para no descontar dos veces el mismo.
+// Ojo con `movimientoId`, que es lo contrario: el egreso que la liquidación GENERÓ con esta fila.
+
+/** Descuentos que netean un movimiento ya registrado. Son varios cuando el adelanto se descuenta
+ *  en cuotas (dos filas de $10 contra un egreso de $20, en meses distintos). */
+function pjDescuentosDeMovimiento(movId) {
+  if (!movId) return [];
+  return (pagosJugadores || []).filter(p => p.movimientoOrigenId === movId);
+}
+
+/** Incorpora al array en memoria lo que saveMov/updateMov hicieron con el descuento vinculado, para
+ *  no tener que volver a pedir la hoja entera después de guardar un movimiento. */
+function pjAplicarCambioDescuento(r) {
+  if (!r) return;
+  if (r.descuentoBorradoId) {
+    const i = pagosJugadores.findIndex(p => p.id === r.descuentoBorradoId);
+    if (i >= 0) pagosJugadores.splice(i, 1);
+  }
+  if (r.descuento) {
+    const i = pagosJugadores.findIndex(p => p.id === r.descuento.id);
+    if (i >= 0) pagosJugadores[i] = r.descuento;
+    else        pagosJugadores.push(r.descuento);
+  }
+  if (r.avisoDescuento) toast(r.avisoDescuento, "err");
+}
+
+/** Etiqueta del movimiento del que sale un descuento. Un movimiento borrado se nombra igual en vez
+ *  de romper el render: la fila sobrevive a propósito al borrado del egreso (el adelanto se entregó
+ *  igual), y hasta el próximo checkIntegridad el link puede seguir colgado. */
+function pjMovOrigenLabel(movId) {
+  const m = (movimientos || []).find(x => x.id === movId);
+  if (!m) return "movimiento borrado";
+  return fmtFechaDMY(m.fecha) + " · " + (m.concepto || "sin concepto");
+}
+
+/** La entidad {id, nombre} de un jugador, para poder pasarla por movEsDeEntidad. Se busca primero
+ *  en Jugadores y se cae a Config Jugadores, que es de donde vienen los ids en esta pantalla. */
+function pjEntidadDe(jugadorId) {
+  const j = (jugadores || []).find(x => x.id === jugadorId);
+  if (j) return j;
+  const c = (configJugadores || []).find(x => x.idJugador === jugadorId);
+  return c ? { id: jugadorId, nombre: c.nombre } : null;
+}
+
+/** IDs de los movimientos que SON liquidaciones: los generó confirmarPagosJugadores y figuran como
+ *  MovimientoID de alguna fila de Pagos Jugadores. Sin excluirlos, la lista de candidatos ofrece el
+ *  egreso del sueldo del mes pasado como si fuera un adelanto. */
+function pjMovimientosDeLiquidacion() {
+  return new Set((pagosJugadores || []).map(p => p.movimientoId).filter(Boolean));
+}
+
+/** "YYYY-MM-DD" de `dias` días antes de `fecha`. */
+function fechaMenosDias(fecha, dias) {
+  const d = new Date((fecha || today()) + "T00:00:00");
+  if (isNaN(d.getTime())) return "";
+  d.setDate(d.getDate() - dias);
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+
+/**
+ * EGRESOs del jugador que pueden ser el origen de un descuento: los suyos, dentro de la ventana de
+ * `dias` (0 = todos), que no sean liquidaciones. Más recientes primero.
+ * `hoy` se pasa aparte para poder probar la ventana con una fecha fija.
+ */
+function pjMovsCandidatosDescuento(jugadorId, dias, hoy) {
+  const ent = pjEntidadDe(jugadorId);
+  if (!ent) return [];
+  const liquidaciones = pjMovimientosDeLiquidacion();
+  const desde = dias ? fechaMenosDias(hoy || today(), dias) : "";
+  return (movimientos || [])
+    .filter(m => m.tipo === "EGRESO" && !liquidaciones.has(m.id))
+    .filter(m => !desde || String(m.fecha || "") >= desde)
+    .filter(m => movEsDeEntidad(m, ent))
+    .sort((a, b) => String(b.fecha||"").localeCompare(String(a.fecha||"")));
+}
+
+/** Lo que ya se descontó contra un movimiento, sumando todas las filas que lo linkean. `excluirId`
+ *  deja afuera la que se está editando, para que no se cuente contra sí misma. */
+function pjDescontadoDeMov(movId, excluirId) {
+  return (pagosJugadores || [])
+    .filter(p => p.movimientoOrigenId === movId && p.id !== excluirId)
+    .reduce((s, p) => s + Math.abs(Number(p.montoFinal || 0)), 0);
+}
+
+/** Monto del adelanto que un movimiento representa. */
+function pjMontoDeMov(movId) {
+  const m = (movimientos || []).find(x => x.id === movId);
+  return m ? Math.abs(Number(m.egreso || m.montoFinal || 0)) : 0;
+}
+
+/** Lo que todavía queda por descontar de un adelanto (nunca negativo, para no ofrecer un monto raro
+ *  cuando ya se descontó de más). */
+function pjRestanteDeMov(movId, excluirId) {
+  return Math.max(0, pjMontoDeMov(movId) - pjDescontadoDeMov(movId, excluirId));
+}
+
+/** Si descontar `monto` contra ese movimiento se pasa de lo que el adelanto fue. Avisa, no bloquea:
+ *  puede haber un motivo (dos adelantos anotados en un egreso solo), pero casi siempre es un error.
+ *  La tolerancia de medio peso es contra el redondeo, no contra diferencias reales. */
+function pjExcedeElAdelanto(movId, monto, excluirId) {
+  if (!movId || !pjMontoDeMov(movId)) return false;
+  return pjDescontadoDeMov(movId, excluirId) + Math.abs(Number(monto || 0)) > pjMontoDeMov(movId) + 0.5;
+}
+
 /** Descripción pelada del partido de una fila, sin el motivo del ajuste. */
 function pjDescPartido(p) {
   const par = partidos.find(x => x.id === ((p.partidosIncluidos || [])[0] || p.partidoId || ""));
@@ -8282,7 +8518,12 @@ function renderPagoMensual() {
           // El rubro de contrapartida se muestra: es lo que distingue un descuento que además
           // genera un ingreso de uno que sólo netea, y de otro modo no se ve por ningún lado.
           const rubro = p.codRubroContra ? ` <span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>` : "";
-          return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${rubro}${quitar}`;
+          // Y de qué adelanto sale, cuando está linkeado: es lo que hace auditable el descuento.
+          const origen = p.movimientoOrigenId
+            ? ` <button class="btn-sm" style="padding:0 5px" title="Ver el movimiento del adelanto"
+                        onclick="openMovModal('${escJs(p.movimientoOrigenId)}')">← ${esc(pjMovOrigenLabel(p.movimientoOrigenId))}</button>`
+            : "";
+          return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${rubro}${origen}${quitar}`;
         }).join(" · ")
       : `<span class="pj-acumulado">Sin cargos este mes</span>`;
 
@@ -8321,7 +8562,7 @@ function renderPagoMensual() {
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p class="note">Los descuentos quedan pendientes como el resto y se restan del sueldo al liquidar. El "Neto a pagar" ya los tiene descontados. Un descuento <b>sin rubro</b> (un adelanto ya entregado) se netea contra el egreso, como siempre; uno <b>con rubro</b> (una camiseta, una multa) deja el egreso por el sueldo bruto y registra además el ingreso en ese rubro.</p>
+    <p class="note">Los descuentos quedan pendientes como el resto y se restan del sueldo al liquidar. El "Neto a pagar" ya los tiene descontados. Un descuento <b>sin rubro</b> (un adelanto ya entregado) se netea contra el egreso, como siempre; uno <b>con rubro</b> (una camiseta, una multa) deja el egreso por el sueldo bruto y registra además el ingreso en ese rubro. La flecha <b>←</b> apunta al movimiento del que sale el adelanto: si está, el descuento es auditable contra ese egreso y no se puede descontar dos veces sin que se vea.</p>
   `;
 }
 
@@ -8339,14 +8580,25 @@ function opcionesRubroHTML(codSel) {
   }).join("");
 }
 
-// Contexto del modal de descuento: qué fila se está editando (vacío = alta) y a dónde volver al
-// guardar. Va en una variable y no en el onclick para no serializarlo en el HTML.
-let pjDescCtx = { pagoId: "", volverALiquidar: "" };
+// Contexto del modal de descuento: qué fila se está editando (vacío = alta), a dónde volver al
+// guardar, y el movimiento de origen elegido con su ventana de búsqueda. Va en una variable y no en
+// el onclick para no serializarlo en el HTML.
+let pjDescCtx = { pagoId: "", volverALiquidar: "", jugadorId: "", movOrigenId: "", dias: 30 };
+
+// Ventanas de búsqueda de adelantos. 30 días cubre el caso normal —el adelanto se entrega y se
+// descuenta dentro del mismo mes— sin llenar la lista de egresos viejos; el resto es para los que
+// se cargaron hace rato y recién ahora se descuentan. 0 = todos.
+const PJ_DESC_VENTANAS = [[30, "30 días"], [60, "60 días"], [90, "90 días"], [0, "Todos"]];
 
 function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
-  pjDescCtx = { pagoId: (opciones && opciones.pagoId) || "",
-                volverALiquidar: (opciones && opciones.volverALiquidar) || "" };
-  const p = pjDescCtx.pagoId ? pagosJugadores.find(x => x.id === pjDescCtx.pagoId) : null;
+  const pagoId = (opciones && opciones.pagoId) || "";
+  const pPrev  = pagoId ? pagosJugadores.find(x => x.id === pagoId) : null;
+  pjDescCtx = { pagoId,
+                volverALiquidar: (opciones && opciones.volverALiquidar) || "",
+                jugadorId,
+                movOrigenId: (pPrev && pPrev.movimientoOrigenId) || "",
+                dias: 30 };
+  const p = pPrev;
   const mesSel = (p && p.mes) || mesDefault || nowMes();
   const opcionesRubro = opcionesRubroHTML(p ? (p.codRubroContra || "") : "");
   document.getElementById("modal-root").innerHTML = `
@@ -8369,12 +8621,14 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
           </div>
           <div class="field">
             <label>Imputar a rubro</label>
-            <select class="inp" id="pj-desc-rubro">
+            <select class="inp" id="pj-desc-rubro" onchange="pjDescSyncExclusion()">
               <option value="">— Solo descontar (adelanto ya entregado) —</option>
               ${opcionesRubro}
             </select>
           </div>
+          <div class="field" id="pj-desc-origen-box">${pjDescOrigenHTML()}</div>
         </div>
+        <p class="note" id="pj-desc-excl-nota" style="margin-bottom:4px"></p>
         <p class="note">Dejalo vacío si es un adelanto que ya le entregaste y ya registraste como egreso. Elegí un rubro si el club le vendió o le cobró algo (camiseta, multa, vianda): además del descuento se va a registrar el ingreso en ese rubro.</p>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
@@ -8382,6 +8636,88 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
         </div>
       </div>
     </div>`;
+  pjDescSyncExclusion();
+}
+
+/**
+ * Bloque "Movimiento de origen (opcional)": el camino de recuperación para los adelantos que se
+ * cargaron sin marcar "Descontar del sueldo" en el formulario de movimientos.
+ *
+ * Muestra cuánto se descontó ya de cada candidato y cuánto queda: es lo que evita descontar dos
+ * veces el mismo adelanto, que es el error que este vínculo viene a hacer imposible.
+ */
+function pjDescOrigenHTML() {
+  const cands = pjMovsCandidatosDescuento(pjDescCtx.jugadorId, pjDescCtx.dias);
+  // El movimiento ya elegido puede caer fuera de la ventana (se lo eligió con "Todos" y después se
+  // volvió a 30 días, o se está editando un descuento viejo): se agrega igual, o el select lo
+  // perdería en silencio.
+  if (pjDescCtx.movOrigenId && !cands.some(m => m.id === pjDescCtx.movOrigenId)) {
+    const elegido = (movimientos || []).find(m => m.id === pjDescCtx.movOrigenId);
+    if (elegido) cands.unshift(elegido);
+  }
+  const opts = cands.map(m => {
+    const ya    = pjDescontadoDeMov(m.id, pjDescCtx.pagoId);
+    const total = pjMontoDeMov(m.id);
+    const marca = ya > 0 ? ` — ya descontado ${fmt(ya)}, queda ${fmt(Math.max(0, total - ya))}` : "";
+    const label = fmtFechaDMY(m.fecha) + " · " + (m.concepto || "sin concepto") + " · " + fmt(total) + marca;
+    return `<option value="${esc(m.id)}" ${m.id===pjDescCtx.movOrigenId?"selected":""}>${esc(label)}</option>`;
+  }).join("");
+  const ventanas = PJ_DESC_VENTANAS.map(([d, lbl]) =>
+    `<option value="${d}" ${d===pjDescCtx.dias?"selected":""}>${lbl}</option>`).join("");
+  return `
+    <label>Movimiento de origen (opcional)</label>
+    <select class="inp" id="pj-desc-origen" onchange="pjDescSetOrigen(this.value)">
+      <option value="">— Ninguno —</option>
+      ${opts}
+    </select>
+    <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+      <span style="font-size:11px;color:var(--text3)">Egresos de los últimos</span>
+      <select class="inp" style="width:auto;padding:2px 6px;font-size:11px" onchange="pjDescSetVentana(this.value)">${ventanas}</select>
+    </div>
+    ${cands.length ? "" : `<span style="font-size:11px;color:var(--text3);margin-top:2px">No hay egresos suyos en esa ventana. Las liquidaciones no se listan: no son adelantos.</span>`}`;
+}
+
+function pjDescSetVentana(dias) {
+  pjDescCtx.dias = Number(dias) || 0;
+  const box = document.getElementById("pj-desc-origen-box");
+  if (box) box.innerHTML = pjDescOrigenHTML();
+  pjDescSyncExclusion();
+}
+
+/** Al elegir un movimiento se precargan monto y motivo con los suyos, EDITABLES: descontar un
+ *  adelanto en dos cuotas son dos filas apuntando al mismo egreso, y la segunda va por lo que
+ *  quedaba. Por eso el monto arranca en el restante y no en el total. */
+function pjDescSetOrigen(movId) {
+  pjDescCtx.movOrigenId = movId || "";
+  const mov = (movimientos || []).find(m => m.id === pjDescCtx.movOrigenId);
+  if (mov) {
+    const inpMonto = document.getElementById("pj-desc-monto");
+    const inpMot   = document.getElementById("pj-desc-motivo");
+    const restante = pjRestanteDeMov(mov.id, pjDescCtx.pagoId);
+    if (inpMonto) inpMonto.value = String(restante || pjMontoDeMov(mov.id));
+    if (inpMot)   inpMot.value   = mov.concepto || "Adelanto";
+  }
+  pjDescSyncExclusion();
+}
+
+/** Rubro de contrapartida y movimiento de origen son excluyentes: uno CREA un ingreso al liquidar,
+ *  el otro netea un egreso que ya está asentado. Elegir uno deshabilita el otro, con la línea que
+ *  explica por qué — es lo que evita que la distinción se difumine. El backend lo valida igual. */
+function pjDescSyncExclusion() {
+  const selRubro  = document.getElementById("pj-desc-rubro");
+  const selOrigen = document.getElementById("pj-desc-origen");
+  const nota      = document.getElementById("pj-desc-excl-nota");
+  const conRubro  = !!(selRubro && selRubro.value);
+  // El origen se lee del contexto y no del <select>: es la fuente de verdad (guardarDescuento usa
+  // la misma), y el control puede todavía no estar repintado cuando esto corre.
+  const conOrigen = !!pjDescCtx.movOrigenId;
+  if (selRubro)  selRubro.disabled  = conOrigen;
+  if (selOrigen) selOrigen.disabled = conRubro;
+  if (nota) nota.textContent = conOrigen
+    ? "Ese egreso ya está en la contabilidad: el descuento sólo lo netea y no registra nada nuevo, así que no lleva rubro."
+    : conRubro
+      ? "Con rubro se registra un ingreso nuevo al liquidar, así que no puede además netear un egreso ya cargado."
+      : "";
 }
 
 async function guardarDescuento(jugadorId, jugadorNombre) {
@@ -8393,8 +8729,20 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
   // "" = adelanto ya entregado, netea contra el sueldo y no genera nada más. Con rubro, el
   // descuento sale del egreso y se registra como ingreso propio (ver confirmarPagosJugadores).
   const codRubroContra = document.getElementById("pj-desc-rubro")?.value || "";
+  // El movimiento de origen sale del contexto y no del <select>: cuando el rubro lo deshabilita, el
+  // valor del control sigue ahí pero no corresponde mandarlo.
+  const movimientoOrigenId = codRubroContra ? "" : (pjDescCtx.movOrigenId || "");
   if (!monto)  { toast("Ingresá el monto a descontar", "err"); return; }
   if (!motivo) { toast("Poné el motivo del descuento", "err"); return; }
+  // Avisa, no bloquea: descontar más de lo que el adelanto fue puede tener un motivo (dos adelantos
+  // anotados en un mismo egreso), pero casi siempre es que el monto se tipeó mal.
+  if (movimientoOrigenId && pjExcedeElAdelanto(movimientoOrigenId, monto, pjDescCtx.pagoId)) {
+    const ya    = pjDescontadoDeMov(movimientoOrigenId, pjDescCtx.pagoId);
+    const total = pjMontoDeMov(movimientoOrigenId);
+    if (!confirm("Ese adelanto fue de " + fmt(total) +
+                 (ya ? " y ya se le descontaron " + fmt(ya) : "") +
+                 ". Con este descuento de " + fmt(monto) + " se pasa. ¿Lo guardo igual?")) return;
+  }
   // El modal también se abre desde "Por partido", donde puede haber roles y ajustes tipeados
   // sin guardar: el re-render de abajo los borraría.
   const formPrevio = pjSnapshotFormPartido();
@@ -8406,7 +8754,7 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
       jugadorId, jugadorNombre, partidosIncluidos: [],
       montoBase: -monto, ajuste: 0, motivoAjuste: "", montoFinal: -monto,
       estado: "pendiente", etiqueta: motivo, mes, tipo: "descuento", partidoId: "",
-      codRubroContra
+      codRubroContra, movimientoOrigenId
     };
     if (ctx.pagoId) pago.id = ctx.pagoId;
     const r = await Storage.savePagoJugador(pago);
@@ -8718,7 +9066,11 @@ function renderLiquidacionModal() {
     const esDesc = pjTipoFila(p) === "descuento";
     const rubro  = p.codRubroContra
       ? `<span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>`
-      : (esDesc ? `<span class="pj-acumulado">adelanto (netea)</span>` : "");
+      : p.movimientoOrigenId
+        // Linkeado a su egreso: se dice cuál y se puede abrir, con vuelta a esta misma liquidación.
+        ? `<button class="btn-sm" style="padding:0 5px" title="Ver el movimiento del adelanto"
+                   onclick="openMovModal('${escJs(p.movimientoOrigenId)}','${escJs(pjLiqData.jugadorId)}')">← ${esc(pjMovOrigenLabel(p.movimientoOrigenId))}</button>`
+        : (esDesc ? `<span class="pj-acumulado">adelanto (netea)</span>` : "");
     const acciones = esDesc
       ? `<button class="btn-sm" onclick="pjLiqEditarDescuento('${p.id}')" title="Editar">✏️</button>
          <button class="btn-sm danger" onclick="pjLiqQuitarDescuento('${p.id}')" title="Quitar">✕</button>`
@@ -9853,7 +10205,7 @@ async function runCheckIntegridad() {
 async function runRepararPagosHuerfanos() {
   const btnId = "btn-reparar-pagos";
   const box   = document.getElementById("reparar-result");
-  if (!confirm("Las filas que quedaron pagadas contra un movimiento inexistente vuelven a PENDIENTE.\n\n¿Confirmás?")) return;
+  if (!confirm("Las filas que quedaron pagadas contra un movimiento inexistente vuelven a PENDIENTE.\nLos descuentos que decían venir de un adelanto borrado quedan cargados, pero sin ese vínculo.\n\n¿Confirmás?")) return;
   setBtnState(btnId, "saving");
   showOverlay("Reparando…");
   try {
@@ -9866,15 +10218,22 @@ async function runRepararPagosHuerfanos() {
     saveSnapshotToCache();
     hideOverlay();
     setBtnState(btnId, "saved");
-    const j = r.jugadores || [], c = r.cuotas || [];
+    const j = r.jugadores || [], c = r.cuotas || [], d = r.desvinculados || [];
+    // Los desvinculados van en su propia línea: no volvieron a pendiente ni cambiaron de monto —
+    // lo único que se les sacó es la referencia al adelanto que ya no existe.
+    const lineaDesv = d.length
+      ? `<p class="cfg-note" style="color:var(--green)">${d.length} descuento${d.length!==1?"s":""} de
+           ${esc([...new Set(d)].join(", "))} quedó${d.length!==1?"n":""} sin el vínculo al adelanto borrado ✓ —
+           el descuento sigue cargado igual.</p>`
+      : "";
     box.innerHTML = (j.length || c.length)
       ? `<p class="cfg-note" style="color:var(--green)">
            ${j.length ? `${j.length} pago${j.length!==1?"s":""} a jugadores (${esc([...new Set(j)].join(", "))})` : ""}
            ${j.length && c.length ? " · " : ""}
            ${c.length ? `${c.length} cuota${c.length!==1?"s":""}` : ""}
            de vuelta en pendiente ✓ — ya los podés incluir en una transferencia.
-         </p>`
-      : `<p class="cfg-note">No había nada para reparar.</p>`;
+         </p>${lineaDesv}`
+      : (lineaDesv || `<p class="cfg-note">No había nada para reparar.</p>`);
   } catch(e) {
     hideOverlay();
     setBtnState(btnId, "error");

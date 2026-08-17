@@ -57,7 +57,7 @@ const CFGJ_RUBRO_SUELDO_DEFAULT = "19";
 // Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
 // independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
 const PJ_SHEET = "Pagos Jugadores";
-const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes","Tipo","PartidoID","CodRubroContra"];
+const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes","Tipo","PartidoID","CodRubroContra","MovimientoOrigenID"];
 // PartidosIncluidos: JSON de un array de IDs de partido ("[]" para filas quincenales/mensuales agregadas a mano)
 // Estado: "pendiente" | "pagado"
 // Mes: "YYYY-MM" (mismo formato que nowMes()/mesLabel() en index.html — NO el "YYYYMM" de MOV_COLS.MES),
@@ -81,13 +81,26 @@ const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBas
 //    (que pasa a ser el sueldo BRUTO) y se genera un INGRESO propio en ese rubro. Ver
 //    confirmarPagosJugadores.
 // Vacío en todas las filas viejas = comportamiento idéntico al anterior, sin backfill.
+// MovimientoOrigenID: el EGRESO que ya se registró el día que se le entregó la plata al jugador y
+// que este descuento viene a netear. NO CONFUNDIR CON MovimientoID, que es la columna de al lado y
+// significa lo contrario: el movimiento que esta fila GENERÓ al liquidarla. Las flechas van en
+// direcciones opuestas —una apunta hacia atrás (a un movimiento que ya existía), la otra hacia
+// adelante (al que creó confirmarPagosJugadores)— y mezclarlas rompe revertirPagosDeMovimiento_.
+// El vínculo es documental, no contable: el descuento por adelanto NO genera ningún movimiento
+// nuevo, porque el egreso del adelanto ya está asentado. Es el mismo tipo de vínculo que el de los
+// reintegros de seguro: sólo dice "este descuento corresponde a este egreso que ya existe".
+// Excluyente con CodRubroContra: una fila linkea un movimiento existente (adelanto) o genera uno
+// nuevo (contrapartida), nunca las dos cosas — savePagoJugador rechaza si llegan juntas.
+// No hay columna espejo en Movimientos: que un movimiento esté descontado se deriva de que exista
+// una fila de acá apuntándole. Un flag paralelo sería dato redundante que puede divergir.
 const PJ_IX = {
   ESTADO:        9,
   FECHA_PAGO:   10,
   MEDIO_PAGO:   11,
   MOVIMIENTO_ID:13,
   TIPO:         15,
-  PARTIDO_ID:   16
+  PARTIDO_ID:   16,
+  MOV_ORIGEN_ID:18
 };
 const ROS_SHEET = "Roster Partidos";
 const ROS_COLS  = ["IdPartido","JugadorId","JugadorNombre","Rol"];
@@ -548,7 +561,21 @@ function handleAction(data) {
       if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
       }
-      return { ok: true, id };
+      // "Descontar del sueldo": el adelanto que se acaba de registrar se netea contra la próxima
+      // liquidación del jugador. Se hace ACÁ, en la misma ejecución, y no con un segundo POST desde
+      // el front: cada acción de Apps Script cuesta 1-3 s y corren de a una, así que encadenarlas
+      // duplica la espera y —peor— deja el estado a medias si la segunda falla (movimiento cargado,
+      // descuento no). No se crea ningún movimiento nuevo: el egreso de arriba ES la plata que se
+      // entregó, y el descuento sólo evita pagarla dos veces.
+      const outSave = { ok: true, id };
+      if (data.descontarDelSueldo) {
+        const plan = planDescuentoDeMovimiento_(m, id, data.descontarDelSueldo);
+        if (plan.error) return { ok: false, error: plan.error };
+        const res = aplicarPlanDescuento_(plan, m, id);
+        if (res.descuento) outSave.descuento = res.descuento;
+        if (plan.aviso)    outSave.avisoDescuento = plan.aviso;
+      }
+      return outSave;
     }
 
     case "updateMov": {
@@ -557,6 +584,11 @@ function handleAction(data) {
       const all = sh.getDataRange().getValues();
       for (let i = 1; i < all.length; i++) {
         if (String(all[i][0]) === String(m.id)) {
+          // El descuento vinculado se resuelve ANTES de escribir el movimiento: si hay que
+          // rechazar (el descuento ya se liquidó y borrarlo dejaría al jugador cobrando de más),
+          // no puede quedar el movimiento actualizado y el descuento sin tocar.
+          const plan = planDescuentoDeMovimiento_(m, String(m.id), data.descontarDelSueldo);
+          if (plan.error) return { ok: false, error: plan.error };
           // El timestamp es la marca de ALTA, no de última modificación: editar un
           // movimiento no debe moverlo de lugar en el orden de carga.
           const tsOriginal = tsToIsoLocal(all[i][19]) || nowTsLocal();
@@ -572,7 +604,12 @@ function handleAction(data) {
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
           }
-          return { ok: true };
+          const out = { ok: true };
+          const res = aplicarPlanDescuento_(plan, m, String(m.id));
+          if (res.descuento)         out.descuento = res.descuento;
+          if (res.descuentoBorradoId) out.descuentoBorradoId = res.descuentoBorradoId;
+          if (plan.aviso)            out.avisoDescuento = plan.aviso;
+          return out;
         }
       }
       return { ok: false, error: "Movimiento no encontrado: " + m.id };
@@ -914,6 +951,14 @@ function handleAction(data) {
         if (movId && !MOVX.existe[movId]) {
           add("error", "Pagos a jugadores", "El pago de \"" + quien + "\" figura como pagado con un movimiento que se borró: el egreso ya no está en la contabilidad.");
         }
+        // MovimientoOrigenID va al revés que MovimientoID: apunta al egreso del adelanto que este
+        // descuento netea. Si ese egreso no está, el descuento sigue siendo válido pero no hay
+        // forma de auditar de dónde salió — va el monto para poder encontrarlo en la hoja.
+        const movOrigen = String(r[PJ_IX.MOV_ORIGEN_ID - 1] || "").trim();
+        if (movOrigen && !MOVX.existe[movOrigen]) {
+          add("error", "Pagos a jugadores", "El descuento de " + fmtMonto_(r[7]) + " de \"" + quien +
+              "\" dice venir de un movimiento que ya no existe: no se puede verificar contra qué adelanto se descuenta.");
+        }
       }
 
       // ── Roster de partidos ──
@@ -977,11 +1022,19 @@ function handleAction(data) {
         if (id) movIds[id] = true;
       }
 
-      const jugadores = [], cuotas = [];
+      const jugadores = [], cuotas = [], desvinculados = [];
 
       const pjSh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
       const pjAll = pjSh.getDataRange().getValues();
       for (let i = 1; i < pjAll.length; i++) {
+        // El otro tipo de referencia colgada: un descuento que dice venir de un adelanto que ya no
+        // está. Acá NO se borra ni se vuelve a pendiente nada — el adelanto se le entregó igual al
+        // jugador y el descuento sigue siendo legítimo; lo único que sobra es el link.
+        const movOrigen = String(pjAll[i][PJ_IX.MOV_ORIGEN_ID - 1] || "").trim();
+        if (movOrigen && !movIds[movOrigen]) {
+          pjSh.getRange(i + 1, PJ_IX.MOV_ORIGEN_ID).setValue("");
+          desvinculados.push(String(pjAll[i][2] || "jugador"));
+        }
         const movId = String(pjAll[i][12] || "").trim();
         if (!movId || movIds[movId]) continue;
         pjSh.getRange(i + 1, 9,  1, 3).setValues([["pendiente", "", ""]]);
@@ -1000,7 +1053,7 @@ function handleAction(data) {
         cuotas.push(String(pagAll[i][2] || "adherente") + " " + String(pagAll[i][3] || ""));
       }
 
-      return { ok: true, jugadores, cuotas };
+      return { ok: true, jugadores, cuotas, desvinculados };
     }
 
     case "deleteJugador": {
@@ -1514,7 +1567,8 @@ function handleAction(data) {
           mes:               normalizarMesPJ_(r[13]),
           tipo:              String(r[14]||""),  // "" en las filas anteriores al backfill
           partidoId:         String(r[15]||""),
-          codRubroContra:    String(r[16]||"")   // "" = adelanto, netea como siempre
+          codRubroContra:    String(r[16]||""),  // "" = adelanto, netea como siempre
+          movimientoOrigenId:String(r[17]||"")   // EGRESO del adelanto que este descuento netea
         }));
       return { ok: true, pagosJugadores };
     }
@@ -1525,6 +1579,16 @@ function handleAction(data) {
     case "savePagoJugador": {
       const sh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
       const p   = data.pago;
+      // Las dos formas de un descuento son excluyentes y significan cosas opuestas: con
+      // CodRubroContra el club le vendió algo y hay que CREAR el ingreso; con MovimientoOrigenID
+      // la plata ya salió y el egreso YA está asentado, así que no hay que crear nada. Aceptar las
+      // dos juntas contaría el mismo peso dos veces en la contabilidad. La UI lo impone
+      // deshabilitando un selector cuando se usa el otro; acá se corta igual, que es lo que hace
+      // que la distinción no se difumine desde un cliente viejo o un reintento raro.
+      if (String(p.codRubroContra || "").trim() && String(p.movimientoOrigenId || "").trim()) {
+        return { ok: false, error: "Un descuento no puede tener rubro de contrapartida y movimiento de origen a la vez: " +
+                 "con rubro se registra un ingreso nuevo, con movimiento se netea uno que ya existe. Elegí uno." };
+      }
       const all = sh.getDataRange().getValues();
       if (p.id) {
         for (let i = 1; i < all.length; i++) {
@@ -1533,7 +1597,7 @@ function handleAction(data) {
               p.id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
               Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
               p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||"", p.mes||"",
-              p.tipo||"periodico", p.partidoId||"", p.codRubroContra||""
+              p.tipo||"periodico", p.partidoId||"", p.codRubroContra||"", p.movimientoOrigenId||""
             ]]);
             escribirMesPJ_(sh, i + 1, p.mes || "");
             return { ok: true, id: p.id };
@@ -1545,7 +1609,7 @@ function handleAction(data) {
         id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
         Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
         p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", "", p.mes||"",
-        p.tipo||"periodico", p.partidoId||"", p.codRubroContra||""
+        p.tipo||"periodico", p.partidoId||"", p.codRubroContra||"", p.movimientoOrigenId||""
       ]);
       escribirMesPJ_(sh, sh.getLastRow(), p.mes || "");
       return { ok: true, id };
@@ -2616,15 +2680,24 @@ function safeParseJSON(str, fallback) {
  * filas de Pagos Jugadores y cuotas de Pagos_Adh cuyo MovimientoID sea `movId`.
  * Limpia además fecha y medio de pago, para que la fila quede como antes de confirmarla.
  * Se usa al borrar el movimiento (deleteMov) y al reparar pagos huérfanos.
- * Devuelve { jugadores:[nombres], cuotas:[etiquetas] } para poder avisar qué se revirtió.
+ *
+ * Limpia además el MovimientoOrigenID de los descuentos que apunten al movimiento borrado, pero
+ * DEJANDO EL DESCUENTO VIVO: el adelanto se le entregó igual al jugador, así que el descuento sigue
+ * siendo legítimo aunque el registro del egreso se haya borrado por error. Lo que no puede quedar
+ * es una referencia colgada, que es lo que reporta checkIntegridad.
+ * Devuelve { jugadores:[nombres], cuotas:[etiquetas], desvinculados:[nombres] }.
  */
 function revertirPagosDeMovimiento_(movId) {
-  const out = { jugadores: [], cuotas: [] };
+  const out = { jugadores: [], cuotas: [], desvinculados: [] };
   if (!movId) return out;
 
   const pjSh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
   const pjAll = pjSh.getDataRange().getValues();
   for (let i = 1; i < pjAll.length; i++) {
+    if (String(pjAll[i][PJ_IX.MOV_ORIGEN_ID - 1] || "").trim() === movId) {
+      pjSh.getRange(i + 1, PJ_IX.MOV_ORIGEN_ID).setValue("");
+      out.desvinculados.push(String(pjAll[i][2] || "jugador"));
+    }
     if (String(pjAll[i][12] || "").trim() !== movId) continue;
     pjSh.getRange(i + 1, PJ_IX.ESTADO, 1, 3).setValues([["pendiente", "", ""]]); // Estado, FechaPago, MedioPago
     pjSh.getRange(i + 1, PJ_IX.MOVIMIENTO_ID).setValue("");
@@ -2641,6 +2714,158 @@ function revertirPagosDeMovimiento_(movId) {
     out.cuotas.push(String(pagAll[i][2] || "adherente") + " " + String(pagAll[i][3] || ""));
   }
   return out;
+}
+
+/**
+ * ID del jugador de un movimiento, para poder colgarle un descuento.
+ * Los movimientos viejos no tienen JugadorID, así que se cae al nombre — pero sólo para ENCONTRAR
+ * el ID, nunca para inventar la fila con el nombre suelto: una fila de Pagos Jugadores sin ID no la
+ * arrastra un renombre y queda huérfana. Si no se puede resolver, "" y el llamador avisa.
+ */
+function jugadorIdDeMovimiento_(jugadorId, nombre) {
+  const jid = String(jugadorId || "").trim();
+  if (jid) return jid;
+  const n = normStr_gs(String(nombre || "").trim());
+  if (!n) return "";
+  const all = getOrCreateSheet(JUG_SHEET, JUG_COLS).getDataRange().getValues();
+  for (let i = 1; i < all.length; i++) {
+    const id = String(all[i][0] || "").trim();
+    if (id && normStr_gs(String(all[i][1] || "").trim()) === n) return id;
+  }
+  return "";
+}
+
+/** Filas (1-based, como las numera la hoja) de los descuentos vinculados a `movId`. Son varias
+ *  cuando el adelanto se descuenta en cuotas: dos filas de $10 contra un egreso de $20. */
+function filasDescuentoDeMovimiento_(pjAll, movId) {
+  const mid = String(movId || "").trim();
+  const out = [];
+  if (!mid) return out;
+  for (let i = 1; i < pjAll.length; i++) {
+    if (String(pjAll[i][PJ_IX.MOV_ORIGEN_ID - 1] || "").trim() === mid) out.push(i + 1);
+  }
+  return out;
+}
+
+/**
+ * Qué hay que hacerle al descuento vinculado a un movimiento, SIN escribir nada.
+ *
+ * Va separado de la escritura para poder cortar antes de tocar el movimiento: destildar la marca
+ * sobre un descuento ya liquidado tiene que rechazarse entero, y si se validara después el
+ * movimiento ya habría quedado actualizado con el descuento sin borrar.
+ *
+ * `descontar` es data.descontarDelSueldo y tiene TRES estados, no dos:
+ *   { mes }            la casilla está tildada  → crear o actualizar la fila
+ *   false              está destildada          → borrar la fila (o rechazar si ya se liquidó)
+ *   ausente/undefined  el cliente no la gestiona → no tocar nada
+ * El tercero es el que evita que editar un movimiento cualquiera —o un cliente viejo que no manda
+ * el campo— borre un descuento que se cargó desde el modal de Pagos a jugadores.
+ * Devuelve { accion: "nada"|"crear"|"actualizar"|"borrar", fila, mes, error, aviso }.
+ */
+function planDescuentoDeMovimiento_(m, movId, descontar) {
+  if (descontar === undefined || descontar === null) return { accion: "nada" };
+  const pjSh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+  const pjAll = pjSh.getDataRange().getValues();
+  const todas = filasDescuentoDeMovimiento_(pjAll, movId);
+  // Un adelanto descontado en cuotas tiene varias filas apuntándole y una casilla no puede
+  // representar eso: se avisa y se dejan como están. Se editan de a una desde Pagos a jugadores,
+  // que es de donde salieron.
+  if (todas.length > 1) {
+    return { accion: "nada", aviso: "Este movimiento tiene " + todas.length + " descuentos parciales " +
+             "cargados aparte: se guardó el movimiento y no se tocó ninguno. Editalos desde Pagos a jugadores." };
+  }
+  const fila  = todas.length ? todas[0] : 0;
+  const pendiente = fila ? String(pjAll[fila - 1][PJ_IX.ESTADO - 1] || "") === "pendiente" : false;
+
+  if (!descontar) {
+    if (!fila) return { accion: "nada" };
+    if (!pendiente) {
+      const fechaPago = String(pjAll[fila - 1][PJ_IX.FECHA_PAGO - 1] || "");
+      return { accion: "nada", error: "Ese descuento ya se aplicó en la liquidación del " +
+               (fechaPago || "pago ya confirmado") + ". Borrá o revertí esa liquidación antes de desmarcar el adelanto." };
+    }
+    return { accion: "borrar", fila, filaDatos: pjAll[fila - 1] };
+  }
+
+  // El mes del descuento: el elegido en el formulario, o el de la fecha del movimiento.
+  const mes = String((descontar && descontar.mes) || "").trim() ||
+              String(m.fecha || "").slice(0, 7);
+
+  if (!fila) {
+    const jugadorId = jugadorIdDeMovimiento_(m.jugadorId, m.jugadorCT);
+    if (!jugadorId) {
+      return { accion: "nada", aviso: "El movimiento se guardó, pero no se pudo descontar del sueldo: " +
+               "no hay ningún jugador identificado en \"" + String(m.jugadorCT || "").trim() + "\". " +
+               "Cargá el descuento a mano desde Pagos a jugadores." };
+    }
+    return { accion: "crear", mes, jugadorId };
+  }
+  if (!pendiente) {
+    return { accion: "nada", aviso: "El descuento vinculado a este movimiento ya se liquidó: quedó con el monto " +
+             "y el motivo originales. Si el adelanto cambió de verdad, revertí la liquidación." };
+  }
+  return { accion: "actualizar", fila, mes, filaDatos: pjAll[fila - 1] };
+}
+
+/**
+ * Ejecuta el plan de planDescuentoDeMovimiento_.
+ *
+ * La fila del descuento lleva MontoFinal NEGATIVO (así resta de cualquier suma existente sin
+ * lógica especial) y CodRubroContra vacío: el egreso del adelanto ya está en la contabilidad, y
+ * duplicarlo con un movimiento nuevo haría que el rubro del sueldo sume de más.
+ * Devuelve { descuento, descuentoBorradoId } con lo que haya cambiado, para que el front actualice
+ * su copia en memoria sin refrescar. Los datos de la fila vienen en el plan y no se releen celda
+ * por celda: cada lectura suelta es una llamada más a la planilla, que es lo caro en Apps Script.
+ */
+function aplicarPlanDescuento_(plan, m, movId) {
+  const out = {};
+  if (!plan || plan.accion === "nada") return out;
+  const pjSh  = getOrCreateSheet(PJ_SHEET, PJ_COLS);
+  const datos = plan.filaDatos || [];
+
+  if (plan.accion === "borrar") {
+    out.descuentoBorradoId = String(datos[0] || "");
+    pjSh.deleteRow(plan.fila);
+    return out;
+  }
+
+  const monto    = -Math.abs(Number(m.egreso || m.montoFinal || 0));
+  const etiqueta = String(m.concepto || "").trim() || "Adelanto";
+
+  if (plan.accion === "actualizar") {
+    const id        = String(datos[0] || "");
+    const jugadorId = String(datos[1] || "");
+    const nombre    = String(m.jugadorCT || datos[2] || "");
+    pjSh.getRange(plan.fila, 1, 1, PJ_COLS.length).setValues([[
+      id, jugadorId, nombre, "[]", monto, 0, "", monto,
+      "pendiente", "", "", etiqueta, "", plan.mes, "descuento", "", "", movId
+    ]]);
+    escribirMesPJ_(pjSh, plan.fila, plan.mes);
+    out.descuento = descuentoComoObjeto_(id, jugadorId, nombre, monto, etiqueta, plan.mes, movId);
+    return out;
+  }
+
+  const id = uid_gs();
+  pjSh.appendRow([
+    id, plan.jugadorId, String(m.jugadorCT || "").trim(), "[]", monto, 0, "", monto,
+    "pendiente", "", "", etiqueta, "", plan.mes, "descuento", "", "", movId
+  ]);
+  escribirMesPJ_(pjSh, pjSh.getLastRow(), plan.mes);
+  out.descuento = descuentoComoObjeto_(id, plan.jugadorId, String(m.jugadorCT || "").trim(),
+                                       monto, etiqueta, plan.mes, movId);
+  return out;
+}
+
+/** La fila del descuento con la misma forma que devuelve listPagosJugadores, para que el front la
+ *  pueda meter en su array sin volver a pedir la hoja entera. */
+function descuentoComoObjeto_(id, jugadorId, jugadorNombre, monto, etiqueta, mes, movOrigenId) {
+  return {
+    id, jugadorId, jugadorNombre, partidosIncluidos: [],
+    montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
+    estado: "pendiente", fechaPago: "", medioPago: "", etiqueta,
+    movimientoId: "", mes, tipo: "descuento", partidoId: "",
+    codRubroContra: "", movimientoOrigenId: movOrigenId
+  };
 }
 
 /**

@@ -1620,6 +1620,20 @@ function handleAction(data) {
                  "dejá el rubro vacío y vinculalo al movimiento del adelanto; si todavía no está cargado, " +
                  "usá \"El adelanto no está cargado\" para registrarlo." };
       }
+      // Tercer caso del descuento: la plata salió y el EGRESO nunca se cargó. Se registra ACÁ, en
+      // la misma ejecución, y el descuento queda linkeado a él. Después de esto el estado es
+      // idéntico al de un adelanto ya registrado (existe el movimiento, existe el descuento con
+      // MovimientoOrigenID): no hay un tercer modelo de datos que mantener.
+      const outSavePJ = { ok: true };
+      if (data.crearMovimientoOrigen) {
+        const res = registrarAdelantoNoCargado_(p, data.crearMovimientoOrigen);
+        if (res.error) return { ok: false, error: res.error };
+        // El descuento apunta al movimiento creado (o al que ya estaba, si esto es un reintento).
+        p.movimientoOrigenId = res.movId;
+        p.codRubroContra     = "";
+        if (res.movimiento) outSavePJ.movimiento = res.movimiento;
+      }
+
       const all = sh.getDataRange().getValues();
       if (p.id) {
         for (let i = 1; i < all.length; i++) {
@@ -1632,7 +1646,8 @@ function handleAction(data) {
               p.fecha||""
             ]]);
             escribirMesPJ_(sh, i + 1, p.mes || "");
-            return { ok: true, id: p.id };
+            outSavePJ.id = p.id;
+            return outSavePJ;
           }
         }
       }
@@ -1645,7 +1660,8 @@ function handleAction(data) {
         p.fecha||""
       ]);
       escribirMesPJ_(sh, sh.getLastRow(), p.mes || "");
-      return { ok: true, id };
+      outSavePJ.id = id;
+      return outSavePJ;
     }
 
     // Completa la columna Tipo (y PartidoID cuando se puede deducir) en las filas cargadas antes
@@ -2895,6 +2911,98 @@ function aplicarPlanDescuento_(plan, m, movId) {
   out.descuento = descuentoComoObjeto_(id, plan.jugadorId, String(m.jugadorCT || "").trim(),
                                        monto, etiqueta, plan.mes, movId, String(m.fecha || ""));
   return out;
+}
+
+/**
+ * Rubro al que se imputa el sueldo de una persona: el de su ficha (18 para el cuerpo técnico, 19
+ * para el resto), con fallback al default si está vacío o si el código no existe en el catálogo.
+ * Misma regla que confirmarPagosJugadores — si divergen, el adelanto y su liquidación caen en
+ * rubros distintos y el gasto de sueldos queda partido en dos.
+ */
+function rubroSueldoDeFicha_(jugadorId) {
+  const jid = String(jugadorId || "").trim();
+  if (jid) {
+    const all = getOrCreateSheet(CFGJ_SHEET, CFGJ_COLS).getDataRange().getValues();
+    for (let i = 1; i < all.length; i++) {
+      if (String(all[i][0] || "").trim() !== jid) continue;
+      const cod = String(all[i][10] || "").trim();
+      return RUBROS_MAP[cod] ? cod : CFGJ_RUBRO_SUELDO_DEFAULT;
+    }
+  }
+  return CFGJ_RUBRO_SUELDO_DEFAULT;
+}
+
+/**
+ * Registra el EGRESO de un adelanto que salió de la caja y nunca se cargó, para que el descuento
+ * que lo netea tenga a qué apuntar.
+ *
+ * Es el tercer caso del descuento —ni contrapartida ni adelanto ya registrado— y colapsa en el
+ * segundo: al terminar hay un movimiento y un descuento con MovimientoOrigenID, exactamente la
+ * misma forma que deja el flujo de la fase 9. Nada de lo que lee ese campo (el desglose de la
+ * liquidación, la validación de no descontar dos veces, checkIntegridad) cambia.
+ *
+ * Se crea EN EL MOMENTO y no al liquidar, a diferencia de la contrapartida de la fase 4: el hecho
+ * económico de la contrapartida ocurre en la liquidación (el club le cobra la camiseta
+ * descontándosela), pero el adelanto YA ocurrió — la plata salió de la caja el día que dice la
+ * fecha. Esperar a fin de mes deja el saldo de esa cuenta mal durante semanas, que es justamente el
+ * problema que esto viene a resolver.
+ *
+ * IDEMPOTENCIA: el front genera el id con uid() y lo manda. Si ese id ya está en la hoja NO se crea
+ * nada y se sigue con el descuento. Es lo CONTRARIO de lo que hace saveMov, que ante un id repetido
+ * genera uno nuevo para no pisar filas. Allá tiene sentido (doble click en el formulario = dos
+ * movimientos distintos, cada uno con su plata); acá no: el único caso de id repetido es un
+ * reintento después de una respuesta perdida, y ahí duplicar el egreso duplicaría el gasto.
+ *
+ * Devuelve { movId, movimiento, error }. `movimiento` viene sólo si se creó (en un reintento no
+ * viene: el front ya lo tiene).
+ */
+function registrarAdelantoNoCargado_(p, datos) {
+  if (String(p.codRubroContra || "").trim()) {
+    return { error: "Un descuento no puede imputarse a un rubro de contrapartida y registrar además el " +
+             "egreso del adelanto: con rubro el club COBRÓ algo, con adelanto el club PAGÓ algo. Elegí uno." };
+  }
+  const fecha     = String(datos.fecha || "").trim();
+  const cuenta    = String(datos.cuenta || "").trim();
+  const medioPago = String(datos.medioPago || "").trim();
+  const monto     = Math.abs(Number(p.montoFinal || 0));
+  if (!fecha)     return { error: "Falta la fecha del adelanto." };
+  if (!cuenta)    return { error: "Falta la cuenta de la que salió el adelanto." };
+  if (!monto)     return { error: "El adelanto no puede ser de $0." };
+  const jugadorId = String(p.jugadorId || "").trim();
+  if (!jugadorId) return { error: "No se puede registrar el adelanto sin saber de qué jugador es." };
+
+  const movSh = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+  const movId = String(datos.id || "").trim() || uid_gs();
+  if (idExisteEnMov(movSh, movId)) return { movId };
+
+  // El rubro sale de la ficha, igual que en confirmarPagosJugadores: el adelanto ES sueldo pagado
+  // por adelantado, así que tiene que caer en el mismo rubro que la liquidación de la que se
+  // descuenta. Rubro y Categoria salen de RUBROS_MAP, nunca escritos a mano.
+  const codRubro = rubroSueldoDeFicha_(jugadorId);
+  const info     = RUBROS_MAP[codRubro] || RUBROS_MAP[CFGJ_RUBRO_SUELDO_DEFAULT];
+  const mov = {
+    id: movId, mes: fecha.slice(0, 7).replace("-", ""), fecha,
+    codRubro, rubro: info.nombre, categoria: info.cat,
+    concepto: String(p.etiqueta || "").trim() || "Adelanto de sueldo",
+    egreso: monto, ingreso: 0, montoFinal: monto,
+    cuenta, cuentaDestino: "", modoPago: medioPago,
+    jugadorCT: String(p.jugadorNombre || ""), jugadorId, adherente: "",
+    observacion: "Adelanto entregado — se descuenta del sueldo", comprobante: "", seguroReintegro: 0,
+    tipo: "EGRESO", timestamp: nowTsLocal(),
+    // partidoId VACÍO a propósito: un adelanto no es de la jornada. Resumen > Por Partido no
+    // excluye por rubro sino por categoría, y aunque la de sueldos esté excluida hoy, imputarle un
+    // partido lo haría aparecer en el detalle de esa fecha como si tuviera algo que ver con ella.
+    partidoId: "", eventoId: "", vinculos: [], itemsDetalle: []
+  };
+  movSh.appendRow([
+    mov.id, mov.mes, mov.fecha, mov.codRubro, mov.rubro, mov.categoria,
+    mov.concepto, mov.egreso, mov.ingreso, mov.montoFinal,
+    mov.cuenta, mov.cuentaDestino, mov.modoPago,
+    mov.jugadorCT, mov.adherente, mov.observacion, mov.comprobante, mov.seguroReintegro,
+    mov.tipo, mov.timestamp, mov.partidoId, mov.eventoId, stringifyVinculos(mov.vinculos),
+    stringifyItemsDetalle(mov.itemsDetalle), mov.jugadorId, ""
+  ]);
+  return { movId, movimiento: mov };
 }
 
 /** La fila del descuento con la misma forma que devuelve listPagosJugadores, para que el front la

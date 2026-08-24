@@ -1331,7 +1331,13 @@ const Storage = {
   async listPagosJugadores()       { const r = await this._post({ action:"listPagosJugadores" });
                                      if (r && r.pagosJugadores) r.pagosJugadores = normPagosJugadores(r.pagosJugadores);
                                      return r; },
-  async savePagoJugador(p)         { return this._post({ action:"savePagoJugador", pago:p         }); },
+  // crearMovimientoOrigen (opcional): registra el EGRESO de un adelanto que nunca se cargó y
+  // linkea el descuento, en la misma ejecución. Ver registrarAdelantoNoCargado_ en Code.gs.
+  async savePagoJugador(p, crearMovimientoOrigen) {
+    const req = { action:"savePagoJugador", pago:p };
+    if (crearMovimientoOrigen) req.crearMovimientoOrigen = crearMovimientoOrigen;
+    return this._post(req);
+  },
   async deletePagoJugador(id)      { return this._post({ action:"deletePagoJugador", id           }); },
   // codRubroSueldo: override opcional del rubro del EGRESO (el default sale de la ficha del
   // jugador). El backend sólo lo aplica si el lote es de un jugador solo — ver confirmarPagosJugadores.
@@ -8624,7 +8630,12 @@ function opcionesRubroContraHTML(codSel) {
 // Contexto del modal de descuento: qué fila se está editando (vacío = alta), a dónde volver al
 // guardar, y el movimiento de origen elegido con su ventana de búsqueda. Va en una variable y no en
 // el onclick para no serializarlo en el HTML.
-let pjDescCtx = { pagoId: "", volverALiquidar: "", jugadorId: "", movOrigenId: "", dias: 30, partidoId: "" };
+// crearOrigen: el tercer caso del descuento — el adelanto salió de la caja y el EGRESO nunca se
+// cargó, así que hay que registrarlo ahora. nuevoMovId se fija al elegir la opción y NO se
+// regenera: si el POST falla y el usuario reintenta, el backend ve el mismo id y no duplica el
+// egreso (ver registrarAdelantoNoCargado_ en Code.gs).
+let pjDescCtx = { pagoId: "", volverALiquidar: "", jugadorId: "", movOrigenId: "", dias: 30,
+                  partidoId: "", crearOrigen: false, nuevoMovId: "", yaTieneOrigen: false };
 
 // Ventanas de búsqueda de adelantos. 30 días cubre el caso normal —el adelanto se entrega y se
 // descuenta dentro del mismo mes— sin llenar la lista de egresos viejos; el resto es para los que
@@ -8639,6 +8650,11 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
                 jugadorId,
                 movOrigenId: (pPrev && pPrev.movimientoOrigenId) || "",
                 dias: 30,
+                crearOrigen: false,
+                nuevoMovId: "",
+                // Editar un descuento que YA tiene origen no ofrece crear otro: el egreso de ese
+                // adelanto existe, y registrarlo de nuevo duplicaría el gasto.
+                yaTieneOrigen: !!(pPrev && pPrev.movimientoOrigenId),
                 // Partido desde el que se abrió el modal. Es SÓLO contexto de carga: ningún cálculo
                 // imputa el descuento a ese partido (Resumen > Por Partido y el balance público no
                 // lo miran), pero sin él no hay forma de saber de dónde salió una fila.
@@ -8683,7 +8699,7 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
           <div class="field" id="pj-desc-origen-box">${pjDescOrigenHTML()}</div>
         </div>
         <p class="note" id="pj-desc-excl-nota" style="margin-bottom:4px"></p>
-        <p class="note">Dejalo vacío si es un adelanto que ya le entregaste y ya registraste como egreso. Elegí un rubro si el club le vendió o le cobró algo (camiseta, multa, vianda): además del descuento se va a registrar el ingreso en ese rubro.</p>
+        <p class="note">Un descuento es una de tres cosas. <b>El club le vendió o le cobró algo</b> (camiseta, multa, vianda): elegí el rubro, y además del descuento se registra el ingreso ahí. <b>Le adelantaste plata y el egreso ya está cargado</b>: dejá el rubro vacío y elegí el movimiento de origen, que sólo se netea. <b>Le adelantaste plata y nunca lo cargaste</b>: elegí "El adelanto no está cargado" y el egreso se registra ahora mismo, porque la plata ya salió de la caja.</p>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
           <button class="btn-main" style="flex:1" id="btn-guardar-descuento" onclick="guardarDescuento('${jugadorId}','${esc(jugadorNombre)}')">Guardar</button>
@@ -8718,17 +8734,68 @@ function pjDescOrigenHTML() {
   }).join("");
   const ventanas = PJ_DESC_VENTANAS.map(([d, lbl]) =>
     `<option value="${d}" ${d===pjDescCtx.dias?"selected":""}>${lbl}</option>`).join("");
+  // Sin cuentas ni métodos configurados no hay con qué armar el egreso: la opción se ofrece
+  // deshabilitada y con el motivo, en vez de fallar recién al guardar.
+  const puedeCrear = cuentas.length > 0 && metodos.length > 0;
+  const optCrear = pjDescCtx.yaTieneOrigen ? "" : `
+      <option value="${PJ_DESC_NUEVO}" ${pjDescCtx.crearOrigen?"selected":""} ${puedeCrear?"":"disabled"}>
+        ➕ El adelanto no está cargado — registrarlo ahora${puedeCrear?"":" (faltan cuentas o métodos de pago)"}
+      </option>`;
   return `
     <label>Movimiento de origen (opcional)</label>
     <select class="inp" id="pj-desc-origen" onchange="pjDescSetOrigen(this.value)">
-      <option value="">— Ninguno —</option>
+      <option value="" ${!pjDescCtx.movOrigenId && !pjDescCtx.crearOrigen ? "selected" : ""}>— Ninguno —</option>
       ${opts}
+      ${optCrear}
     </select>
     <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
       <span style="font-size:11px;color:var(--text3)">Egresos de los últimos</span>
       <select class="inp" style="width:auto;padding:2px 6px;font-size:11px" onchange="pjDescSetVentana(this.value)">${ventanas}</select>
     </div>
-    ${cands.length ? "" : `<span style="font-size:11px;color:var(--text3);margin-top:2px">No hay egresos suyos en esa ventana. Las liquidaciones no se listan: no son adelantos.</span>`}`;
+    ${cands.length ? "" : `<span style="font-size:11px;color:var(--text3);margin-top:2px">No hay egresos suyos en esa ventana. Las liquidaciones no se listan: no son adelantos.</span>`}
+    ${pjDescCtx.crearOrigen ? pjDescNuevoOrigenHTML() : ""}`;
+}
+
+/** Valor centinela de la opción "registrarlo ahora". No puede chocar con un id de movimiento. */
+const PJ_DESC_NUEVO = "__nuevo__";
+
+/**
+ * Campos del EGRESO que se va a crear: fecha, cuenta y método. El monto y el concepto salen del
+ * descuento mismo (es la misma plata y el mismo motivo), y el rubro de la ficha del jugador — no se
+ * eligen acá para que no puedan discrepar del descuento que los explica.
+ */
+function pjDescNuevoOrigenHTML() {
+  const optCuentas = cuentas.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  const optMetodos = metodos.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  return `
+    <div style="border-left:2px solid var(--acc);padding-left:8px;margin-top:6px;display:grid;gap:6px">
+      <div class="field" style="margin:0">
+        <label>Fecha en que salió la plata</label>
+        <input class="inp" id="pj-desc-nuevo-fecha" type="date" value="${esc(today())}">
+      </div>
+      <div class="field" style="margin:0">
+        <label>Cuenta</label>
+        <select class="inp" id="pj-desc-nuevo-cuenta" onchange="pjDescNuevoAutoMedio()">${optCuentas}</select>
+      </div>
+      <div class="field" style="margin:0">
+        <label>Método de pago</label>
+        <select class="inp" id="pj-desc-nuevo-medio">${optMetodos}</select>
+      </div>
+      <span style="font-size:11px;color:var(--text3)">
+        Se registra el EGRESO ahora mismo —la plata ya salió de la caja— por el monto del descuento,
+        en el rubro de sueldo de la ficha del jugador y sin partido asociado. El descuento queda
+        linkeado a ese movimiento.
+      </span>
+    </div>`;
+}
+
+/** Default del método según la cuenta, misma regla que el form de movimientos. */
+function pjDescNuevoAutoMedio() {
+  const cuenta = document.getElementById("pj-desc-nuevo-cuenta")?.value || "";
+  const el     = document.getElementById("pj-desc-nuevo-medio");
+  if (!el) return;
+  const mp = medioPagoPorCuenta(cuenta);
+  if ([...el.options].some(o => o.value === mp)) el.value = mp;
 }
 
 function pjDescSetVentana(dias) {
@@ -8742,7 +8809,25 @@ function pjDescSetVentana(dias) {
  *  adelanto en dos cuotas son dos filas apuntando al mismo egreso, y la segunda va por lo que
  *  quedaba. Por eso el monto arranca en el restante y no en el total. */
 function pjDescSetOrigen(movId) {
+  if (movId === PJ_DESC_NUEVO) {
+    pjDescCtx.crearOrigen = true;
+    pjDescCtx.movOrigenId = "";
+    // El id se fija UNA vez y no se regenera: si el POST falla y el usuario vuelve a apretar
+    // Guardar, el backend ve el mismo id y no duplica el egreso.
+    if (!pjDescCtx.nuevoMovId) pjDescCtx.nuevoMovId = uid();
+    const box = document.getElementById("pj-desc-origen-box");
+    if (box) box.innerHTML = pjDescOrigenHTML();
+    pjDescNuevoAutoMedio();
+    pjDescSyncExclusion();
+    return;
+  }
+  const veniaDeCrear = pjDescCtx.crearOrigen;
+  pjDescCtx.crearOrigen = false;
   pjDescCtx.movOrigenId = movId || "";
+  if (veniaDeCrear) {
+    const box = document.getElementById("pj-desc-origen-box");
+    if (box) box.innerHTML = pjDescOrigenHTML();
+  }
   const mov = (movimientos || []).find(m => m.id === pjDescCtx.movOrigenId);
   if (mov) {
     const inpMonto = document.getElementById("pj-desc-monto");
@@ -8767,10 +8852,12 @@ function pjDescSyncExclusion() {
   const conRubro  = !!(selRubro && selRubro.value);
   // El origen se lee del contexto y no del <select>: es la fuente de verdad (guardarDescuento usa
   // la misma), y el control puede todavía no estar repintado cuando esto corre.
-  const conOrigen = !!pjDescCtx.movOrigenId;
+  const conOrigen = !!pjDescCtx.movOrigenId || pjDescCtx.crearOrigen;
   if (selRubro)  selRubro.disabled  = conOrigen;
   if (selOrigen) selOrigen.disabled = conRubro;
-  if (nota) nota.textContent = conOrigen
+  if (nota) nota.textContent = pjDescCtx.crearOrigen
+    ? "Se va a registrar el egreso del adelanto y el descuento va a netearlo: no hay ningún ingreso que imputar, así que no lleva rubro."
+    : conOrigen
     ? "Ese egreso ya está en la contabilidad: el descuento sólo lo netea y no registra nada nuevo, así que no lleva rubro."
     : conRubro
       ? "Con rubro se registra un ingreso nuevo al liquidar, así que no puede además netear un egreso ya cargado."
@@ -8790,8 +8877,20 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
   // El movimiento de origen sale del contexto y no del <select>: cuando el rubro lo deshabilita, el
   // valor del control sigue ahí pero no corresponde mandarlo.
   const movimientoOrigenId = codRubroContra ? "" : (pjDescCtx.movOrigenId || "");
+  // Tercer caso: el adelanto salió de la caja y nunca se cargó. El egreso y el descuento se
+  // escriben en el MISMO POST — encadenar dos acciones de Apps Script duplica la espera y, si
+  // falla la segunda, queda el egreso cargado sin descuento: no se detecta hasta liquidar.
+  const crearOrigen = !codRubroContra && pjDescCtx.crearOrigen;
+  const nuevoOrigen = crearOrigen ? {
+    id:        pjDescCtx.nuevoMovId,
+    fecha:     document.getElementById("pj-desc-nuevo-fecha")?.value || "",
+    cuenta:    document.getElementById("pj-desc-nuevo-cuenta")?.value || "",
+    medioPago: document.getElementById("pj-desc-nuevo-medio")?.value || ""
+  } : null;
   if (!monto)  { toast("Ingresá el monto a descontar", "err"); return; }
   if (!motivo) { toast("Poné el motivo del descuento", "err"); return; }
+  if (crearOrigen && !nuevoOrigen.fecha)  { toast("Poné la fecha en que salió el adelanto", "err"); return; }
+  if (crearOrigen && !nuevoOrigen.cuenta) { toast("Elegí la cuenta de la que salió el adelanto", "err"); return; }
   // Avisa, no bloquea: descontar más de lo que el adelanto fue puede tener un motivo (dos adelantos
   // anotados en un mismo egreso), pero casi siempre es que el monto se tipeó mal.
   if (movimientoOrigenId && pjExcedeElAdelanto(movimientoOrigenId, monto, pjDescCtx.pagoId)) {
@@ -8815,8 +8914,13 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
       codRubroContra, movimientoOrigenId
     };
     if (ctx.pagoId) pago.id = ctx.pagoId;
-    const r = await Storage.savePagoJugador(pago);
+    const r = await Storage.savePagoJugador(pago, nuevoOrigen);
     if (!r.ok) throw new Error(r.error || "Error");
+    // El egreso recién creado entra al array en memoria: si no, el ← del descuento diría
+    // "movimiento borrado" hasta el próximo refresco.
+    if (r.movimiento) aplicarMovimientosCreados([r.movimiento]);
+    // El link lo resuelve el backend (en un reintento devuelve el id del egreso que ya estaba).
+    if (nuevoOrigen) pago.movimientoOrigenId = nuevoOrigen.id;
     const idx = ctx.pagoId ? pagosJugadores.findIndex(x => x.id === ctx.pagoId) : -1;
     if (idx >= 0) Object.assign(pagosJugadores[idx], pago);
     else          pagosJugadores.push({ id: r.id, ...pago, fechaPago: "", medioPago: "", movimientoId: "" });

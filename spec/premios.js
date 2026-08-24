@@ -972,4 +972,111 @@ const r23c = descSueldo("35");
 check("INDUMENTARIA Y MERCH. se acepta", r23c.ok, JSON.stringify(r23c));
 igual("y queda guardado", pjPorId(r23c.id)[PJ_IX.CONTRA], "35");
 
+// ══════════════════════════════════════════════════════════════
+// Tercer caso del descuento: salió plata y el EGRESO nunca se cargó. Se registra en el momento —el
+// hecho económico ya ocurrió— y en el MISMO POST que el descuento, para que no pueda quedar el
+// egreso cargado sin su descuento (el peor estado: no se detecta hasta liquidar).
+seccion("24 · El adelanto no cargado se registra junto con el descuento");
+sembrar();
+const descConAdelanto = (jug, monto, extra) => handleAction({ action: "savePagoJugador",
+  pago: Object.assign({
+    jugadorId: jug, jugadorNombre: jug === "j1" ? "GOMEZ" : "PEREZ", partidosIncluidos: [],
+    montoBase: -monto, ajuste: 0, motivoAjuste: "", montoFinal: -monto,
+    estado: "pendiente", etiqueta: "Adelanto entregado", mes: "2026-06", tipo: "descuento",
+    partidoId: "", codRubroContra: "", movimientoOrigenId: "", fecha: "2026-06-21"
+  }, (extra && extra.pago) || {}),
+  crearMovimientoOrigen: Object.assign(
+    { id: "adel-1", fecha: "2026-06-21", cuenta: "MACRO", medioPago: "EFECTIVO" },
+    (extra && extra.origen) || {})
+});
+
+// Ficha en 19 (jugador). El adelanto ES sueldo pagado por adelantado: mismo rubro que la liquidación.
+const r24 = descConAdelanto("j2", 150000);
+check("un solo POST devuelve ok", r24.ok, JSON.stringify(r24));
+igual("se creó un movimiento", movRows().length, 1);
+const mov24 = movRows()[0];
+igual("es un EGRESO",              mov24[18], "EGRESO");
+igual("por el monto del descuento", Number(mov24[7]), 150000);
+igual("con el rubro de la ficha",   mov24[3], "19");
+igual("y el nombre del catálogo",   mov24[4], "SUELDO JUGADORES");
+igual("y su categoría",             mov24[5], "Jugadores y Cuerpo Técnico");
+igual("SIN partido",                mov24[20], "");
+igual("con la cuenta del formulario", mov24[10], "MACRO");
+igual("y el método",                  mov24[12], "EFECTIVO");
+igual("el concepto es el motivo del descuento", mov24[6], "Adelanto entregado");
+igual("el jugador va completo (id)",     mov24[24], "j2");
+igual("y también el nombre",             mov24[13], "PEREZ");
+check("la observación deja claro que se descuenta", (mov24[15]||"").indexOf("descuenta del sueldo") >= 0, mov24[15]);
+igual("y el descuento quedó linkeado", pjPorId(r24.id)[PJ_IX.MOV_ORIGEN], "adel-1");
+igual("sin rubro de contrapartida",    pjPorId(r24.id)[PJ_IX.CONTRA], "");
+igual("el response trae el movimiento para el front", r24.movimiento.id, "adel-1");
+
+// Ficha en 18 (cuerpo técnico): el rubro lo decide la ficha, no el camino.
+sembrar();
+SHEETS[S.CFGJ].rows[1][10] = "18";   // j1 pasa a cuerpo técnico
+const r24ct = descConAdelanto("j1", 40000);
+check("con la ficha en 18 también sale", r24ct.ok, JSON.stringify(r24ct));
+igual("el egreso va al rubro del CT", movRows()[0][3], "18");
+igual("con su nombre",                movRows()[0][4], "SUELDO DT Y CT");
+
+// ══════════════════════════════════════════════════════════════
+// Reintento tras una respuesta perdida: el front manda el MISMO id de movimiento. Al revés que
+// saveMov, que ante un id repetido genera uno nuevo (allá un id repetido es un doble click, dos
+// movimientos distintos; acá es el mismo adelanto).
+seccion("25 · Reintentar con el mismo id no duplica el adelanto");
+sembrar();
+const r25a = descConAdelanto("j2", 150000);
+igual("el primer intento crea el movimiento", movRows().length, 1);
+const r25b = descConAdelanto("j2", 150000);
+check("el reintento no falla", r25b.ok, JSON.stringify(r25b));
+igual("y NO duplica el movimiento", movRows().length, 1);
+igual("el egreso sigue por el mismo monto", Number(movRows()[0][7]), 150000);
+check("el reintento no devuelve movimiento (el front ya lo tiene)", !r25b.movimiento);
+igual("el descuento del reintento apunta al mismo egreso", pjPorId(r25b.id)[PJ_IX.MOV_ORIGEN], "adel-1");
+
+// ══════════════════════════════════════════════════════════════
+seccion("26 · Liquidar el descuento del adelanto no crea contabilidad nueva");
+sembrar();
+const r26 = descConAdelanto("j2", 30000);
+const idSueldo26 = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
+  montoBase: 50000, ajuste: 0, motivoAjuste: "", montoFinal: 50000,
+  estado: "pendiente", etiqueta: "Junio", mes: "2026-06", tipo: "periodico", partidoId: ""
+}}).id;
+
+const movsAntes26 = movRows().length;
+const rConf26 = confirmar([idSueldo26, r26.id]);
+check("la liquidación sale", rConf26.ok, rConf26.error);
+igual("se agregó UN solo movimiento (el de la liquidación)", movRows().length, movsAntes26 + 1);
+const liq26 = movRows().find(m => m[0] !== "adel-1");
+igual("y el egreso va NETEADO del adelanto", Number(liq26[7]), 20000);
+igual("no se generó ningún ingreso", movRows().filter(m => m[18] === "INGRESO").length, 0);
+igual("el egreso del adelanto sigue intacto", Number(movRows().find(m => m[0] === "adel-1")[7]), 30000);
+
+// ══════════════════════════════════════════════════════════════
+seccion("27 · Borrar el descuento no borra el egreso del adelanto");
+sembrar();
+const r27 = descConAdelanto("j2", 30000);
+const rDel27 = handleAction({ action: "deletePagoJugador", id: r27.id });
+check("el descuento pendiente se borra", rDel27.ok, JSON.stringify(rDel27));
+igual("la fila ya no está", pjRows().filter(r => r[0] === r27.id).length, 0);
+igual("PERO el movimiento queda", movRows().filter(m => m[0] === "adel-1").length, 1);
+igual("por el mismo monto: la plata salió de verdad", Number(movRows()[0][7]), 30000);
+
+// ══════════════════════════════════════════════════════════════
+seccion("28 · Validaciones del alta del adelanto");
+sembrar();
+const rSinCuenta = descConAdelanto("j2", 1000, { origen: { cuenta: "" } });
+check("sin cuenta se rechaza", !rSinCuenta.ok, JSON.stringify(rSinCuenta));
+igual("y no escribe el movimiento", movRows().length, 0);
+igual("ni el descuento",            pjRows().length, 0);
+
+const rSinFecha = descConAdelanto("j2", 1000, { origen: { fecha: "" } });
+check("sin fecha se rechaza", !rSinFecha.ok, JSON.stringify(rSinFecha));
+
+const rConRubro = descConAdelanto("j2", 1000, { pago: { codRubroContra: "35" } });
+check("con rubro de contrapartida se rechaza", !rConRubro.ok, JSON.stringify(rConRubro));
+check("el error explica que son opuestos", (rConRubro.error||"").indexOf("Elegí uno") >= 0, rConRubro.error);
+igual("y no escribió nada", movRows().length, 0);
+
 resumen();

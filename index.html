@@ -646,23 +646,33 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
   }
 }
 
-/* ── Transferencias en notebook: la tabla crece con la cantidad de partidos tildados
-   (una columna por partido), así que a 940px se queda corta enseguida. Igual que la
-   tabla de Movimientos, se "escapa" del contenedor angosto y se re-centra usando todo
-   el ancho de la ventana; los chips y los KPIs de arriba siguen centrados en 940.
+/* ── Tablas anchas de Pagos Jugadores en notebook: no entran en el contenedor de 940px.
+   Transferencias crece con la cantidad de partidos tildados (una columna por partido);
+   Por partido tiene ocho columnas y, desde que "Otros" muestra el detalle fila por fila
+   en vez de sólo el neto, se quedó corta igual. Las dos, como la tabla de Movimientos,
+   se "escapan" del contenedor angosto y se re-centran usando todo el ancho de la ventana;
+   los chips, el selector y los KPIs de arriba siguen centrados en 940.
    El corte es 1024 y no 1200 porque una notebook de 1366 con la pantalla al 125%
    reporta ~1092px, que es justo donde más falta hacía.
-   Mobile queda intacto: no llega la media query y la tabla scrollea de costado. ── */
+   Mobile queda intacto: no llega la media query y la tabla scrollea de costado con su
+   min-width de 820px.
+   El breakout vive en .pj-wide-wrap, que es neutra: .pj-transf-wrap queda sólo con lo
+   que es propio de Transferencias (las celdas de premios), que Por partido no tiene. ── */
 @media (min-width: 1024px) {
-  .pj-transf-wrap {
+  .pj-wide-wrap {
     width: 100vw;
     max-width: 1600px;
     margin-left: 50%;
     transform: translateX(-50%);
   }
   /* Con el ancho de sobra la tabla se reparte sola: el min-width de 820px es el piso
-     de mobile, y los anchos mínimos por celda sólo la inflan sin necesidad. */
-  .pj-transf-wrap .pj-table { min-width: 0; }
+     de mobile, y los anchos mínimos por celda sólo la inflan sin necesidad. Sin esto el
+     breakout no sirve de mucho: la tabla se queda en 820 y sobra ventana a los costados. */
+  .pj-wide-wrap .pj-table { min-width: 0; }
+  /* Los inputs de Por partido tienen width:100%, así que con ancho de sobra el Motivo se estira y
+     le come la columna al detalle de "Otros", que es la que lo necesita. Se le pone techo: sigue
+     entrando un motivo largo y el espacio que sobra va a parar a "Otros". */
+  .pj-wide-wrap .pj-table input.pj-motivo { max-width: 220px; }
   .pj-transf-wrap .pj-table td.pj-premios-cell { min-width: 0; }
   /* El premio va en una línea mientras entre; si la tabla queda justa (muchos partidos
      tildados) el partido al que pertenece baja de renglón en vez de forzar scroll. */
@@ -8112,11 +8122,6 @@ function pjFilasAcumuladoPendiente(jugadorId) {
     && pjTipoFila(p) !== "partido");
 }
 
-/** Suma de lo acumulado pendiente (quincenal/mensual + premios − descuentos) de un jugador. */
-function pjAcumuladoPendiente(jugadorId) {
-  return pjFilasAcumuladoPendiente(jugadorId).reduce((s,p) => s + Number(p.montoFinal||0), 0);
-}
-
 /** Premios pendientes de un jugador. Van aparte del resto porque se eligen uno por uno en
  *  Transferencias: tildar a un jugador para pagarle el partido no tiene que arrastrarle los premios. */
 function pjPremiosPendientes(jugadorId) {
@@ -8147,6 +8152,48 @@ function pjPremiosDeVista(jugadorId) {
     if (!p.partidoId || !sel.length) return p.estado === "pendiente";
     return sel.includes(p.partidoId);
   });
+}
+
+/**
+ * Lo acumulado pendiente que la pantalla "Por partido" tiene que mostrar para el partido a la
+ * vista: premios y descuentos del partido seleccionado, más los que no son de ninguno.
+ *
+ * Sin este filtro, un premio de valla invicta cargado en la fecha anterior seguía apareciendo al
+ * cambiar de partido, y lo mismo los descuentos: la pantalla mostraba todo lo pendiente del jugador
+ * sin mirar de qué fecha era.
+ *
+ * Las filas SIN partidoId se muestran siempre, a propósito: no son de otro partido, son cargos
+ * generales del jugador —un adelanto cargado desde Mensual, o desde el checkbox "Descontar del
+ * sueldo" del formulario de movimientos—. Si se filtraran quedarían invisibles en esta pantalla.
+ * Es la misma primera rama que aplica pjPremiosDeVista.
+ *
+ * NO es la misma función que pjPremiosDeVista y no hay que unificarlas: aquélla acota por
+ * pjPartidosSel (varias fechas tildadas, Transferencias) y sólo mira premios; ésta acota por
+ * pjPartidoSel (una sola fecha) y mira todas las filas acumuladas.
+ */
+function pjFilasDeVistaPartido(jugadorId) {
+  return pjFilasAcumuladoPendiente(jugadorId)
+    .filter(p => !p.partidoId || p.partidoId === pjPartidoSel);
+}
+
+/** Neto de lo que "Por partido" muestra para el partido a la vista. Sale de pjFilasDeVistaPartido,
+ *  las MISMAS filas que pinta el detalle: si saliera de otro conjunto, el número de arriba
+ *  contradiría a la línea que tiene justo al lado. De acá salen además las tarjetas de totales, el
+ *  badge de la fila y el data-premios que lee pjRecalcRow. */
+function pjAcumuladoDeVistaPartido(jugadorId) {
+  return pjFilasDeVistaPartido(jugadorId).reduce((s,p) => s + Number(p.montoFinal||0), 0);
+}
+
+/** Premios y descuentos pendientes que el partido a la vista está dejando fuera de la tabla. Se
+ *  avisan al pie, igual que hace Transferencias con pjPremiosOcultosPorFecha: un premio que no se
+ *  ve no se cobra nunca y nadie se entera de que existe. Sólo los de jugadores que la tabla podría
+ *  listar — el de alguien que ya no está en Config Jugadores no se puede cobrar desde acá. */
+function pjFilasOcultasPorPartido() {
+  return pagosJugadores.filter(p =>
+    p.estado === "pendiente" && pjTipoFila(p) !== "partido"
+    && p.partidoId && p.partidoId !== pjPartidoSel
+    && configJugadores.some(c => c.idJugador === p.jugadorId
+                              && (c.frecuencia === "partido" || c.frecuencia === "quincenal")));
 }
 
 /** Premios pendientes que la selección de fechas está dejando fuera de la tabla. Se avisan en vez
@@ -8417,10 +8464,14 @@ function renderPagoPartido() {
     const motivo = fila ? fila.motivoAjuste || "" : "";
     const final  = fila ? Number(fila.montoFinal||0) : (base + ajuste);
     const estado = fila ? fila.estado : "pendiente";
-    // Premios / montos sueltos pendientes: viven en filas propias (sin partido) y se
-    // cobran junto con el partido, así que suman al total del jugador.
-    const filasOtros  = pjFilasAcumuladoPendiente(cfg.idJugador);
-    const premiosPend = pjAcumuladoPendiente(cfg.idJugador);
+    // Premios / montos sueltos pendientes: viven en filas propias y se cobran junto con el
+    // partido, así que suman al total del jugador. Acotados al partido a la vista (más los que no
+    // son de ninguno): el premio de la fecha pasada no tiene nada que hacer en esta pantalla.
+    // De estas dos variables salen TODOS los números de la fila —el neto, las tarjetas de arriba,
+    // el badge y el data-premios que usa pjRecalcRow—: si alguno leyera el conjunto sin filtrar,
+    // contradiría al detalle que está justo al lado.
+    const filasOtros  = pjFilasDeVistaPartido(cfg.idJugador);
+    const premiosPend = pjAcumuladoDeVistaPartido(cfg.idJugador);
     if (rol !== "noJugo") {
       totalPartido += final;
       if (estado === "pagado") pagadoPartido += final; else pendientePartido += final;
@@ -8433,9 +8484,9 @@ function renderPagoPartido() {
     const badge = !hayPendiente
       ? `<span class="pj-badge pj-badge-pagado">Pagado</span>`
       : `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`;
-    // "Otros" = las filas de pjFilasAcumuladoPendiente: premios y descuentos. Un jugador por
-    // partido también puede tener un descuento tipado (la columna Ajuste es otra cosa — corrige el
-    // monto del partido, no es un cobro del club). El mes del descuento es el del partido a la vista.
+    // "Otros" = premios y descuentos del partido a la vista. Un jugador por partido también puede
+    // tener un descuento tipado (la columna Ajuste es otra cosa — corrige el monto del partido, no
+    // es un cobro del club). El mes del descuento es el del partido a la vista.
     // Se lista fila por fila con el mismo componente que Mensual: mostrar sólo el neto hacía que
     // $100.000 de premios y $150.000 de adelanto se vieran como −$50.000 y nada más.
     const premiosCell = `
@@ -8463,14 +8514,17 @@ function renderPagoPartido() {
       <td><input class="inp pj-ajuste" type="number" step="1" value="${ajuste}" oninput="pjRecalcRow(this)" ${estado==='pagado'?"disabled":""}></td>
       <td><input class="inp pj-motivo" type="text" value="${esc(motivo)}" placeholder="Motivo (opcional)" ${estado==='pagado'?"disabled":""}></td>
       ${premiosCell}
-      <td class="mono pj-final">${fmt(final + premiosPend)}</td>
+      <!-- fmtSigned: con un descuento más grande que el partido el Final es negativo, y fmt lo
+           pintaba en positivo — el mismo número que el detalle de al lado muestra en rojo. -->
+      <td class="mono pj-final" style="${final + premiosPend < 0 ? 'color:var(--red)' : ''}">${fmtSigned(final + premiosPend)}</td>
       <td>${badge}</td>
     </tr>`;
   }).join("");
 
   const rowsPeriodico = cfgPeriodico.map(cfg => {
-    const filasOtros = pjFilasAcumuladoPendiente(cfg.idJugador);
-    const acumulado = pjAcumuladoPendiente(cfg.idJugador);
+    // Mismo criterio que las filas de arriba: lo del partido a la vista más lo que no es de ninguno.
+    const filasOtros = pjFilasDeVistaPartido(cfg.idJugador);
+    const acumulado  = pjAcumuladoDeVistaPartido(cfg.idJugador);
     const label = "Quincenal · acumulado";
     const hayPendiente = acumulado > 0;
     const badge = hayPendiente
@@ -8480,7 +8534,9 @@ function renderPagoPartido() {
     <tr>
       <td>${esc(cfg.nombre)}</td>
       <td class="pj-acumulado">${label}</td>
-      <td class="mono">${fmt(acumulado)}</td>
+      <!-- fmtSigned y no fmt: con un acumulado neteado por un descuento, fmt(-8000) pintaba
+           "$8.000" — el mismo número que la columna de al lado muestra como −$8.000. -->
+      <td class="mono" style="${acumulado<0?'color:var(--red)':''}">${fmtSigned(acumulado)}</td>
       <td colspan="2" style="text-align:center">
         <button class="btn-sm" onclick="abrirAgregarMontoModal('${cfg.idJugador}','${esc(cfg.nombre)}')">+ Agregar monto</button>
       </td>
@@ -8496,24 +8552,37 @@ function renderPagoPartido() {
     </tr>`;
   }).join("");
 
+  // Lo que el filtro por partido deja afuera se avisa, igual que hace Transferencias con
+  // pjPremiosOcultosPorFecha: un premio que no se ve no se cobra nunca y nadie se entera de que
+  // existe. Al pie de la tabla y no arriba, que es donde se lo busca al no encontrar un cargo.
+  const ocultasOtroPartido = pjFilasOcultasPorPartido();
+  const fechasOcultas = [...new Set(ocultasOtroPartido.map(p => pjPartidoLabel(p.partidoId)))];
+  const avisoOtroPartido = ocultasOtroPartido.length
+    ? `<p class="note">${ocultasOtroPartido.length === 1
+         ? "Hay 1 premio o descuento pendiente de otra fecha"
+         : `Hay ${ocultasOtroPartido.length} premios o descuentos pendientes de otras fechas`}
+         (${esc(fechasOcultas.join(", "))}) que no se muestran acá.
+         Elegí esa fecha arriba para verlos.</p>`
+    : "";
+
   return `
     <div class="field">
       <label>Partido</label>
       <select class="inp" id="pj-partido-sel" onchange="pjPartidoSel=this.value; renderPagosJugadores()">${opciones}</select>
     </div>
     <div class="sum-grid three">
-      <div class="stat-card"><div class="stat-label">Total a pagar</div><div class="stat-val acc" id="pj-part-total">${fmt(totalPartido)}</div></div>
-      <div class="stat-card"><div class="stat-label">Ya pagado</div><div class="stat-val ing" id="pj-part-pagado">${fmt(pagadoPartido)}</div></div>
-      <div class="stat-card"><div class="stat-label">Pendiente</div><div class="stat-val egr" id="pj-part-pendiente">${fmt(pendientePartido)}</div></div>
+      <div class="stat-card"><div class="stat-label">Total a pagar</div><div class="stat-val acc" id="pj-part-total">${fmtSigned(totalPartido)}</div></div>
+      <div class="stat-card"><div class="stat-label">Ya pagado</div><div class="stat-val ing" id="pj-part-pagado">${fmtSigned(pagadoPartido)}</div></div>
+      <div class="stat-card"><div class="stat-label">Pendiente</div><div class="stat-val egr" id="pj-part-pendiente">${fmtSigned(pendientePartido)}</div></div>
     </div>
-    <div class="pj-table-wrap">
+    <div class="pj-table-wrap pj-wide-wrap">
       <table class="pj-table">
         <thead><tr>
           <th>Jugador</th><th>Rol</th><th>Base</th><th>Ajuste</th><th>Motivo</th><th>Otros</th><th>Final</th><th>Estado</th>
         </tr></thead>
         <tbody>${rowsPartido}${rowsPeriodico}</tbody>
       </table>
-    </div>
+    </div>${avisoOtroPartido}
     <button class="btn-main" id="btn-guardar-pagopartido" onclick="guardarPagoPartido()">Guardar</button>
   `;
 }
@@ -9005,8 +9074,13 @@ function pjRecalcRow(el) {
   const base    = pjBaseDeFila(tr);
   const ajuste  = Number(tr.querySelector(".pj-ajuste").value || 0);
   const premios = Number(tr.dataset.premios || 0); // se cobran junto con el partido
+  const finalFila = base + ajuste + premios;
   tr.querySelector(".pj-base").textContent  = fmt(base);
-  tr.querySelector(".pj-final").textContent = fmt(base + ajuste + premios);
+  // Mismo formato que el render inicial: si acá se usara fmt, el signo del Final aparecería al
+  // pintar la tabla y desaparecería apenas se toca el rol o el ajuste.
+  const celdaFinal = tr.querySelector(".pj-final");
+  celdaFinal.textContent   = fmtSigned(finalFila);
+  celdaFinal.style.color   = finalFila < 0 ? "var(--red)" : "";
   pjRecalcTotalesPartido();
 }
 
@@ -9028,7 +9102,7 @@ function pjRecalcTotalesPartido() {
     total     += premios;
     pendiente += premios;
   });
-  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = fmt(v); };
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = fmtSigned(v); };
   set("pj-part-total", total);
   set("pj-part-pagado", pagado);
   set("pj-part-pendiente", pendiente);
@@ -9899,7 +9973,7 @@ function renderTransferencias() {
       </label>
       ${pjSoloPendientes && ocultos ? `<span class="pj-acumulado">${ocultos} jugador${ocultos!==1?"es":""} al día sin mostrar</span>` : ""}
     </div>${totalJugadores && !jugadorIds.length ? `<p class="note">No queda nada pendiente para los partidos seleccionados.</p>` : ""}${avisoPremiosOcultos}
-    <div class="pj-table-wrap pj-transf-wrap">
+    <div class="pj-table-wrap pj-wide-wrap pj-transf-wrap">
       <table class="pj-table" id="pj-transf-table">
         <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios y descuentos</th><th>Total</th><th>Alias/CBU</th><th>Liquidación</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="99" class="note">Sin jugadores pendientes para los partidos seleccionados</td></tr>`}</tbody>

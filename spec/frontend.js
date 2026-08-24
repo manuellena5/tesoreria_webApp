@@ -137,7 +137,8 @@ seccion("4 · Mensual: el sueldo arrastra su descuento, no los premios");
 sembrar();
 ids = app.pjIdsDeSeleccion([{ jugadorId: "j2", incluido: true, premiosIds: [] }]);
 igual("sueldo y descuento van juntos", ids.sort(), ["f-desc", "f-sueldo"]);
-igual("el neto del mes ya viene descontado", app.pjAcumuladoPendiente("j2"), 72000);
+igual("el neto del mes ya viene descontado",
+      app.pjFilasAcumuladoPendiente("j2").reduce((s,p) => s + p.montoFinal, 0), 72000);
 
 seccion("5 · Clasificación de filas viejas (sin columna Tipo)");
 sembrar();
@@ -1069,7 +1070,8 @@ app.pagosJugadores.push({
 
 const filasJ1  = app.pjFilasAcumuladoPendiente("j1");
 const detalleJ1 = app.pjDetalleFilasHTML(filasJ1);
-igual("el neto solo no alcanza para explicarlo", app.pjAcumuladoPendiente("j1"), -136000);
+igual("el neto solo no alcanza para explicarlo",
+      app.pjFilasAcumuladoPendiente("j1").reduce((s,p) => s + p.montoFinal, 0), -136000);
 
 // Cada fila aparece con su etiqueta: es lo que distingue el detalle del neto pelado.
 check("lista cada fila, no el neto",
@@ -1090,10 +1092,13 @@ const detallePagado = app.pjDetalleFilasHTML(app.pjFilasAcumuladoPendiente("j1")
 check("un descuento ya pagado no la lleva", !detallePagado.includes("quitarDescuento"), detallePagado);
 app.pagosJugadores.find(p => p.id === "f-desc-j1").estado = "pendiente";
 
-// Las mismas filas por los dos caminos dan exactamente la misma salida.
+// Las mismas filas por los dos caminos dan exactamente la misma salida. Por partido acota al
+// partido a la vista (fase 11), así que se lo para en p1, que es de donde son estas filas.
+app.pjPartidoSel = "p1";
+const detalleVistaJ1 = app.pjDetalleFilasHTML(app.pjFilasDeVistaPartido("j1"));
 const htmlPartido = app.renderPagoPartido();
 const htmlMensual = (app.pjMesSel = "2026-06", app.renderPagoMensual());
-check("Por partido pinta ese detalle", htmlPartido.includes(detalleJ1), detalleJ1.slice(0, 120));
+check("Por partido pinta ese detalle", htmlPartido.includes(detalleVistaJ1), detalleVistaJ1.slice(0, 120));
 igual("y Mensual, el de sus propias filas por la misma función",
       htmlMensual.includes(app.pjDetalleFilasHTML(app.pjFilasMes("j2", "2026-06"))), true);
 
@@ -1147,6 +1152,73 @@ check("el encabezado nombra los descuentos", htmlTransf.includes("<th>Premios y 
 // Un jugador mensual: el descuento también tiene que verse.
 igual("la base del mensual ya viene neteada", app.pjTransfBase("j2"), 72000);
 check("y su descuento se pinta igual", htmlTransf.includes("Multa"), "no aparece el de GOMEZ");
+
+// ══════════════════════════════════════════════════════════════
+// "Por partido" muestra lo del partido a la vista, no todo lo pendiente del jugador. El premio de
+// valla invicta de la fecha pasada seguía apareciendo al cambiar de partido, y los descuentos
+// también. Las filas SIN partido se muestran siempre: son cargos generales del jugador (un adelanto
+// cargado desde Mensual o desde el formulario de movimientos), no filas de otra fecha.
+seccion("33 · Otros se acota al partido seleccionado");
+sembrar();
+app.pagosJugadores.push(
+  // Descuento cargado desde Por partido en p1 (desde la fase 10.1c guarda su partidoId).
+  { id: "f-desc-p1", jugadorId: "j1", jugadorNombre: "PEREZ", partidosIncluidos: [], montoFinal: -5000,
+    estado: "pendiente", etiqueta: "Multa p1", mes: "2026-06", tipo: "descuento", partidoId: "p1" },
+  // Adelanto cargado desde el formulario de movimientos: sin partido, es un cargo general.
+  { id: "f-desc-gral", jugadorId: "j1", jugadorNombre: "PEREZ", partidosIncluidos: [], montoFinal: -3000,
+    estado: "pendiente", etiqueta: "Adelanto", mes: "2026-06", tipo: "descuento", partidoId: "",
+    movimientoOrigenId: "adelX" });
+
+// f-prem1 es el premio de p1; f-prem2 no tiene partido.
+app.pjPartidoSel = "p1";
+let vistas = app.pjFilasDeVistaPartido("j1").map(p => p.id).sort();
+igual("en p1 entran las suyas y las generales", vistas, ["f-desc-gral", "f-desc-p1", "f-prem1", "f-prem2"]);
+
+app.pjPartidoSel = "p2";
+vistas = app.pjFilasDeVistaPartido("j1").map(p => p.id).sort();
+igual("en p2 quedan sólo las generales", vistas, ["f-desc-gral", "f-prem2"]);
+check("el premio de p1 NO aparece",   !vistas.includes("f-prem1"), vistas.join(","));
+check("el descuento de p1 tampoco",   !vistas.includes("f-desc-p1"), vistas.join(","));
+
+app.pjPartidoSel = "p1";
+check("y al volver a su fecha reaparecen",
+      app.pjFilasDeVistaPartido("j1").map(p => p.id).includes("f-prem1"));
+
+// El neto sale de las MISMAS filas que el detalle: si no, contradice la línea de al lado.
+igual("el neto de p1 suma sus cuatro filas",  app.pjAcumuladoDeVistaPartido("j1"), 10000 + 4000 - 5000 - 3000);
+app.pjPartidoSel = "p2";
+igual("el de p2, sólo las generales",         app.pjAcumuladoDeVistaPartido("j1"), 4000 - 3000);
+igual("y coincide con la suma del detalle",
+      app.pjFilasDeVistaPartido("j1").reduce((s,p) => s + p.montoFinal, 0),
+      app.pjAcumuladoDeVistaPartido("j1"));
+
+// Lo que el filtro esconde se avisa: un premio que no se ve no se cobra nunca.
+igual("se avisan las filas de la otra fecha",
+      app.pjFilasOcultasPorPartido().map(p => p.id).sort(), ["f-desc-p1", "f-prem1"]);
+app.pjPartidoSel = "p1";
+igual("estando en su fecha no hay nada oculto", app.pjFilasOcultasPorPartido(), []);
+
+// El data-premios de la fila (que usa pjRecalcRow para la columna Final) sale del mismo número.
+app.pjPartidoSel = "p2";
+const htmlP2 = app.renderPagoPartido();
+check("data-premios usa el neto filtrado", htmlP2.includes('data-premios="1000"'), "no está");
+check("y el aviso al pie nombra la otra fecha", htmlP2.includes("no se muestran acá"), "sin aviso");
+check("el detalle no menciona el premio de p1", !htmlP2.includes("Gol: "), "se coló");
+
+// ── Transferencias no cambia: usa pjPartidosSel (plural) y su propia lógica ──
+seccion("34 · El filtro de Por partido no toca Transferencias");
+app.pjPartidosSel = ["p1"];
+app.pjPartidoSel  = "p2";   // una fecha distinta a la tildada, para que se note si se cruzaran
+igual("pjPremiosDeVista sigue mirando lo tildado",
+      app.pjPremiosDeVista("j1").map(p => p.id).sort(), ["f-prem1", "f-prem2"]);
+// La base de Transferencias arrastra TODOS los descuentos del jugador, sean de la fecha que sean:
+// se liquidan juntos, y ahí no hay un partido "a la vista" que los acote.
+igual("la base de Transferencias no se acota por pjPartidoSel",
+      app.pjTransfBase("j1"), 50000 - 5000 - 3000);
+const idsT = app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: ["f-prem1"] }]);
+app.pjLiqData = { jugadorId: "j1", nombre: "PEREZ", ids: idsT };
+igual("y el Total sigue coincidiendo con pjLiqNeto",
+      app.pjLiqNeto(), app.pjTransfBase("j1") + 10000);
 
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);

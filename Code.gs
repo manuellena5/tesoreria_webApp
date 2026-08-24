@@ -57,7 +57,7 @@ const CFGJ_RUBRO_SUELDO_DEFAULT = "19";
 // Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
 // independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
 const PJ_SHEET = "Pagos Jugadores";
-const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes","Tipo","PartidoID","CodRubroContra","MovimientoOrigenID"];
+const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBase","Ajuste","MotivoAjuste","MontoFinal","Estado","FechaPago","MedioPago","Etiqueta","MovimientoID","Mes","Tipo","PartidoID","CodRubroContra","MovimientoOrigenID","Fecha"];
 // PartidosIncluidos: JSON de un array de IDs de partido ("[]" para filas quincenales/mensuales agregadas a mano)
 // Estado: "pendiente" | "pagado"
 // Mes: "YYYY-MM" (mismo formato que nowMes()/mesLabel() en index.html — NO el "YYYYMM" de MOV_COLS.MES),
@@ -93,6 +93,11 @@ const PJ_COLS  = ["ID","JugadorId","JugadorNombre","PartidosIncluidos","MontoBas
 // nuevo (contrapartida), nunca las dos cosas — savePagoJugador rechaza si llegan juntas.
 // No hay columna espejo en Movimientos: que un movimiento esté descontado se deriva de que exista
 // una fila de acá apuntándole. Un flag paralelo sería dato redundante que puede divergir.
+// Fecha ("YYYY-MM-DD"): la fecha del HECHO que representa la fila — cuándo se entregó el adelanto,
+// cuándo se aplicó la multa. NO confundir con FechaPago, que es la de la transferencia de
+// liquidación y se llena recién al confirmar. Sin esta columna la fecha del adelanto terminaba
+// escrita a mano adentro de la Etiqueta ("Adelanto entregado 21/08"), que no se puede ordenar ni
+// comparar. Vacío es válido: las filas viejas no la tienen y no hay backfill.
 const PJ_IX = {
   ESTADO:        9,
   FECHA_PAGO:   10,
@@ -100,7 +105,8 @@ const PJ_IX = {
   MOVIMIENTO_ID:13,
   TIPO:         15,
   PARTIDO_ID:   16,
-  MOV_ORIGEN_ID:18
+  MOV_ORIGEN_ID:18,
+  FECHA:        19
 };
 const ROS_SHEET = "Roster Partidos";
 const ROS_COLS  = ["IdPartido","JugadorId","JugadorNombre","Rol"];
@@ -1574,7 +1580,10 @@ function handleAction(data) {
           tipo:              String(r[14]||""),  // "" en las filas anteriores al backfill
           partidoId:         String(r[15]||""),
           codRubroContra:    String(r[16]||""),  // "" = adelanto, netea como siempre
-          movimientoOrigenId:String(r[17]||"")   // EGRESO del adelanto que este descuento netea
+          movimientoOrigenId:String(r[17]||""),  // EGRESO del adelanto que este descuento netea
+          // formatFecha porque Sheets devuelve un Date en cuanto la celda tiene formato de fecha.
+          // Vacío es válido: las filas anteriores a la columna no la tienen y no hay backfill.
+          fecha:             formatFecha(r[18])
         }));
       return { ok: true, pagosJugadores };
     }
@@ -1603,7 +1612,8 @@ function handleAction(data) {
               p.id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
               Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
               p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", p.movimientoId||"", p.mes||"",
-              p.tipo||"periodico", p.partidoId||"", p.codRubroContra||"", p.movimientoOrigenId||""
+              p.tipo||"periodico", p.partidoId||"", p.codRubroContra||"", p.movimientoOrigenId||"",
+              p.fecha||""
             ]]);
             escribirMesPJ_(sh, i + 1, p.mes || "");
             return { ok: true, id: p.id };
@@ -1615,7 +1625,8 @@ function handleAction(data) {
         id, p.jugadorId, p.jugadorNombre||"", JSON.stringify(p.partidosIncluidos||[]),
         Number(p.montoBase||0), Number(p.ajuste||0), p.motivoAjuste||"", Number(p.montoFinal||0),
         p.estado||"pendiente", p.fechaPago||"", p.medioPago||"", p.etiqueta||"", "", p.mes||"",
-        p.tipo||"periodico", p.partidoId||"", p.codRubroContra||"", p.movimientoOrigenId||""
+        p.tipo||"periodico", p.partidoId||"", p.codRubroContra||"", p.movimientoOrigenId||"",
+        p.fecha||""
       ]);
       escribirMesPJ_(sh, sh.getLastRow(), p.mes || "");
       return { ok: true, id };
@@ -2849,33 +2860,36 @@ function aplicarPlanDescuento_(plan, m, movId) {
     const nombre    = String(m.jugadorCT || datos[2] || "");
     pjSh.getRange(plan.fila, 1, 1, PJ_COLS.length).setValues([[
       id, jugadorId, nombre, "[]", monto, 0, "", monto,
-      "pendiente", "", "", etiqueta, "", plan.mes, "descuento", "", "", movId
+      "pendiente", "", "", etiqueta, "", plan.mes, "descuento", "", "", movId,
+      String(m.fecha || "")
     ]]);
     escribirMesPJ_(pjSh, plan.fila, plan.mes);
-    out.descuento = descuentoComoObjeto_(id, jugadorId, nombre, monto, etiqueta, plan.mes, movId);
+    out.descuento = descuentoComoObjeto_(id, jugadorId, nombre, monto, etiqueta, plan.mes, movId,
+                                         String(m.fecha || ""));
     return out;
   }
 
   const id = uid_gs();
   pjSh.appendRow([
     id, plan.jugadorId, String(m.jugadorCT || "").trim(), "[]", monto, 0, "", monto,
-    "pendiente", "", "", etiqueta, "", plan.mes, "descuento", "", "", movId
+    "pendiente", "", "", etiqueta, "", plan.mes, "descuento", "", "", movId,
+    String(m.fecha || "")
   ]);
   escribirMesPJ_(pjSh, pjSh.getLastRow(), plan.mes);
   out.descuento = descuentoComoObjeto_(id, plan.jugadorId, String(m.jugadorCT || "").trim(),
-                                       monto, etiqueta, plan.mes, movId);
+                                       monto, etiqueta, plan.mes, movId, String(m.fecha || ""));
   return out;
 }
 
 /** La fila del descuento con la misma forma que devuelve listPagosJugadores, para que el front la
  *  pueda meter en su array sin volver a pedir la hoja entera. */
-function descuentoComoObjeto_(id, jugadorId, jugadorNombre, monto, etiqueta, mes, movOrigenId) {
+function descuentoComoObjeto_(id, jugadorId, jugadorNombre, monto, etiqueta, mes, movOrigenId, fecha) {
   return {
     id, jugadorId, jugadorNombre, partidosIncluidos: [],
     montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
     estado: "pendiente", fechaPago: "", medioPago: "", etiqueta,
     movimientoId: "", mes, tipo: "descuento", partidoId: "",
-    codRubroContra: "", movimientoOrigenId: movOrigenId
+    codRubroContra: "", movimientoOrigenId: movOrigenId, fecha: fecha || ""
   };
 }
 

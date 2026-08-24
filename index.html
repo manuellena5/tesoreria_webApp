@@ -8632,6 +8632,10 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
                 partidoId: pPrev ? (pPrev.partidoId || "") : ((opciones && opciones.partidoId) || "") };
   const p = pPrev;
   const mesSel = (p && p.mes) || mesDefault || nowMes();
+  // Fecha del hecho (cuándo se entregó el adelanto, cuándo se aplicó la multa), distinta del Mes
+  // al que se imputa y de la FechaPago de la liquidación. Las filas viejas no la tienen: ahí el
+  // default es hoy, que es lo que corresponde al alta.
+  const fechaSel = (p && p.fecha) || today();
   const opcionesRubro = opcionesRubroHTML(p ? (p.codRubroContra || "") : "");
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
@@ -8642,6 +8646,10 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
           <div class="field">
             <label>Monto a descontar</label>
             <input class="inp" id="pj-desc-monto" type="number" step="1" min="0" placeholder="0" value="${p ? Math.abs(Number(p.montoFinal||0)) : ""}">
+          </div>
+          <div class="field">
+            <label>Fecha</label>
+            <input class="inp" id="pj-desc-fecha" type="date" value="${esc(fechaSel)}">
           </div>
           <div class="field">
             <label>Mes</label>
@@ -8725,9 +8733,12 @@ function pjDescSetOrigen(movId) {
   if (mov) {
     const inpMonto = document.getElementById("pj-desc-monto");
     const inpMot   = document.getElementById("pj-desc-motivo");
+    const inpFecha = document.getElementById("pj-desc-fecha");
     const restante = pjRestanteDeMov(mov.id, pjDescCtx.pagoId);
     if (inpMonto) inpMonto.value = String(restante || pjMontoDeMov(mov.id));
     if (inpMot)   inpMot.value   = mov.concepto || "Adelanto";
+    // La fecha del descuento es la del adelanto, no la de hoy: es el hecho que la fila documenta.
+    if (inpFecha && mov.fecha) inpFecha.value = mov.fecha;
   }
   pjDescSyncExclusion();
 }
@@ -8757,6 +8768,7 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
   if (document.getElementById(btnId)?.disabled) return;
   const monto  = Math.abs(parseFloat(document.getElementById("pj-desc-monto")?.value || "0") || 0);
   const mes    = document.getElementById("pj-desc-mes")?.value || "";
+  const fecha  = document.getElementById("pj-desc-fecha")?.value || "";
   const motivo = (document.getElementById("pj-desc-motivo")?.value || "").trim();
   // "" = adelanto ya entregado, netea contra el sueldo y no genera nada más. Con rubro, el
   // descuento sale del egreso y se registra como ingreso propio (ver confirmarPagosJugadores).
@@ -8785,7 +8797,7 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
     const pago = {
       jugadorId, jugadorNombre, partidosIncluidos: [],
       montoBase: -monto, ajuste: 0, motivoAjuste: "", montoFinal: -monto,
-      estado: "pendiente", etiqueta: motivo, mes, tipo: "descuento", partidoId: ctx.partidoId || "",
+      estado: "pendiente", etiqueta: motivo, mes, fecha, tipo: "descuento", partidoId: ctx.partidoId || "",
       codRubroContra, movimientoOrigenId
     };
     if (ctx.pagoId) pago.id = ctx.pagoId;

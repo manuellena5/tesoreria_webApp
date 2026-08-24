@@ -914,4 +914,34 @@ igual("el egreso netea el descuento", Number(mov21[7]), 8000);
 igual("pero su ítem va SIN partido",  itemDesc21.partidoId, "");
 igual("el ítem del partido sí lo lleva", items(mov21).find(it => it.desc !== "Multa").partidoId, "p1");
 
+// ══════════════════════════════════════════════════════════════
+// La columna Fecha es la del HECHO (cuándo se entregó el adelanto), no la de la transferencia de
+// liquidación: esa es FechaPago y se llena recién al confirmar. Antes la fecha del adelanto
+// terminaba escrita a mano adentro de la Etiqueta.
+seccion("22 · La columna Fecha va y vuelve entera");
+sembrar();
+const idF22 = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
+  montoBase: -5000, ajuste: 0, motivoAjuste: "", montoFinal: -5000,
+  estado: "pendiente", etiqueta: "Adelanto", mes: "2026-06", tipo: "descuento",
+  partidoId: "", fecha: "2026-06-21"
+}}).id;
+const leidoF22 = () => handleAction({ action: "listPagosJugadores" }).pagosJugadores.find(p => p.id === idF22);
+igual("el alta la guarda", leidoF22().fecha, "2026-06-21");
+igual("y la FechaPago sigue vacía hasta liquidar", leidoF22().fechaPago, "");
+
+// Update: la rama de edición también la escribe.
+handleAction({ action: "savePagoJugador", pago: Object.assign(leidoF22(), { fecha: "2026-06-22" }) });
+igual("el update la reescribe", leidoF22().fecha, "2026-06-22");
+
+// Un Date de Sheets se normaliza igual que el resto de las fechas.
+SHEETS[S.PJ].rows[SHEETS[S.PJ].rows.findIndex(r => r[0] === idF22)][18] = new Date(2026, 5, 23);
+igual("un Date de Sheets se lee como YYYY-MM-DD", leidoF22().fecha, "2026-06-23");
+
+// Filas viejas: sin backfill, vacío es válido y no rompe nada.
+const idViejo22 = altaPremio(3000, "Gol", "p1");
+igual("una fila sin fecha se lee vacía",
+      handleAction({ action: "listPagosJugadores" }).pagosJugadores.find(p => p.id === idViejo22).fecha, "");
+check("y se puede liquidar igual", confirmar([idViejo22]).ok);
+
 resumen();

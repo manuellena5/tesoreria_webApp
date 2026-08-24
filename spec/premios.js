@@ -1079,4 +1079,34 @@ check("con rubro de contrapartida se rechaza", !rConRubro.ok, JSON.stringify(rCo
 check("el error explica que son opuestos", (rConRubro.error||"").indexOf("Elegí uno") >= 0, rConRubro.error);
 igual("y no escribió nada", movRows().length, 0);
 
+// ══════════════════════════════════════════════════════════════
+// Resumen > Por Partido imputa por el PartidoID del movimiento y por el de cada ítem de
+// ItemsDetalle. Ni el PartidoID de un descuento ni el egreso de un adelanto pueden entrar por ahí:
+// un adelanto no es de la jornada.
+seccion("29 · Nada de esto se cuela en Resumen > Por Partido");
+sembrar();
+// Sueldo mensual + descuento cargado desde "Por partido" (con PartidoID) + el adelanto registrado.
+const r29 = descConAdelanto("j2", 30000, { pago: { partidoId: "p1" } });
+igual("el adelanto se registra sin partido", movRows().find(m => m[0] === "adel-1")[20], "");
+const idSueldo29 = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
+  montoBase: 50000, ajuste: 0, motivoAjuste: "", montoFinal: 50000,
+  estado: "pendiente", etiqueta: "Junio", mes: "2026-06", tipo: "periodico", partidoId: ""
+}}).id;
+confirmar([idSueldo29, r29.id]);
+
+const liq29 = movRows().find(m => m[0] !== "adel-1");
+igual("el movimiento de la liquidación tampoco lleva partido", liq29[20], "");
+check("y ninguno de sus ítems", items(liq29).every(it => !it.partidoId), JSON.stringify(items(liq29)));
+igual("ningún movimiento del flujo apunta a un partido",
+      movRows().filter(m => m[20]).length, 0);
+
+// Invariante 2: la suma de ItemsDetalle sigue siendo igual al MontoFinal del movimiento.
+igual("ItemsDetalle sigue cerrando contra el MontoFinal",
+      items(liq29).reduce((a, it) => a + Number(it.monto || 0), 0), Number(liq29[9]));
+
+// Invariante 4: una cuenta por movimiento, también en el egreso del adelanto.
+igual("el adelanto tiene una sola cuenta", movRows().find(m => m[0] === "adel-1")[10], "MACRO");
+igual("y no escribe cuenta destino",       movRows().find(m => m[0] === "adel-1")[11], "");
+
 resumen();

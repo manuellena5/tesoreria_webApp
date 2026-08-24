@@ -944,4 +944,32 @@ igual("una fila sin fecha se lee vacía",
       handleAction({ action: "listPagosJugadores" }).pagosJugadores.find(p => p.id === idViejo22).fecha, "");
 check("y se puede liquidar igual", confirmar([idViejo22]).ok);
 
+// ══════════════════════════════════════════════════════════════
+// Un rubro de sueldo (18/19) como contrapartida haría que la liquidación registre un INGRESO en un
+// rubro de EGRESOS: infla ingresos y subvalúa el gasto de sueldos. Es el error que ya estaba
+// cargado en la hoja. El selector ya no los ofrece; el backend lo corta igual.
+seccion("23 · La contrapartida no puede ser un rubro de sueldos");
+sembrar();
+const descSueldo = cod => handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
+  montoBase: -150000, ajuste: 0, motivoAjuste: "", montoFinal: -150000,
+  estado: "pendiente", etiqueta: "Adelanto entregado", mes: "2026-06", tipo: "descuento",
+  partidoId: "", codRubroContra: cod
+}});
+
+const r23a = descSueldo("19");
+check("SUELDO JUGADORES se rechaza", !r23a.ok, JSON.stringify(r23a));
+check("el error nombra el rubro",    (r23a.error||"").indexOf("SUELDO JUGADORES") >= 0, r23a.error);
+check("y explica que va por el adelanto", (r23a.error||"").indexOf("adelanto") >= 0, r23a.error);
+igual("no se escribió ninguna fila", pjRows().length, 0);
+
+const r23b = descSueldo("18");
+check("SUELDO DT Y CT también", !r23b.ok, JSON.stringify(r23b));
+igual("y tampoco escribió nada", pjRows().length, 0);
+
+// Un rubro de contrapartida legítimo sigue funcionando igual.
+const r23c = descSueldo("35");
+check("INDUMENTARIA Y MERCH. se acepta", r23c.ok, JSON.stringify(r23c));
+igual("y queda guardado", pjPorId(r23c.id)[PJ_IX.CONTRA], "35");
+
 resumen();

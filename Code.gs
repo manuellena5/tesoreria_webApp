@@ -53,6 +53,11 @@ const CFGJ_SHEET = "Config Jugadores";
 const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios","Celular","CodRubroSueldo"];
 // Rubro por defecto del sueldo, y fallback cuando la ficha trae un código que no está en RUBROS_MAP.
 const CFGJ_RUBRO_SUELDO_DEFAULT = "19";
+// Categoría de los rubros de sueldo (18 SUELDO DT Y CT, 19 SUELDO JUGADORES). Se filtra por acá y
+// no por los códigos sueltos, así agregar un rubro de sueldo nuevo al catálogo no obliga a tocar
+// cada validación. Espejo de la constante del mismo nombre en index.html; si cambia el texto de la
+// categoría en RUBROS_MAP, cambiarla en los dos lados.
+const CFGJ_RUBRO_SUELDO_CAT = "Jugadores y Cuerpo Técnico";
 // Frecuencia: "partido" | "quincenal" | "mensual"
 // Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
 // independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
@@ -1603,6 +1608,17 @@ function handleAction(data) {
       if (String(p.codRubroContra || "").trim() && String(p.movimientoOrigenId || "").trim()) {
         return { ok: false, error: "Un descuento no puede tener rubro de contrapartida y movimiento de origen a la vez: " +
                  "con rubro se registra un ingreso nuevo, con movimiento se netea uno que ya existe. Elegí uno." };
+      }
+      // Un rubro de SUELDO como contrapartida genera un INGRESO en un rubro de egresos: infla los
+      // ingresos y subvalúa el gasto de sueldos. Nunca es correcto — descontar contra un rubro de
+      // sueldo es un adelanto, y ese camino es MovimientoOrigenID. El selector ya no los ofrece;
+      // acá se corta igual, que es lo que evita que un cliente viejo o un reintento raro lo cuele.
+      const infoContra = RUBROS_MAP[String(p.codRubroContra || "").trim()];
+      if (infoContra && infoContra.cat === CFGJ_RUBRO_SUELDO_CAT) {
+        return { ok: false, error: "\"" + infoContra.nombre + "\" es un rubro de sueldos: imputarle la contrapartida " +
+                 "registraría un INGRESO en un rubro de gastos. Si es un adelanto que ya le entregaste, " +
+                 "dejá el rubro vacío y vinculalo al movimiento del adelanto; si todavía no está cargado, " +
+                 "usá \"El adelanto no está cargado\" para registrarlo." };
       }
       const all = sh.getDataRange().getValues();
       if (p.id) {

@@ -587,11 +587,23 @@ igual("otro del catálogo",               app.pjRubroContraLabel("10"), "LIGA - 
 igual("un código desconocido se muestra igual", app.pjRubroContraLabel("999"), "999");
 igual("sin código, cadena vacía",        app.pjRubroContraLabel(""), "");
 
-const opts = app.opcionesRubroHTML("35");
+const opts = app.opcionesRubroContraHTML("35");
 check("el selector ofrece INDUMENTARIA Y MERCH.", opts.includes('value="35"'), opts.slice(0, 200));
 check("y deja seleccionado el que se le pasa",    opts.includes('value="35" selected'), opts.slice(0, 200));
 check("agrupa por categoría",                     opts.includes('<optgroup label="Indumentaria y Equipamiento">'));
 check("no ofrece los rubros legacy",             !opts.includes('value="16"'));
+
+// Un rubro de sueldo como contrapartida genera un INGRESO en un rubro de egresos: infla ingresos y
+// subvalúa el gasto de sueldos. Es el error que ya se cargó en la hoja (un adelanto imputado al 19).
+check("NO ofrece SUELDO JUGADORES",              !opts.includes('value="19"'), opts.slice(0, 200));
+check("NO ofrece SUELDO DT Y CT",                !opts.includes('value="18"'), opts.slice(0, 200));
+check("ni la categoría entera",                  !opts.includes('<optgroup label="Jugadores y Cuerpo Técnico">'));
+
+// Pero una fila vieja que YA tiene uno guardado lo sigue mostrando: si se ocultara, abrir el
+// descuento lo pisaría en silencio y el error quedaría sin verse.
+const opts19 = app.opcionesRubroContraHTML("19");
+check("un 19 ya guardado se sigue viendo",        opts19.includes('value="19" selected'), opts19.slice(0, 300));
+check("y sigue sin ofrecer el 18 al lado",       !opts19.includes('value="18"'), opts19.slice(0, 300));
 
 // ══════════════════════════════════════════════════════════════
 // Invariante 1: el comprobante emitido ANTES de liquidar dice exactamente lo mismo que el que

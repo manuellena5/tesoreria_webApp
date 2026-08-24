@@ -121,6 +121,9 @@ function resumen() {
 
 module.exports = { SHEETS, Sheet, reset, hoja, filas, movRow, check, igual, seccion, resumen,
                    handleAction: (d) => handleAction(d),
+                   // RUBROS_MAP vive en el scope del eval de Code.gs: se expone para que las
+                   // pruebas puedan nombrar un rubro sin duplicar el catálogo.
+                   rubro: (cod) => RUBROS_MAP[String(cod)],
                    // Los datos del sitio público no pasan por handleAction (se sirven por doGet):
                    // se expone la función directamente, salteando el caché, que acá sólo estorbaría.
                    datosPublicos: () => construirDatosPublicos_() };

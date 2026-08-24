@@ -56,6 +56,9 @@ function sembrar() {
   ]);
 }
 
+/** Nombre de un rubro del catálogo del backend, para los mensajes de las pruebas. */
+const RUBROS_MAP_SPEC = cod => (H.rubro(cod) || {}).nombre || cod;
+
 const pjRows   = () => filas(S.PJ);
 const pjPorId  = id => pjRows().find(r => r[0] === id);
 const movRows  = () => filas(S.MOV).filter(r => r[0]);
@@ -945,10 +948,13 @@ igual("una fila sin fecha se lee vacía",
 check("y se puede liquidar igual", confirmar([idViejo22]).ok);
 
 // ══════════════════════════════════════════════════════════════
-// Un rubro de sueldo (18/19) como contrapartida haría que la liquidación registre un INGRESO en un
-// rubro de EGRESOS: infla ingresos y subvalúa el gasto de sueldos. Es el error que ya estaba
-// cargado en la hoja. El selector ya no los ofrece; el backend lo corta igual.
-seccion("23 · La contrapartida no puede ser un rubro de sueldos");
+// El pago del sueldo en sí (18/19) como contrapartida haría que la liquidación registre un INGRESO
+// donde sólo hay egresos: la plata que un jugador le devuelve al club es un adelanto que se netea,
+// no un cobro. Es el error que ya estaba cargado en la hoja.
+// Se corta por esos DOS códigos y no por la categoría entera: el resto de "Jugadores y Cuerpo
+// Técnico" —botines, vianda, alquiler— son contrapartidas legítimas (el club paga algo del jugador
+// y recupera parte descontándosela del sueldo).
+seccion("23 · La contrapartida no puede ser el rubro del sueldo");
 sembrar();
 const descSueldo = cod => handleAction({ action: "savePagoJugador", pago: {
   jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
@@ -967,10 +973,38 @@ const r23b = descSueldo("18");
 check("SUELDO DT Y CT también", !r23b.ok, JSON.stringify(r23b));
 igual("y tampoco escribió nada", pjRows().length, 0);
 
-// Un rubro de contrapartida legítimo sigue funcionando igual.
+// Un rubro de contrapartida de otra categoría sigue funcionando igual.
 const r23c = descSueldo("35");
 check("INDUMENTARIA Y MERCH. se acepta", r23c.ok, JSON.stringify(r23c));
 igual("y queda guardado", pjPorId(r23c.id)[PJ_IX.CONTRA], "35");
+
+// Y los de la MISMA categoría que no son el sueldo también: es el caso que destapó el bug — un
+// aporte de botines de $100.000 (EGRESO en el 53) que se recupera de a poco del sueldo.
+sembrar();
+const r23d = descSueldo("53");
+check("Aporte Botines se acepta", r23d.ok, JSON.stringify(r23d));
+igual("y queda guardado",         pjPorId(r23d.id)[PJ_IX.CONTRA], "53");
+["43", "45", "17", "11", "20", "44", "47", "48", "51", "52"].forEach(cod => {
+  sembrar();
+  check("el " + cod + " (" + RUBROS_MAP_SPEC(cod) + ") también se acepta", descSueldo(cod).ok, "rechazó el " + cod);
+});
+
+// Al liquidar, ese descuento genera su INGRESO en el 53: neteado contra el egreso original de los
+// botines deja el gasto neto correcto, que es todo el punto de la contrapartida.
+sembrar();
+const idBotines = descSueldo("53").id;
+const idSueldo23 = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j2", jugadorNombre:"PEREZ", partidosIncluidos: [],
+  montoBase: 200000, ajuste: 0, motivoAjuste: "", montoFinal: 200000,
+  estado: "pendiente", etiqueta: "Junio", mes: "2026-06", tipo: "periodico", partidoId: ""
+}}).id;
+check("la liquidación sale", confirmar([idSueldo23, idBotines]).ok);
+const ingBotines = movRows().find(m => m[18] === "INGRESO");
+igual("se generó el ingreso en Aporte Botines", ingBotines[3], "53");
+igual("con el nombre del catálogo",             ingBotines[4], "Aporte Botines");
+igual("por el monto del descuento",             Number(ingBotines[8]), 150000);
+igual("y el egreso queda por el sueldo BRUTO",
+      Number(movRows().find(m => m[18] === "EGRESO")[7]), 200000);
 
 // ══════════════════════════════════════════════════════════════
 // Tercer caso del descuento: salió plata y el EGRESO nunca se cargó. Se registra en el momento —el

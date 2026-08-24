@@ -594,17 +594,39 @@ check("y deja seleccionado el que se le pasa",    opts.includes('value="35" sele
 check("agrupa por categoría",                     opts.includes('<optgroup label="Indumentaria y Equipamiento">'));
 check("no ofrece los rubros legacy",             !opts.includes('value="16"'));
 
-// Un rubro de sueldo como contrapartida genera un INGRESO en un rubro de egresos: infla ingresos y
-// subvalúa el gasto de sueldos. Es el error que ya se cargó en la hoja (un adelanto imputado al 19).
+// El pago del sueldo en sí (18 y 19) no puede ser contrapartida: un INGRESO ahí no existe. Es el
+// error que ya se cargó en la hoja (un adelanto imputado al 19).
 check("NO ofrece SUELDO JUGADORES",              !opts.includes('value="19"'), opts.slice(0, 200));
 check("NO ofrece SUELDO DT Y CT",                !opts.includes('value="18"'), opts.slice(0, 200));
-check("ni la categoría entera",                  !opts.includes('<optgroup label="Jugadores y Cuerpo Técnico">'));
 
-// Pero una fila vieja que YA tiene uno guardado lo sigue mostrando: si se ocultara, abrir el
-// descuento lo pisaría en silencio y el error quedaría sin verse.
+// PERO el resto de "Jugadores y Cuerpo Técnico" sí: el club paga botines, vianda o alquiler y
+// después recupera parte descontándola del sueldo — ese recupero es un INGRESO real en ese rubro.
+// Excluir la categoría entera (como se hizo en la fase 10) se llevaba puestos estos doce.
+check("SÍ ofrece la categoría, sin los dos de sueldo",
+      opts.includes('<optgroup label="Jugadores y Cuerpo Técnico">'), opts.slice(0, 200));
+[["53","Aporte Botines"], ["43","Vianda"], ["45","Alquiler"], ["17","SERVICIO GIMNASIO"],
+ ["11","COBROS Y PAGOS PASE JUGADOR"], ["20","GASTOS ATENCION JUGADORES"], ["44","Almacén"],
+ ["47","Comida"], ["48","Otros (Refuerzos/DT)"], ["51","Arreglos/Compras Casa Refuerzos"],
+ ["52","Impuestos/Servicios Casa Refuerzos"]].forEach(([cod, nombre]) =>
+  check("ofrece " + cod + " " + nombre, opts.includes('value="' + cod + '"'), "falta el " + cod));
+// El 37 (GASTOS ATENCION REFUERZOS|DT) queda afuera por legacy, no por esta regla: está sólo para
+// leer datos viejos, igual que en el selector de rubro del form de movimientos.
+check("el 37 sigue afuera por legacy",           !opts.includes('value="37"'), opts.slice(0, 200));
+
+// Una fila vieja que YA tiene un 18/19 guardado lo sigue mostrando: si se ocultara, abrir el
+// descuento lo pisaría en silencio y el error quedaría sin verse. Es el caso de la corrección de
+// datos de la fase 10, punto 0.
 const opts19 = app.opcionesRubroContraHTML("19");
 check("un 19 ya guardado se sigue viendo",        opts19.includes('value="19" selected'), opts19.slice(0, 300));
 check("y sigue sin ofrecer el 18 al lado",       !opts19.includes('value="18"'), opts19.slice(0, 300));
+check("sin dejar de ofrecer el resto",            opts19.includes('value="53"'), opts19.slice(0, 300));
+
+// El selector de "Rubro del sueldo" de la ficha del jugador NO cambia: ahí ofrecer la categoría
+// entera es a propósito, y por eso CFGJ_RUBRO_SUELDO_CAT sigue existiendo.
+const optsFicha = app.opcionesRubroSueldoHTML("19");
+check("la ficha sigue ofreciendo el 19",          optsFicha.includes('value="19"'), optsFicha.slice(0, 200));
+check("y el 18",                                  optsFicha.includes('value="18"'), optsFicha.slice(0, 200));
+check("y el resto de la categoría",               optsFicha.includes('value="53"'), optsFicha.slice(0, 200));
 
 // ══════════════════════════════════════════════════════════════
 // Invariante 1: el comprobante emitido ANTES de liquidar dice exactamente lo mismo que el que

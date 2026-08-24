@@ -912,6 +912,14 @@ const CFGJ_RUBRO_SUELDO_DEFAULT = "19";
 // De esta categoría salen las opciones de "Rubro del sueldo". Se filtra RUBROS por la categoría en
 // vez de hardcodear 18/19: si mañana se agrega un rubro acá, aparece solo.
 const CFGJ_RUBRO_SUELDO_CAT = "Jugadores y Cuerpo Técnico";
+// Los rubros que representan el pago del sueldo en sí. Un INGRESO acá no existe: la plata que
+// un jugador le devuelve al club es un adelanto que se netea (MovimientoOrigenID), no un cobro.
+// El resto de la categoría "Jugadores y Cuerpo Técnico" SÍ puede ser contrapartida: el club
+// paga botines, vianda o alquiler y después recupera parte descontándola del sueldo.
+// NO confundir con CFGJ_RUBRO_SUELDO_CAT, que es la categoría entera y sirve para el otro uso
+// (elegir a qué rubro se imputa el sueldo de una persona en su ficha).
+// Espejo de RUBROS_SUELDO en Code.gs: si cambia una, cambiar la otra.
+const RUBROS_SUELDO = ["18", "19"];
 
 // Versión visible en Config (pestaña ⚙️). No se hardcodea acá: se lee directamente de
 // SW_VERSION en sw.js (ver loadAppVersion), así solo hay que tocar un número por cambio.
@@ -8707,18 +8715,22 @@ function renderPagoMensual() {
  * por categoría. Se saltean los legacy, igual que el selector de rubro del form de movimientos:
  * están sólo para leer datos viejos.
  *
- * Se saltean también los de CFGJ_RUBRO_SUELDO_CAT (18 SUELDO DT Y CT, 19 SUELDO JUGADORES), que son
- * rubros de EGRESOS: elegir uno acá genera un INGRESO en un rubro de gastos, que infla ingresos y
- * subvalúa el gasto de sueldos. Nunca es correcto — un descuento contra un rubro de sueldo es un
- * adelanto, y ese camino es el bloque "Movimiento de origen", no éste. Se filtra por la categoría
- * y no por los códigos, mismo criterio que opcionesRubroSueldoHTML.
+ * Se saltean también los de RUBROS_SUELDO (18 SUELDO DT Y CT, 19 SUELDO JUGADORES): son el pago del
+ * sueldo en sí, y un INGRESO ahí no existe. La plata que un jugador le devuelve al club no es un
+ * cobro, es un adelanto que se netea, y ese camino es el bloque "Movimiento de origen".
  *
- * Un código de esa categoría ya guardado en una fila vieja se agrega igual, para que abrir el
- * descuento no lo pise en silencio con otra cosa: se ve, se corrige y recién ahí desaparece.
+ * Se filtra por esos dos códigos y NO por la categoría "Jugadores y Cuerpo Técnico" entera, que es
+ * como estaba y era el razonamiento equivocado: esa categoría tiene otros doce rubros —botines,
+ * vianda, alquiler, gimnasio— que siguen el mismo patrón que la camiseta. El club paga algo del
+ * jugador y después recupera parte descontándosela del sueldo; ese recupero es un INGRESO real en
+ * ese rubro, que neteado contra el egreso original deja el gasto neto correcto.
+ *
+ * Un código excluido ya guardado en una fila vieja se agrega igual, para que abrir el descuento no
+ * lo pise en silencio con otra cosa: se ve, se corrige y recién ahí desaparece.
  */
 function opcionesRubroContraHTML(codSel) {
   const cod   = String(codSel || "");
-  const ok    = r => !r.legacy && (r.cat !== CFGJ_RUBRO_SUELDO_CAT || r.cod === cod);
+  const ok    = r => !r.legacy && (RUBROS_SUELDO.indexOf(r.cod) < 0 || r.cod === cod);
   return [...new Set(RUBROS.filter(ok).map(r => r.cat))].map(cat => {
     const items = RUBROS.filter(r => r.cat === cat && ok(r))
       .map(r => `<option value="${esc(r.cod)}" ${r.cod===cod?"selected":""}>${esc(r.nombre)}</option>`).join("");

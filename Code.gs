@@ -53,11 +53,17 @@ const CFGJ_SHEET = "Config Jugadores";
 const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios","Celular","CodRubroSueldo"];
 // Rubro por defecto del sueldo, y fallback cuando la ficha trae un código que no está en RUBROS_MAP.
 const CFGJ_RUBRO_SUELDO_DEFAULT = "19";
-// Categoría de los rubros de sueldo (18 SUELDO DT Y CT, 19 SUELDO JUGADORES). Se filtra por acá y
-// no por los códigos sueltos, así agregar un rubro de sueldo nuevo al catálogo no obliga a tocar
-// cada validación. Espejo de la constante del mismo nombre en index.html; si cambia el texto de la
-// categoría en RUBROS_MAP, cambiarla en los dos lados.
+// Categoría de la que salen las opciones de "Rubro del sueldo" en la ficha del jugador. Espejo de
+// la constante del mismo nombre en index.html; si cambia el texto de la categoría en RUBROS_MAP,
+// cambiarla en los dos lados.
 const CFGJ_RUBRO_SUELDO_CAT = "Jugadores y Cuerpo Técnico";
+// Los rubros que representan el pago del sueldo en sí. Un INGRESO acá no existe: la plata que
+// un jugador le devuelve al club es un adelanto que se netea (MovimientoOrigenID), no un cobro.
+// El resto de la categoría "Jugadores y Cuerpo Técnico" SÍ puede ser contrapartida: el club
+// paga botines, vianda o alquiler y después recupera parte descontándola del sueldo.
+// NO confundir con CFGJ_RUBRO_SUELDO_CAT, que es la categoría entera y sirve para el otro uso.
+// Espejo de RUBROS_SUELDO en index.html: si cambia una, cambiar la otra.
+const RUBROS_SUELDO = ["18", "19"];
 // Frecuencia: "partido" | "quincenal" | "mensual"
 // Premios: JSON de [{descripcion, monto}] — premios propios del jugador (gol, valla invicta…),
 // independientes de la frecuencia. Se aplican desde Pagos Jugadores y generan filas en PJ_SHEET.
@@ -1609,16 +1615,20 @@ function handleAction(data) {
         return { ok: false, error: "Un descuento no puede tener rubro de contrapartida y movimiento de origen a la vez: " +
                  "con rubro se registra un ingreso nuevo, con movimiento se netea uno que ya existe. Elegí uno." };
       }
-      // Un rubro de SUELDO como contrapartida genera un INGRESO en un rubro de egresos: infla los
-      // ingresos y subvalúa el gasto de sueldos. Nunca es correcto — descontar contra un rubro de
-      // sueldo es un adelanto, y ese camino es MovimientoOrigenID. El selector ya no los ofrece;
-      // acá se corta igual, que es lo que evita que un cliente viejo o un reintento raro lo cuele.
-      const infoContra = RUBROS_MAP[String(p.codRubroContra || "").trim()];
-      if (infoContra && infoContra.cat === CFGJ_RUBRO_SUELDO_CAT) {
-        return { ok: false, error: "\"" + infoContra.nombre + "\" es un rubro de sueldos: imputarle la contrapartida " +
-                 "registraría un INGRESO en un rubro de gastos. Si es un adelanto que ya le entregaste, " +
-                 "dejá el rubro vacío y vinculalo al movimiento del adelanto; si todavía no está cargado, " +
-                 "usá \"El adelanto no está cargado\" para registrarlo." };
+      // El pago del sueldo en sí (18 y 19) como contrapartida genera un INGRESO donde no puede
+      // haberlo: la plata que un jugador le devuelve al club no es un cobro, es un adelanto que se
+      // netea por MovimientoOrigenID. Se corta por esos dos códigos y NO por la categoría entera:
+      // el resto de "Jugadores y Cuerpo Técnico" (botines, vianda, alquiler) sí son contrapartidas
+      // legítimas. El selector ya no los ofrece; acá se corta igual, que es lo que evita que un
+      // cliente viejo o un reintento raro lo cuele.
+      const codContra  = String(p.codRubroContra || "").trim();
+      const infoContra = RUBROS_MAP[codContra];
+      if (codContra && RUBROS_SUELDO.indexOf(codContra) >= 0) {
+        return { ok: false, error: "\"" + ((infoContra || {}).nombre || codContra) + "\" es el rubro del sueldo: " +
+                 "imputarle la contrapartida registraría un INGRESO donde sólo hay egresos. Si es un adelanto que " +
+                 "ya le entregaste, dejá el rubro vacío y vinculalo al movimiento del adelanto; si todavía no está " +
+                 "cargado, usá \"El adelanto no está cargado\" para registrarlo. Si el club le pagó algo (botines, " +
+                 "vianda, alquiler, una camiseta), imputalo a ESE rubro, no al del sueldo." };
       }
       // Tercer caso del descuento: la plata salió y el EGRESO nunca se cargó. Se registra ACÁ, en
       // la misma ejecución, y el descuento queda linkeado a él. Después de esto el estado es

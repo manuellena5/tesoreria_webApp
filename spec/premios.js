@@ -865,4 +865,53 @@ igual("no se tocó ningún movimiento", movRows().length, movsAntes19);
 igual("y el movimiento del adelanto conserva su concepto original",
       movRows().find(m => m[0] === rAd19.id)[6], "Adelanto de sueldo");
 
+// ══════════════════════════════════════════════════════════════
+// El Mes se escribe con formato "@" o Sheets lo guarda como Date ("2026-06" es una fecha válida
+// para él). savePagoJugador lo hacía desde siempre; saveRoster no, y por eso la hoja quedaba con
+// unas filas en texto y otras en fecha. normalizarMesPJ_ lo tapa al leer, pero cualquier lectura
+// directa de la planilla se rompe.
+seccion("20 · saveRoster escribe el Mes como texto en las dos ramas");
+sembrar();
+const formatoMes = id => {
+  const sh = SHEETS[S.PJ];
+  const fila = sh.rows.findIndex(r => r[0] === id) + 1;
+  return sh.getFormat(fila, 14);
+};
+
+const idRos20 = altaPartido(10000);   // rama de alta (appendRow)
+igual("el alta escribe el Mes con formato texto", formatoMes(idRos20), "@");
+igual("y con el valor correcto", pjPorId(idRos20)[13], "2026-06");
+
+// Volver a guardar el mismo roster cae en la rama de update.
+handleAction({ action: "saveRoster", partidoId: "p1", roster: [
+  { jugadorId:"j1", jugadorNombre:"GOMEZ", rol:"titular",
+    montoBase: 12000, ajuste: 0, motivoAjuste: "", montoFinal: 12000, mes: "2026-07" }
+]});
+igual("el update también lo escribe como texto", formatoMes(idRos20), "@");
+igual("con el mes nuevo",                        pjPorId(idRos20)[13], "2026-07");
+igual("y sin duplicar la fila",                  pjRows().filter(r => r[PJ_IX.TIPO] === "partido").length, 1);
+igual("listPagosJugadores lo lee igual",
+      handleAction({ action: "listPagosJugadores" }).pagosJugadores.find(p => p.id === idRos20).mes, "2026-07");
+
+// ══════════════════════════════════════════════════════════════
+// El PartidoID de un descuento es contexto de carga, no imputación: si se propagara al movimiento,
+// el ítem del descuento entraría en ItemsDetalle con ese partido y el concepto del egreso nombraría
+// una fecha que el descuento no paga.
+seccion("21 · El PartidoID de un descuento no se propaga al movimiento");
+sembrar();
+const idPart21 = altaPartido(10000);
+const idDesc21 = handleAction({ action: "savePagoJugador", pago: {
+  jugadorId:"j1", jugadorNombre:"GOMEZ", partidosIncluidos: [],
+  montoBase: -2000, ajuste: 0, motivoAjuste: "", montoFinal: -2000,
+  estado: "pendiente", etiqueta: "Multa", mes: "2026-06", tipo: "descuento", partidoId: "p1"
+}}).id;
+igual("la fila guarda el partido desde el que se cargó", pjPorId(idDesc21)[PJ_IX.PARTIDO_ID], "p1");
+
+confirmar([idPart21, idDesc21]);
+const mov21 = movRows()[0];
+const itemDesc21 = items(mov21).find(it => it.desc === "Multa");
+igual("el egreso netea el descuento", Number(mov21[7]), 8000);
+igual("pero su ítem va SIN partido",  itemDesc21.partidoId, "");
+igual("el ítem del partido sí lo lleva", items(mov21).find(it => it.desc !== "Multa").partidoId, "p1");
+
 resumen();

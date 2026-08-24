@@ -1518,7 +1518,10 @@ function handleAction(data) {
             pjSh.getRange(i + 1, 5, 1, 4).setValues([[
               Number(r.montoBase||0), Number(r.ajuste||0), r.motivoAjuste||"", Number(r.montoFinal||0)
             ]]);
-            pjSh.getRange(i + 1, 14).setValue(r.mes||"");
+            // escribirMesPJ_ y no un setValue pelado: "2026-08" en una celda sin formato de texto
+            // lo guarda Sheets como Date. savePagoJugador ya lo hacía y saveRoster no, y por eso
+            // la hoja tenía unas filas con el Mes en texto y otras con una fecha.
+            escribirMesPJ_(pjSh, i + 1, r.mes||"");
             // Tipo/PartidoID de una fila vieja que se vuelve a guardar: se completan acá para no
             // depender de que el usuario haya corrido el backfill.
             pjSh.getRange(i + 1, PJ_IX.TIPO, 1, 2).setValues([["partido", partidoId]]);
@@ -1533,6 +1536,9 @@ function handleAction(data) {
             "pendiente", "", "", "", "", r.mes||"",
             "partido", partidoId
           ]);
+          // El append no puede formatear la celda antes de que la fila exista, así que se reescribe
+          // como texto una vez agregada — igual que hace savePagoJugador.
+          escribirMesPJ_(pjSh, pjSh.getLastRow(), r.mes||"");
         }
       }
       return { ok: true, quitados };
@@ -1759,7 +1765,12 @@ function handleAction(data) {
           esPartido,
           // Un premio se imputa al partido de su columna PartidoID; un pago de partido, al que
           // dice PartidosIncluidos (que es lo que escribe saveRoster desde siempre).
-          partidoId:     esPartido ? (partidosIncl.length ? String(partidosIncl[0]) : String(all[i][15]||""))
+          // Un DESCUENTO no se imputa a ningún partido aunque su columna PartidoID esté llena: ahí
+          // el partido es sólo el contexto desde el que se cargó la fila (ver guardarDescuento en
+          // index.html). Si se propagara, el ítem del descuento entraría en ItemsDetalle con ese
+          // partido y el concepto del egreso nombraría una fecha que el descuento no paga.
+          partidoId:     tipo === "descuento" ? ""
+                       : esPartido ? (partidosIncl.length ? String(partidosIncl[0]) : String(all[i][15]||""))
                                    : String(all[i][15]||"")
         });
       }

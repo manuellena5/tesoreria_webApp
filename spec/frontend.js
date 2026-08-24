@@ -1032,6 +1032,16 @@ igual("con todas las fechas tildadas no hay nada oculto", app.pjPremiosOcultosPo
 app.pjPartidosSel = [];
 igual("y sin fechas tampoco: ahí se muestran todos", app.pjPremiosOcultosPorFecha(), []);
 
+// ══════════════════════════════════════════════════════════════
+// El Mes de una fila de roster nunca puede quedar vacío: sin él la fila desaparece de todos los
+// filtros por mes y no se la encuentra más.
+seccion("30 · El Mes de un roster cae al mes actual, nunca a vacío");
+sembrar();
+igual("un partido con fecha da su mes", app.pjMesDeRoster("p1"), "2026-06");
+app.partidos.push({ id: "p3", fecha: "", rival: "Sin fecha", numeroFecha: "Fecha 5" });
+igual("un partido sin fecha cae al mes actual", app.pjMesDeRoster("p3"), app.nowMes());
+igual("y un partido que no existe tampoco queda vacío", app.pjMesDeRoster("nope"), app.nowMes());
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

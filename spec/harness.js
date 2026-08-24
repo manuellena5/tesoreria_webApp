@@ -28,11 +28,19 @@ class Range {
     return out;
   }
   setBackground() { return this; } setFontColor() { return this; } setFontWeight() { return this; }
-  setNumberFormat() { return this; }
+  // El formato se registra (no se ignora) porque "escribir el Mes como texto" ES poner "@" antes
+  // del valor: sin esto una prueba no puede distinguir un setValue pelado de escribirMesPJ_.
+  setNumberFormat(f) {
+    for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.setFormat(this.r + i, this.c + j, f);
+    return this;
+  }
+  getNumberFormat() { return this.sh.getFormat(this.r, this.c); }
 }
 
 class Sheet {
-  constructor(name, rows) { this.name = name; this.rows = (rows || []).map(r => r.slice()); }
+  constructor(name, rows) { this.name = name; this.rows = (rows || []).map(r => r.slice()); this.formats = {}; }
+  setFormat(r, c, f) { this.formats[r + ":" + c] = f; }
+  getFormat(r, c) { return this.formats[r + ":" + c] || ""; }
   get(r, c) { const row = this.rows[r - 1] || []; return row[c - 1] === undefined ? "" : row[c - 1]; }
   set(r, c, v) {
     while (this.rows.length < r) this.rows.push([]);

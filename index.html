@@ -8432,7 +8432,7 @@ function renderPagoPartido() {
     const premiosCell = `
       <td class="mono">${premiosPend ? fmtSigned(premiosPend) : "—"}
         <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
-        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}')" title="Cargar descuento">− Descuento</button>
+        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}',{partidoId:'${pjPartidoSel}'})" title="Cargar descuento">− Descuento</button>
       </td>`;
     return `
     <tr class="${rol==='noJugo'?'pj-nojugo':''}" data-jug="${cfg.idJugador}" data-nombre="${esc(cfg.nombre)}"
@@ -8473,7 +8473,7 @@ function renderPagoPartido() {
       </td>
       <td style="text-align:center;white-space:nowrap">
         <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
-        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}')" title="Cargar descuento">− Descuento</button>
+        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}',{partidoId:'${pjPartidoSel}'})" title="Cargar descuento">− Descuento</button>
       </td>
       <td class="mono">${fmtSigned(acumulado)}</td>
       <td>${badge}</td>
@@ -8610,7 +8610,7 @@ function opcionesRubroHTML(codSel) {
 // Contexto del modal de descuento: qué fila se está editando (vacío = alta), a dónde volver al
 // guardar, y el movimiento de origen elegido con su ventana de búsqueda. Va en una variable y no en
 // el onclick para no serializarlo en el HTML.
-let pjDescCtx = { pagoId: "", volverALiquidar: "", jugadorId: "", movOrigenId: "", dias: 30 };
+let pjDescCtx = { pagoId: "", volverALiquidar: "", jugadorId: "", movOrigenId: "", dias: 30, partidoId: "" };
 
 // Ventanas de búsqueda de adelantos. 30 días cubre el caso normal —el adelanto se entrega y se
 // descuenta dentro del mismo mes— sin llenar la lista de egresos viejos; el resto es para los que
@@ -8624,7 +8624,12 @@ function abrirDescuentoModal(jugadorId, jugadorNombre, mesDefault, opciones) {
                 volverALiquidar: (opciones && opciones.volverALiquidar) || "",
                 jugadorId,
                 movOrigenId: (pPrev && pPrev.movimientoOrigenId) || "",
-                dias: 30 };
+                dias: 30,
+                // Partido desde el que se abrió el modal. Es SÓLO contexto de carga: ningún cálculo
+                // imputa el descuento a ese partido (Resumen > Por Partido y el balance público no
+                // lo miran), pero sin él no hay forma de saber de dónde salió una fila.
+                // Al editar manda la que ya tenía la fila, para no reescribirla con otra cosa.
+                partidoId: pPrev ? (pPrev.partidoId || "") : ((opciones && opciones.partidoId) || "") };
   const p = pPrev;
   const mesSel = (p && p.mes) || mesDefault || nowMes();
   const opcionesRubro = opcionesRubroHTML(p ? (p.codRubroContra || "") : "");
@@ -8780,7 +8785,7 @@ async function guardarDescuento(jugadorId, jugadorNombre) {
     const pago = {
       jugadorId, jugadorNombre, partidosIncluidos: [],
       montoBase: -monto, ajuste: 0, motivoAjuste: "", montoFinal: -monto,
-      estado: "pendiente", etiqueta: motivo, mes, tipo: "descuento", partidoId: "",
+      estado: "pendiente", etiqueta: motivo, mes, tipo: "descuento", partidoId: ctx.partidoId || "",
       codRubroContra, movimientoOrigenId
     };
     if (ctx.pagoId) pago.id = ctx.pagoId;
@@ -8898,12 +8903,24 @@ function pjRestoreFormPartido(st) {
   });
 }
 
+/**
+ * Mes al que se imputan las filas de pago de un partido.
+ *
+ * Cae al mes actual, nunca a "": sin partido —o con un partido sin fecha cargada, que hace que
+ * getMes devuelva ""— la fila quedaba con el Mes vacío y desaparecía de todos los filtros por mes.
+ * Mismo criterio que mesPartidoSel en renderPagoPartido: un mes aproximado se corrige a ojo, uno
+ * vacío no se ve.
+ */
+function pjMesDeRoster(partidoId) {
+  const p = partidos.find(x => x.id === partidoId);
+  return (p ? getMes(p.fecha) : "") || nowMes();
+}
+
 async function guardarPagoPartido() {
   const btnId = "btn-guardar-pagopartido";
   if (document.getElementById(btnId)?.disabled) return;
   const rows = [...document.querySelectorAll("#pagosjug-content .pj-table tbody tr[data-jug]")];
-  const partidoActual = partidos.find(p => p.id === pjPartidoSel);
-  const mesPartido = partidoActual ? getMes(partidoActual.fecha) : "";
+  const mesPartido = pjMesDeRoster(pjPartidoSel);
   // El montoBase/montoFinal se calculan de los inputs, NO del texto de la celda "Final":
   // esa celda muestra además los premios, que van en filas propias y no deben duplicarse acá.
   const roster = rows.map(tr => {

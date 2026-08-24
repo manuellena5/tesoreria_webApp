@@ -1054,6 +1054,54 @@ app.partidos.push({ id: "p3", fecha: "", rival: "Sin fecha", numeroFecha: "Fecha
 igual("un partido sin fecha cae al mes actual", app.pjMesDeRoster("p3"), app.nowMes());
 igual("y un partido que no existe tampoco queda vacío", app.pjMesDeRoster("nope"), app.nowMes());
 
+// ══════════════════════════════════════════════════════════════
+// La columna "Otros" de Por partido y la columna "Detalle" de Mensual salen de la MISMA función.
+// Si divergieran mostrarían cosas distintas para los mismos datos — y antes "Otros" pintaba sólo
+// el neto: con $100.000 de premios y $150.000 de adelanto decía −$50.000 y nada más.
+seccion("31 · El detalle de Otros y el de Mensual son el mismo componente");
+sembrar();
+// Un jugador por partido con premio + descuento linkeado a un adelanto, para ejercitar todo.
+app.movimientos = [{ id: "adel9", fecha: "2026-06-21", concepto: "Adelanto", tipo: "EGRESO", egreso: 150000 }];
+app.pagosJugadores.push({
+  id: "f-desc-j1", jugadorId: "j1", jugadorNombre: "PEREZ", partidosIncluidos: [], montoFinal: -150000,
+  estado: "pendiente", etiqueta: "Adelanto entregado", mes: "2026-06", tipo: "descuento",
+  partidoId: "p1", movimientoOrigenId: "adel9", fecha: "2026-06-21" });
+
+const filasJ1  = app.pjFilasAcumuladoPendiente("j1");
+const detalleJ1 = app.pjDetalleFilasHTML(filasJ1);
+igual("el neto solo no alcanza para explicarlo", app.pjAcumuladoPendiente("j1"), -136000);
+
+// Cada fila aparece con su etiqueta: es lo que distingue el detalle del neto pelado.
+check("lista cada fila, no el neto",
+      filasJ1.every(f => detalleJ1.includes(f.etiqueta + ": ")) && filasJ1.length === 3, detalleJ1);
+check("el premio con su etiqueta y monto", detalleJ1.includes("Gol: " + app.fmtSigned(10000)), detalleJ1);
+check("el descuento con signo",            detalleJ1.includes(app.fmtSigned(-150000)), detalleJ1);
+check("y en rojo",                         detalleJ1.includes("color:var(--red)"), detalleJ1);
+check("con la fecha del hecho",            detalleJ1.includes("21/06/2026"), detalleJ1);
+check("y el ← del movimiento de origen",   detalleJ1.includes("← " ) && detalleJ1.includes("adel9"), detalleJ1);
+check("formato inline, no lista vertical", !detalleJ1.includes("<li"), detalleJ1);
+
+// La ✕ va sólo en los descuentos pendientes: los premios se gestionan desde el 🏆 y
+// deletePagoJugador rechaza borrar una fila confirmada.
+igual("una sola ✕, la del descuento", (detalleJ1.match(/quitarDescuento/g) || []).length, 1);
+check("apunta al descuento",          detalleJ1.includes("quitarDescuento('f-desc-j1')"), detalleJ1);
+app.pagosJugadores.find(p => p.id === "f-desc-j1").estado = "pagado";
+const detallePagado = app.pjDetalleFilasHTML(app.pjFilasAcumuladoPendiente("j1"));
+check("un descuento ya pagado no la lleva", !detallePagado.includes("quitarDescuento"), detallePagado);
+app.pagosJugadores.find(p => p.id === "f-desc-j1").estado = "pendiente";
+
+// Las mismas filas por los dos caminos dan exactamente la misma salida.
+const htmlPartido = app.renderPagoPartido();
+const htmlMensual = (app.pjMesSel = "2026-06", app.renderPagoMensual());
+check("Por partido pinta ese detalle", htmlPartido.includes(detalleJ1), detalleJ1.slice(0, 120));
+igual("y Mensual, el de sus propias filas por la misma función",
+      htmlMensual.includes(app.pjDetalleFilasHTML(app.pjFilasMes("j2", "2026-06"))), true);
+
+// Sin filas, cada pantalla pone su propio texto y ninguna rompe.
+igual("sin filas devuelve el vacío que le pasan",
+      app.pjDetalleFilasHTML([], "Sin cargos este mes"),
+      '<span class="pj-acumulado">Sin cargos este mes</span>');
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

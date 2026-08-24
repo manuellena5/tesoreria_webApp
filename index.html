@@ -8419,6 +8419,7 @@ function renderPagoPartido() {
     const estado = fila ? fila.estado : "pendiente";
     // Premios / montos sueltos pendientes: viven en filas propias (sin partido) y se
     // cobran junto con el partido, así que suman al total del jugador.
+    const filasOtros  = pjFilasAcumuladoPendiente(cfg.idJugador);
     const premiosPend = pjAcumuladoPendiente(cfg.idJugador);
     if (rol !== "noJugo") {
       totalPartido += final;
@@ -8432,13 +8433,18 @@ function renderPagoPartido() {
     const badge = !hayPendiente
       ? `<span class="pj-badge pj-badge-pagado">Pagado</span>`
       : `<span class="pj-badge pj-badge-pendiente">Pendiente</span>`;
-    // "Otros" = pjAcumuladoPendiente, que incluye premios y descuentos: un jugador por partido
-    // también puede tener un descuento tipado (la columna Ajuste es otra cosa — corrige el monto
-    // del partido, no es un cobro del club). El mes del descuento es el del partido a la vista.
+    // "Otros" = las filas de pjFilasAcumuladoPendiente: premios y descuentos. Un jugador por
+    // partido también puede tener un descuento tipado (la columna Ajuste es otra cosa — corrige el
+    // monto del partido, no es un cobro del club). El mes del descuento es el del partido a la vista.
+    // Se lista fila por fila con el mismo componente que Mensual: mostrar sólo el neto hacía que
+    // $100.000 de premios y $150.000 de adelanto se vieran como −$50.000 y nada más.
     const premiosCell = `
-      <td class="mono">${premiosPend ? fmtSigned(premiosPend) : "—"}
-        <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
-        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}',{partidoId:'${pjPartidoSel}'})" title="Cargar descuento">− Descuento</button>
+      <td>
+        <div class="mono" style="white-space:nowrap">${premiosPend ? fmtSigned(premiosPend) : "—"}
+          <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
+          <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}',{partidoId:'${pjPartidoSel}'})" title="Cargar descuento">− Descuento</button>
+        </div>
+        ${filasOtros.length ? `<div class="pj-acumulado">${pjDetalleFilasHTML(filasOtros)}</div>` : ""}
       </td>`;
     return `
     <tr class="${rol==='noJugo'?'pj-nojugo':''}" data-jug="${cfg.idJugador}" data-nombre="${esc(cfg.nombre)}"
@@ -8463,6 +8469,7 @@ function renderPagoPartido() {
   }).join("");
 
   const rowsPeriodico = cfgPeriodico.map(cfg => {
+    const filasOtros = pjFilasAcumuladoPendiente(cfg.idJugador);
     const acumulado = pjAcumuladoPendiente(cfg.idJugador);
     const label = "Quincenal · acumulado";
     const hayPendiente = acumulado > 0;
@@ -8477,9 +8484,12 @@ function renderPagoPartido() {
       <td colspan="2" style="text-align:center">
         <button class="btn-sm" onclick="abrirAgregarMontoModal('${cfg.idJugador}','${esc(cfg.nombre)}')">+ Agregar monto</button>
       </td>
-      <td style="text-align:center;white-space:nowrap">
-        <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
-        <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}',{partidoId:'${pjPartidoSel}'})" title="Cargar descuento">− Descuento</button>
+      <td>
+        <div style="text-align:center;white-space:nowrap">
+          <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
+          <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}',{partidoId:'${pjPartidoSel}'})" title="Cargar descuento">− Descuento</button>
+        </div>
+        ${filasOtros.length ? `<div class="pj-acumulado">${pjDetalleFilasHTML(filasOtros)}</div>` : ""}
       </td>
       <td class="mono">${fmtSigned(acumulado)}</td>
       <td>${badge}</td>
@@ -8516,6 +8526,40 @@ function pjFilasMes(jugadorId, mes) {
   );
 }
 
+/**
+ * Detalle inline de un conjunto de filas de "Pagos Jugadores" (premios, sueldos y descuentos).
+ *
+ * Una sola función para las dos pantallas que lo muestran —la columna "Detalle" de Mensual y la
+ * columna "Otros" de Por partido—: si divergieran, mostrarían cosas distintas para los mismos
+ * datos. Antes "Otros" pintaba sólo el neto, y con $100.000 de premios y $150.000 de adelanto
+ * decía −$50.000 y nada más: el número cambiaba y no había forma de saber por qué.
+ *
+ * Formato inline separado por " · " y no una lista vertical: la tabla de Por partido tiene ocho
+ * columnas y se usa desde el celular.
+ *
+ * De cada fila se muestra la etiqueta, el monto con signo, el rubro de contrapartida (lo que
+ * distingue un descuento que además genera un ingreso de uno que sólo netea), el ← del movimiento
+ * de origen cuando lo tiene, y la fecha del hecho si está cargada.
+ * La ✕ va SÓLO en los descuentos pendientes: deletePagoJugador rechaza borrar filas confirmadas, y
+ * los premios se gestionan desde el 🏆.
+ */
+function pjDetalleFilasHTML(filas, vacioLabel) {
+  if (!filas || !filas.length) return `<span class="pj-acumulado">${esc(vacioLabel || "—")}</span>`;
+  return filas.map(p => {
+    const esDesc = pjTipoFila(p) === "descuento";
+    const quitar = (esDesc && p.estado === "pendiente")
+      ? ` <button class="btn-sm danger" style="padding:0 5px" title="Quitar descuento" onclick="quitarDescuento('${p.id}')">✕</button>` : "";
+    const rubro = p.codRubroContra ? ` <span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>` : "";
+    const origen = p.movimientoOrigenId
+      ? ` <button class="btn-sm" style="padding:0 5px" title="Ver el movimiento del adelanto"
+                  onclick="openMovModal('${escJs(p.movimientoOrigenId)}')">← ${esc(pjMovOrigenLabel(p.movimientoOrigenId))}</button>`
+      : "";
+    // La fecha del hecho, no la del pago: de cuándo viene este cargo. Las filas viejas no la tienen.
+    const fecha = p.fecha ? ` <span class="pj-acumulado">${esc(fmtFechaDMY(p.fecha))}</span>` : "";
+    return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${fecha}${rubro}${origen}${quitar}`;
+  }).join(" · ");
+}
+
 function renderPagoMensual() {
   const cfgMensual = configJugadores.filter(c => c.frecuencia === "mensual").sort((a,b)=>a.nombre.localeCompare(b.nombre));
   if (pjMesSel === null) pjMesSel = nowMes();
@@ -8542,23 +8586,7 @@ function renderPagoMensual() {
     totalMes += totalNeto; pagadoMes += totalPagado; pendienteMes += totalPend;
     descuentosMes += filas.filter(p => pjTipoFila(p) === "descuento").reduce((s,p) => s + Number(p.montoFinal||0), 0);
 
-    // Los descuentos se muestran aparte y con su ✕ para poder quitarlos mientras estén pendientes.
-    const detalle = filas.length
-      ? filas.map(p => {
-          const esDesc = pjTipoFila(p) === "descuento";
-          const quitar = (esDesc && p.estado === "pendiente")
-            ? ` <button class="btn-sm danger" style="padding:0 5px" title="Quitar descuento" onclick="quitarDescuento('${p.id}')">✕</button>` : "";
-          // El rubro de contrapartida se muestra: es lo que distingue un descuento que además
-          // genera un ingreso de uno que sólo netea, y de otro modo no se ve por ningún lado.
-          const rubro = p.codRubroContra ? ` <span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>` : "";
-          // Y de qué adelanto sale, cuando está linkeado: es lo que hace auditable el descuento.
-          const origen = p.movimientoOrigenId
-            ? ` <button class="btn-sm" style="padding:0 5px" title="Ver el movimiento del adelanto"
-                        onclick="openMovModal('${escJs(p.movimientoOrigenId)}')">← ${esc(pjMovOrigenLabel(p.movimientoOrigenId))}</button>`
-            : "";
-          return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${rubro}${origen}${quitar}`;
-        }).join(" · ")
-      : `<span class="pj-acumulado">Sin cargos este mes</span>`;
+    const detalle = pjDetalleFilasHTML(filas, "Sin cargos este mes");
 
     const badge = !filas.length ? ""
       : pendientes.length === 0

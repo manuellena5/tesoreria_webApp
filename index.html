@@ -8541,13 +8541,15 @@ function pjFilasMes(jugadorId, mes) {
  * distingue un descuento que además genera un ingreso de uno que sólo netea), el ← del movimiento
  * de origen cuando lo tiene, y la fecha del hecho si está cargada.
  * La ✕ va SÓLO en los descuentos pendientes: deletePagoJugador rechaza borrar filas confirmadas, y
- * los premios se gestionan desde el 🏆.
+ * los premios se gestionan desde el 🏆. `opciones.sinQuitar` la saca del todo — en Transferencias
+ * el detalle es informativo y cualquier repintado se lleva puestos los premios tildados.
  */
-function pjDetalleFilasHTML(filas, vacioLabel) {
+function pjDetalleFilasHTML(filas, vacioLabel, opciones) {
   if (!filas || !filas.length) return `<span class="pj-acumulado">${esc(vacioLabel || "—")}</span>`;
+  const sinQuitar = !!(opciones && opciones.sinQuitar);
   return filas.map(p => {
     const esDesc = pjTipoFila(p) === "descuento";
-    const quitar = (esDesc && p.estado === "pendiente")
+    const quitar = (esDesc && p.estado === "pendiente" && !sinQuitar)
       ? ` <button class="btn-sm danger" style="padding:0 5px" title="Quitar descuento" onclick="quitarDescuento('${p.id}')">✕</button>` : "";
     const rubro = p.codRubroContra ? ` <span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>` : "";
     const origen = p.movimientoOrigenId
@@ -9719,6 +9721,29 @@ async function guardarPremiosJugador(jugadorId, jugadorNombre) {
   } catch(e) { handleSaveError(btnId, e); }
 }
 
+/**
+ * Lo que entra SIEMPRE en el Total de la fila de Transferencias de un jugador: sus partidos
+ * pendientes de la selección de fechas, más su sueldo periódico y sus descuentos. Los premios no
+ * están acá: se eligen uno por uno con su checkbox (ver pjIdsDeSeleccion).
+ *
+ * Es la contracara exacta de pjIdsDeSeleccion con incluido:true — las mismas filas, sumadas en vez
+ * de listadas. Si las dos discreparan, el Total de la tabla diría una cosa y el modal de
+ * liquidación otra, que es el bug que este número tiene que hacer imposible.
+ */
+function pjTransfBase(jugadorId) {
+  const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+  let total = pjFilasSueldoPendiente(jugadorId).reduce((s,p) => s + Number(p.montoFinal||0), 0);
+  if (cfg && cfg.frecuencia === "partido") {
+    // Se recorren los partidos que EXISTEN y están tildados, no pjPartidosSel pelado: es lo que
+    // hace pjIdsDeSeleccion, y un id de un partido borrado que quedó tildado sumaría acá y no allá.
+    partidos.filter(p => (pjPartidosSel || []).includes(p.id)).forEach(p => {
+      const fila = pjFilaPartido(jugadorId, p.id);
+      if (fila && fila.estado === "pendiente") total += Number(fila.montoFinal||0);
+    });
+  }
+  return total;
+}
+
 function renderTransferencias() {
   if (pjPartidosSel === null) {
     // Precarga: partidos que tienen al menos una fila pendiente.
@@ -9778,9 +9803,9 @@ function renderTransferencias() {
   const rows = jugadorIds.map(jid => {
     const info = filasPorJugador[jid];
     const sueldoNeto = info.sueldo.reduce((s,p) => s + Number(p.montoFinal||0), 0);
-    // "base" = lo que arrastra el checkbox principal del jugador: los partidos pendientes de la
-    // selección + su sueldo/descuentos. Los premios NO entran acá (ver premiosCell).
-    let base = sueldoNeto;
+    // "base" = lo que entra siempre en el Total: los partidos pendientes de la selección + su
+    // sueldo/descuentos. Los premios NO entran acá (ver premiosCell).
+    const base = pjTransfBase(jid);
     let cols;
     if (info.periodico) {
       cols = `<td class="mono" colspan="${partidosSel.length||1}">${fmtSigned(sueldoNeto)} <span class="pj-acumulado">acumulado</span></td>`;
@@ -9794,7 +9819,6 @@ function renderTransferencias() {
       cols = partidosSel.map(p => {
         const fila = info.porPartido[p.id];
         if (!fila) return `<td class="mono">—</td>`;
-        if (fila.estado === "pendiente") base += Number(fila.montoFinal||0);
         return `<td class="mono">${fmt(fila.montoFinal)}${fila.estado==='pagado'?' <span class="pj-badge pj-badge-pagado" style="padding:1px 5px">✓</span>':''}</td>`;
       }).join("");
     }
@@ -9804,7 +9828,16 @@ function renderTransferencias() {
     // decidiendo qué premios entran.
     // Los ya cobrados se muestran con ✓ y sin checkbox: están para consultarlos, no para volver
     // a pagarlos.
-    const premiosCell = info.premios.length
+    // Los descuentos (y cualquier otra fila de sueldo suelta) entran SIEMPRE en el Total —viven en
+    // data-base, no en un checkbox— y hasta ahora no se pintaban en ninguna columna: el Total
+    // cambiaba y no había forma de saber por qué. Van como texto, sin checkbox: los premios tienen
+    // uno propio porque se eligen de a uno (esa regla arregló un bug real de premios que se
+    // cobraban solos), pero un descuento es parte del neto, no algo opcional.
+    // Sin ✕ tampoco: quitar un descuento repinta la tabla y se lleva puestos los premios tildados.
+    const sueldoDetalle = info.sueldo.length
+      ? `<div class="pj-acumulado">${pjDetalleFilasHTML(info.sueldo, "", { sinQuitar: true })}</div>`
+      : "";
+    const premiosCell = sueldoDetalle + (info.premios.length
       ? info.premios.map(p => {
           const pagado = p.estado === "pagado";
           return `
@@ -9816,7 +9849,7 @@ function renderTransferencias() {
             ${pagado ? '<span class="pj-badge pj-badge-pagado" style="padding:1px 5px">✓</span>' : ""}
           </label>`;
         }).join("")
-      : "—";
+      : (sueldoDetalle ? "" : "—"));
     // La liquidación es de a un jugador: el botón de la fila abre el modal con todo lo suyo. Si no
     // le queda nada pendiente, en su lugar va el badge y el 🧾 para reemitir el comprobante de la
     // transferencia que ya se hizo — con 15 jugadores de a uno hay que poder ver por dónde se va.
@@ -9868,7 +9901,7 @@ function renderTransferencias() {
     </div>${totalJugadores && !jugadorIds.length ? `<p class="note">No queda nada pendiente para los partidos seleccionados.</p>` : ""}${avisoPremiosOcultos}
     <div class="pj-table-wrap pj-transf-wrap">
       <table class="pj-table" id="pj-transf-table">
-        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios/Ajustes</th><th>Total</th><th>Alias/CBU</th><th>Liquidación</th></tr></thead>
+        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios y descuentos</th><th>Total</th><th>Alias/CBU</th><th>Liquidación</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="99" class="note">Sin jugadores pendientes para los partidos seleccionados</td></tr>`}</tbody>
       </table>
     </div>

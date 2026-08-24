@@ -1102,6 +1102,52 @@ igual("sin filas devuelve el vacío que le pasan",
       app.pjDetalleFilasHTML([], "Sin cargos este mes"),
       '<span class="pj-acumulado">Sin cargos este mes</span>');
 
+// ══════════════════════════════════════════════════════════════
+// El Total de la fila de Transferencias tiene que coincidir con el neto del modal de liquidación:
+// las dos cuentas salen de las mismas filas y si difieren, es un bug. Antes el descuento entraba en
+// info.sueldo, se sumaba al Total… y no se pintaba en ninguna columna: el número cambiaba y no
+// había forma de saber por qué.
+seccion("32 · El Total de Transferencias coincide con pjLiqNeto");
+sembrar();
+app.movimientos = [{ id: "adel9", fecha: "2026-06-21", concepto: "Adelanto", tipo: "EGRESO", egreso: 20000 }];
+// PEREZ cobra por partido: p1 pendiente, dos premios y un descuento linkeado a un adelanto.
+app.pagosJugadores.push({
+  id: "f-desc-j1", jugadorId: "j1", jugadorNombre: "PEREZ", partidosIncluidos: [], montoFinal: -20000,
+  estado: "pendiente", etiqueta: "Adelanto entregado", mes: "2026-06", tipo: "descuento",
+  partidoId: "p1", movimientoOrigenId: "adel9", fecha: "2026-06-21" });
+
+const netoDe = ids => { app.pjLiqData = { jugadorId: "j1", nombre: "PEREZ", ids }; return app.pjLiqNeto(); };
+
+// Sin premios tildados: partido pendiente + descuento.
+igual("la base son el partido y el descuento", app.pjTransfBase("j1"), 30000);
+igual("y coincide con el neto de la liquidación",
+      netoDe(app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: [] }])),
+      app.pjTransfBase("j1"));
+
+// Con los dos premios tildados: el Total de la fila es base + lo tildado.
+const idsConPremios = app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: ["f-prem1", "f-prem2"] }]);
+const totalFila = app.pjTransfBase("j1") + 10000 + 4000;
+igual("con premios tildados también cierra", netoDe(idsConPremios), totalFila);
+igual("y el número es el esperado", totalFila, 44000);
+
+// El descuento se ve en la celda, sin checkbox: entra siempre, no es opcional.
+const htmlTransf = app.renderTransferencias();
+check("el descuento se pinta en la tabla", htmlTransf.includes("Adelanto entregado"), "no aparece");
+check("con el monto en rojo y con signo",
+      htmlTransf.includes(app.fmtSigned(-20000)) && htmlTransf.includes("color:var(--red)"));
+check("y con el ← de su movimiento de origen", htmlTransf.includes("openMovModal(&#39;adel9&#39;)") ||
+      htmlTransf.includes("openMovModal('adel9')"), "sin flecha");
+check("SIN checkbox: no es opcional",
+      !htmlTransf.includes('class="pj-premio-cb" value="f-desc-j1"'), "tiene checkbox");
+check("y sin ✕: repintar se llevaría los premios tildados",
+      !htmlTransf.includes("quitarDescuento(&#39;f-desc-j1&#39;)") &&
+      !htmlTransf.includes("quitarDescuento('f-desc-j1')"), "tiene la cruz");
+check("el encabezado nombra los descuentos", htmlTransf.includes("<th>Premios y descuentos</th>"));
+
+// Un jugador mensual: el descuento también tiene que verse.
+igual("la base del mensual ya viene neteada", app.pjTransfBase("j2"), 72000);
+check("y su descuento se pinta igual", htmlTransf.includes("Multa"), "no aparece el de GOMEZ");
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

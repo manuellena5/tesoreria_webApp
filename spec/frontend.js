@@ -1377,6 +1377,27 @@ igual("un mes con gasto solo del grupo igual cuenta como mes",
 igual("y el promedio divide el total por esos meses", fila36(prom, "Ana").total, -50392);
 igual("Caro solo tiene el mes de su grupo", fila36(prom, "Caro").mesesConGasto, 1);
 
+// ══════════════════════════════════════════════════════════════
+seccion("36 · Aviso al guardar un gasto médico sin reintegro");
+
+// La condición tiene que ser la MISMA que muestra el checkbox en el formulario: avisar por
+// una casilla que el usuario no vio sería peor que no avisar.
+app.F = { codRubro: "21", tipo: "EGRESO", seguroReintegro: 0 };
+check("gasto médico egreso sin tildar → avisa", app.faltaMarcarReintegro());
+
+app.F = { codRubro: "21", tipo: "EGRESO", seguroReintegro: 1 };
+check("con el reintegro tildado NO avisa", !app.faltaMarcarReintegro());
+
+app.F = { codRubro: "21", tipo: "INGRESO", seguroReintegro: 0 };
+check("el reintegro que entra (INGRESO del 21) NO avisa", !app.faltaMarcarReintegro());
+
+app.F = { codRubro: "19", tipo: "EGRESO", seguroReintegro: 0 };
+check("otro rubro NO avisa", !app.faltaMarcarReintegro());
+
+// AJUSTE fuerza codRubro 99 y su propio tipo, así que nunca puede disparar el aviso.
+app.F = { codRubro: "99", tipo: "AJUSTE", seguroReintegro: 0 };
+check("un ajuste de conciliación NO avisa", !app.faltaMarcarReintegro());
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

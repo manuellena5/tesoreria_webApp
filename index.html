@@ -2436,6 +2436,15 @@ function firmaCamposDelRubro() {
          (adelantoDescontableAplica() ? "adelanto" : "");
 }
 
+// Gasto médico (21) cargado como egreso al que no se le marcó "Tiene reintegro del seguro".
+// La condición es exactamente la que muestra el checkbox en el formulario, a propósito: nunca
+// se avisa por una casilla que el usuario no llegó a ver. Un movimiento así queda fuera de los
+// pendientes de reintegro (ver calcReintegrosPorJugador, que lo manda a `sinReintegro`), y ese
+// olvido no se nota hasta que falta plata en la conciliación del seguro.
+function faltaMarcarReintegro() {
+  return F.codRubro === "21" && F.tipo === "EGRESO" && !F.seguroReintegro;
+}
+
 function selectRubroItem(item, input, drop, blurAfter) {
   if (!item) return;
   const firmaAntes = firmaCamposDelRubro();
@@ -2593,6 +2602,16 @@ async function saveMovimiento() {
   // Fecha llamativamente en el futuro: probablemente un error de tipeo, confirmamos antes de guardar.
   if (F.fecha > today() && !editId) {
     if (!confirm("La fecha (" + F.fecha + ") es posterior a hoy. ¿Confirmás que es correcta?")) return;
+  }
+
+  // Gasto médico sin la marca de reintegro: casi siempre es un olvido del checkbox, así que se
+  // pregunta antes de guardar. Igual que el aviso de la fecha, sólo en altas: al editar sería
+  // preguntar de nuevo por algo ya decidido cada vez que se toca el concepto o el monto.
+  if (faltaMarcarReintegro() && !editId) {
+    if (!confirm("Este gasto médico se va a guardar SIN reintegro del seguro, así que no va a " +
+                 "aparecer entre los pendientes de reintegro.\n\n" +
+                 "Si el seguro lo reintegra, cancelá y marcá \"Tiene reintegro del seguro\".\n\n" +
+                 "¿Guardar igual?")) return;
   }
 
   const wasEdit = !!editId;

@@ -1182,6 +1182,40 @@ function normStr(s) {
 function stripGrpPrefix(s) {
   return String(s||"").replace(/^GRP:/i, "").trim();
 }
+// ── Búsqueda de jugadores que también alcanza a sus grupos ──────────────────────────────
+// jugadorCT guarda UN nombre: el del jugador, o el del grupo. Buscar "Lencina" no encontraba
+// nada de "Ref. Morteros" aunque Lencina sea miembro. Estas dos funciones expanden la
+// búsqueda a los grupos que contienen a alguien que matchea.
+//
+// Se usan en dos pasos, para no recalcular el índice de grupos una vez por ítem filtrado:
+//   const exp = gruposQueContienen(q);                  // UNA vez, antes del .filter
+//   .filter(x => matchJugadorOGrupo(x.nombre, q, exp))  // O(1) por ítem
+//
+// Los grupos se buscan por nombre, no por id: misma convención que calcJugadoresResumen.
+
+// Nombres de grupo (normalizados) con al menos un miembro cuyo nombre matchea q.
+// Devuelve null si q está vacío — sin búsqueda no hay nada que expandir.
+function gruposQueContienen(q) {
+  const n = normStr(q);
+  if (!n) return null;
+  const out = new Set();
+  for (const g of grupos) {
+    if (jugadorResMiembrosNombres(g).some(mn => normStr(mn).includes(n))) {
+      out.add(normStr(g.nombre));
+    }
+  }
+  return out;
+}
+
+// ¿`nombre` (de jugador o de grupo) matchea q — por sí mismo, o por ser un grupo que
+// contiene a alguien que matchea? `expandidos` es lo que devolvió gruposQueContienen(q).
+// Con q vacío devuelve true siempre: el llamador ya no necesita el guard `!filtro ||`.
+function matchJugadorOGrupo(nombre, q, expandidos) {
+  const n = normStr(q);
+  if (!n) return true;
+  const nn = normStr(stripGrpPrefix(nombre));
+  return nn.includes(n) || !!(expandidos && expandidos.has(nn));
+}
 // El campo JugadorCT de un movimiento puede referirse a un jugador o a un grupo. Devuelve el
 // ID de la entidad que coincide con ese nombre, o "" si es texto libre que no está en ninguna
 // lista (movimientos importados con nombres sueltos). Ese ID es lo que sobrevive a un rename.
@@ -2934,6 +2968,7 @@ function renderMovTabla(movMes) {
 // Movimientos del mes seleccionado con todos los filtros de listFiltros aplicados
 // (usado tanto por renderMovList como por exportExcelFiltrado, para no duplicar la lógica)
 function getMovimientosFiltrados() {
+  const jugExpLista = gruposQueContienen(listFiltros.jugadorCT);
   return movimientos
     .filter(m => mesFromRecord(m) === sharedMes)
     .filter(m => !listFiltros.rubro  || normStr(m.rubro).includes(normStr(listFiltros.rubro)))
@@ -2941,7 +2976,7 @@ function getMovimientosFiltrados() {
     .filter(m => !listFiltros.cuenta || m.cuenta === listFiltros.cuenta || m.cuentaDestino === listFiltros.cuenta)
     .filter(m => !listFiltros.tipo      || m.tipo        === listFiltros.tipo)
     .filter(m => !listFiltros.adherente || normStr(m.adherente).includes(normStr(listFiltros.adherente)))
-    .filter(m => !listFiltros.jugadorCT || normStr(m.jugadorCT).includes(normStr(listFiltros.jugadorCT)))
+    .filter(m => matchJugadorOGrupo(m.jugadorCT, listFiltros.jugadorCT, jugExpLista))
     .filter(m => {
       if (!listFiltros.partido) return true;
       if (listFiltros.partido === "__sin__") return !m.partidoId;
@@ -4200,13 +4235,14 @@ function renderPartidoResumen() {
 // meses/cuentas vacíos = sin filtro (todos). Solo INGRESO/EGRESO entran en la agregación
 // por categoría/rubro (mismo criterio que la tabla por categoría de Mensual).
 function getMovimientosReportes() {
+  const jugExpReportes = gruposQueContienen(reportesState.jugadorCT);
   return movimientos
     .filter(m => m.tipo === "INGRESO" || m.tipo === "EGRESO")
     .filter(m => !reportesState.meses.length  || reportesState.meses.includes(mesFromRecord(m)))
     .filter(m => !reportesState.cuentas.length || reportesState.cuentas.includes(m.cuenta))
     .filter(m => !reportesState.categoria || m.categoria === reportesState.categoria)
     .filter(m => !reportesState.rubroCod  || m.codRubro === reportesState.rubroCod)
-    .filter(m => !reportesState.jugadorCT || normStr(m.jugadorCT).includes(normStr(reportesState.jugadorCT)))
+    .filter(m => matchJugadorOGrupo(m.jugadorCT, reportesState.jugadorCT, jugExpReportes))
     .filter(m => !reportesState.adherente || normStr(m.adherente).includes(normStr(reportesState.adherente)))
     .filter(m => {
       const q = normStr(reportesState.search);
@@ -6275,9 +6311,10 @@ function ordenarJugadoresRes(rows) {
 // Recalcula filas + tabla/cards según año/meses/agrupación/búsqueda/orden vigentes.
 // Separado de renderJugadoresResumen para poder re-renderizar solo esto al tipear en el buscador.
 function renderJugadoresResBody() {
+  const filtroExp = gruposQueContienen(jugadorResFiltro);
   const rows = ordenarJugadoresRes(
     calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
-      .filter(r => !jugadorResFiltro || normStr(r.nombre).includes(normStr(jugadorResFiltro)))
+      .filter(r => matchJugadorOGrupo(r.nombre, jugadorResFiltro, filtroExp))
   );
 
   const esPromedios = jugadorResAgrupacion === "promedios";

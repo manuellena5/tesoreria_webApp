@@ -1242,6 +1242,58 @@ app.pjLiqData = { jugadorId: "j1", nombre: "PEREZ", ids: idsT };
 igual("y el Total sigue coincidiendo con pjLiqNeto",
       app.pjLiqNeto(), app.pjTransfBase("j1") + 10000);
 
+
+// ── Fase 13: jugadorCT guarda UN solo nombre, el del jugador o el del grupo. Buscar a un
+// jugador tiene que traer también lo que se cargó a los grupos donde está adentro. ──
+seccion("35 · Buscar un jugador también trae sus grupos");
+app.jugadores = [
+  { id: "j-len", nombre: "Lencina Nicolás" },
+  { id: "j-gom", nombre: "Gómez Pablo" }
+];
+app.grupos = [
+  { id: "g-mor", nombre: "Ref. Morteros", miembros: ["j-len", "j-gom"] },
+  { id: "g-fre", nombre: "Ref. Freyre",   miembros: [] }
+];
+
+igual("expande al grupo que contiene al jugador",
+      [...app.gruposQueContienen("lencina")], ["ref. morteros"]);
+check("el jugador matchea por su propio nombre",
+      app.matchJugadorOGrupo("Lencina Nicolás", "Lencina", app.gruposQueContienen("Lencina")));
+check("y el grupo matchea por el miembro",
+      app.matchJugadorOGrupo("Ref. Morteros", "Lencina", app.gruposQueContienen("Lencina")));
+check("sin acentos ni mayúsculas también",
+      app.matchJugadorOGrupo("Ref. Morteros", "LENCINA", app.gruposQueContienen("LENCINA")));
+check("un grupo que no lo tiene NO matchea",
+      !app.matchJugadorOGrupo("Ref. Freyre", "Lencina", app.gruposQueContienen("Lencina")));
+check("búsqueda vacía deja pasar todo",
+      app.matchJugadorOGrupo("Cualquier Cosa", "", app.gruposQueContienen("")));
+check("el prefijo viejo GRP: no rompe el match",
+      app.matchJugadorOGrupo("GRP:Ref. Morteros", "Lencina", app.gruposQueContienen("Lencina")));
+check("un texto que no está en ningún lado no matchea",
+      !app.matchJugadorOGrupo("Ref. Morteros", "zzz", app.gruposQueContienen("zzz")));
+
+// De punta a punta sobre el filtro real de Reportes: el resto de los filtros en neutro para
+// que lo único que decida sea jugadorCT.
+app.movimientos = [
+  { id: "m-len", tipo: "EGRESO",  fecha: "2026-03-10", mes: "2026-03", categoria: "Fútbol",
+    codRubro: "1", rubro: "Sueldos", cuenta: "CAJA", jugadorCT: "Lencina Nicolás",
+    adherente: "", concepto: "sueldo", observacion: "", monto: 10000 },
+  { id: "m-grp", tipo: "EGRESO",  fecha: "2026-03-11", mes: "2026-03", categoria: "Fútbol",
+    codRubro: "1", rubro: "Sueldos", cuenta: "CAJA", jugadorCT: "Ref. Morteros",
+    adherente: "", concepto: "viáticos", observacion: "", monto: 5000 },
+  { id: "m-gom", tipo: "INGRESO", fecha: "2026-03-12", mes: "2026-03", categoria: "Fútbol",
+    codRubro: "1", rubro: "Sueldos", cuenta: "CAJA", jugadorCT: "Gómez Pablo",
+    adherente: "", concepto: "devolución", observacion: "", monto: 3000 }
+];
+app.reportesState = { anio: "2026", meses: [], cuentas: [], categoria: "", rubroCod: "",
+                      jugadorCT: "Lencina", adherente: "", search: "",
+                      catExpandido: new Set(), rubroExpandido: new Set() };
+igual("Reportes trae el del jugador Y el del grupo, no el de Gómez",
+      app.getMovimientosReportes().map(m => m.id), ["m-len", "m-grp"]);
+app.reportesState.jugadorCT = "";
+igual("y sin búsqueda siguen pasando los tres",
+      app.getMovimientosReportes().map(m => m.id), ["m-len", "m-grp", "m-gom"]);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

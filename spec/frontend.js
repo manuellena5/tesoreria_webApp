@@ -1294,6 +1294,89 @@ app.reportesState.jugadorCT = "";
 igual("y sin búsqueda siguen pasando los tres",
       app.getMovimientosReportes().map(m => m.id), ["m-len", "m-grp", "m-gom"]);
 
+// ── Fase 14: lo cargado a un grupo se reparte entre sus integrantes. La regla que no se puede
+// romper es que ningún alcance duplique ni pierda plata. ──
+seccion("36 · Prorrateo de los gastos de grupo");
+
+igual("reparto exacto: [-34,-33,-33]", app.repartirEntero(-100, 3), [-34, -33, -33]);
+igual("el signo espeja el reparto, no lo cambia", app.repartirEntero(100, 3), [34, 33, 33]);
+igual("n = 1 devuelve el monto entero", app.repartirEntero(50, 1), [50]);
+igual("n = 0 no reparte nada", app.repartirEntero(50, 0), []);
+const partes887 = app.repartirEntero(-887412, 3);
+igual("y la suma de las partes es EXACTA", partes887.reduce((a, b) => a + b, 0), -887412);
+check("ninguna parte difiere de otra en más de 1",
+      Math.max(...partes887) - Math.min(...partes887) <= 1, partes887.join(","));
+
+// Ana está en tres grupos (uno con un id que ya no existe), Caro solo en uno; "Vacío" no tiene
+// a nadie y "Proveedor Suelto" es texto libre de un import: ninguno de los dos se puede repartir.
+app.jugadores = [{ id:"j1", nombre:"Ana" }, { id:"j2", nombre:"Beto" }, { id:"j3", nombre:"Caro" }];
+app.grupos = [
+  { id:"g1", nombre:"Casa Norte",  miembros:["j1","j2","j3"] },
+  { id:"g2", nombre:"Viajes",      miembros:["j1","j2"] },
+  { id:"g3", nombre:"Vacío",       miembros:[] },
+  { id:"g4", nombre:"Con borrado", miembros:["j1","j-borrado"] }
+];
+const mov36 = (id, jugadorCT, codRubro, egreso, ingreso, fecha) => ({
+  id, jugadorCT, codRubro, egreso, ingreso, fecha, mes: fecha.slice(0,7),
+  tipo: egreso ? "EGRESO" : "INGRESO", concepto: id, rubro: "R" + codRubro, cuenta: "CAJA"
+});
+app.movimientos = [
+  mov36("m1", "Ana",              "18", 100000, 0, "2026-01-05"),  // propio
+  mov36("m2", "Casa Norte",       "45",    100, 0, "2026-02-10"),  // grupo de 3 → 34/33/33
+  mov36("m3", "Viajes",           "43",   1000, 0, "2026-01-12"),  // grupo de 2 → 500/500
+  mov36("m4", "Vacío",            "21",   5000, 0, "2026-01-15"),  // sin miembros
+  mov36("m5", "Proveedor Suelto", "44",    700, 0, "2026-01-18"),  // texto libre
+  mov36("m6", "Con borrado",      "18",    300, 0, "2026-01-19"),  // queda 1 miembro vivo
+  mov36("m7", "Viajes",           "44",      0, 100, "2026-01-20") // ingreso: mismo reparto espejado
+];
+const netoSembrado = app.movimientos.reduce((s, m) => s + (m.ingreso - m.egreso), 0);
+const sumaTotales  = rows => rows.reduce((s, r) => s + r.total, 0);
+const fila36       = (rows, n) => rows.find(r => r.nombre === n);
+
+const indiv = app.calcJugadoresResumen("", [], "individuos", "totales");
+const ambos = app.calcJugadoresResumen("", [], "ambos", "totales");
+const soloG = app.calcJugadoresResumen("", [], "grupos", "totales");
+
+// La invariante: el TOTALES de la tabla tiene que cubrir toda la plata, una sola vez.
+igual("Individuos cubre exactamente toda la plata", sumaTotales(indiv), netoSembrado);
+igual("Ambos da el mismo número (sin prorrateo, sin duplicar)", sumaTotales(ambos), netoSembrado);
+igual("Grupos solo cubre lo cargado a grupos", sumaTotales(soloG), -100 - 1000 - 5000 - 300 + 100);
+
+// Ana: lo suyo (-100000) + Casa Norte (-34 y +34) + Viajes (-500) + Con borrado (-300)
+igual("un jugador en varios grupos suma la parte de todos", fila36(indiv, "Ana").total, -100784);
+igual("y en Ambos vuelve a mostrar solo lo suyo", fila36(ambos, "Ana").total, -100000);
+igual("el resto del reparto cae en los otros miembros",
+      [fila36(indiv, "Beto").total, fila36(indiv, "Caro").total], [-483, -33]);
+igual("el ingreso se reparte igual que el egreso, espejado",
+      fila36(indiv, "Ana").almacen, 50);
+igual("el miembro borrado no se lleva su parte: la cobra el que queda",
+      fila36(indiv, "Ana").sueldos, -100000 - 300);
+
+const vacio = fila36(indiv, "Vacío");
+check("un grupo sin miembros queda como fila residual marcada", vacio && vacio.sinRepartir === true);
+igual("con toda su plata, que sigue contando en el total", vacio.total, -5000);
+const suelto = fila36(indiv, "Proveedor Suelto");
+check("el texto libre que no es jugador ni grupo mantiene su fila", suelto && suelto.esGrupo === false);
+igual("y va entero, sin repartir", suelto.total, -700);
+
+// El detalle de la fila tiene que reconciliar contra el total, o los números no se pueden auditar.
+const movsAna = fila36(indiv, "Ana").movimientos;
+igual("la suma de los montos aplicados da el total de la fila",
+      movsAna.reduce((s, m) => s + m.montoAplicado, 0), fila36(indiv, "Ana").total);
+const desdeGrupo = movsAna.find(m => m.id === "m3");
+igual("los movimientos de grupo traen de dónde salieron",
+      [desdeGrupo.grupoOrigen, desdeGrupo.divisor, desdeGrupo.montoGrupo], ["Viajes", 2, -1000]);
+check("y los propios no traen grupoOrigen", !movsAna.find(m => m.id === "m1").grupoOrigen);
+check("el detalle muestra el divisor del grupo",
+      app.renderJugadorResDetalle(fila36(indiv, "Ana")).includes("÷3"), "sin la marca ÷3");
+
+// Promedios: divide por los meses en que ESA fila tuvo movimientos, propios o heredados del grupo.
+const prom = app.calcJugadoresResumen("", [], "individuos", "promedios");
+igual("un mes con gasto solo del grupo igual cuenta como mes",
+      fila36(prom, "Ana").mesesConGasto, 2);
+igual("y el promedio divide el total por esos meses", fila36(prom, "Ana").total, -50392);
+igual("Caro solo tiene el mes de su grupo", fila36(prom, "Caro").mesesConGasto, 1);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

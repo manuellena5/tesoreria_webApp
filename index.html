@@ -1028,7 +1028,20 @@ let jugadorResAnio       = String(new Date().getFullYear());
 let jugadorResMeses      = null; // array de "MM" seleccionados; null = todavía no inicializado (se carga con todo el año disponible)
 let jugadorResExpandido  = new Set();
 let jugadorResVista       = getDefaultVista("jugadores_vista");
-let jugadorResAgrupacion  = localStorage.getItem("jugadores_agrupacion") || "jugador"; // "jugador" | "grupo" | "promedios"
+// El toggle viejo mezclaba dos ejes (cómo agrupo / qué muestro) en una sola clave. Se migra
+// una única vez a las dos nuevas y se borra, para no volver a pisar lo que elija el usuario.
+// "jugador" migra a "individuos" (la vista con prorrateo); el comportamiento viejo es "ambos".
+(function migrarJugadoresAgrupacion() {
+  const viejo = localStorage.getItem("jugadores_agrupacion");
+  if (!viejo) return;
+  if (!localStorage.getItem("jugadores_modo"))
+    localStorage.setItem("jugadores_modo", viejo === "promedios" ? "promedios" : "totales");
+  if (!localStorage.getItem("jugadores_alcance"))
+    localStorage.setItem("jugadores_alcance", viejo === "grupo" ? "grupos" : "individuos");
+  localStorage.removeItem("jugadores_agrupacion");
+})();
+let jugadorResModo        = localStorage.getItem("jugadores_modo")    || "totales";     // "totales" | "promedios"
+let jugadorResAlcance     = localStorage.getItem("jugadores_alcance") || "individuos";  // "individuos" | "grupos" | "ambos"
 let jugadorResFiltro     = "";
 let jugadorResOrdenCol   = "total"; // nombre|mesesConGasto|sueldos|movilidad|viandas|almacen|alquilerCasa|medico|otros|total
 let jugadorResOrdenDir   = -1;      // 1 = ascendente (▲), -1 = descendente (▼) — igual convención que detTablaSort
@@ -6121,10 +6134,17 @@ function setJugadorResVista(v) {
   renderResumen();
 }
 
-function setJugadorResAgrupacion(v) {
-  jugadorResAgrupacion = v;
+function setJugadorResModo(v) {
+  jugadorResModo = v;
   jugadorResExpandido.clear();
-  localStorage.setItem("jugadores_agrupacion", v);
+  localStorage.setItem("jugadores_modo", v);
+  renderResumen();
+}
+
+function setJugadorResAlcance(v) {
+  jugadorResAlcance = v;
+  jugadorResExpandido.clear();
+  localStorage.setItem("jugadores_alcance", v);
   renderResumen();
 }
 
@@ -6151,13 +6171,44 @@ function jugadorResMiembrosNombres(grupo) {
   return (grupo.miembros || []).map(id => jugadores.find(j => j.id === id)?.nombre).filter(Boolean);
 }
 
+// ÚNICO lugar donde se decide quiénes eran los miembros de un grupo para ESTE movimiento.
+// Devuelve ids de jugadores que existen (los borrados se descartan acá, no río abajo:
+// si se filtraran después, el reparto perdería plata y los totales dejarían de cerrar).
+//
+// Nivel 0 (hoy)  → la composición actual del grupo. Los meses viejos se reparten con el
+//                  plantel de hoy; si el grupo rotó, los promedios históricos se corren.
+// Nivel 1 (después) → devolver m.miembrosSnapshot si el movimiento lo trae, y caer al actual
+//                  si no. Arregla de acá en adelante sin tocar lo viejo.
+// Nivel 2 (si hace falta) → filtrar por fecha de alta/baja contra m.fecha.
+function miembrosDelMovimiento(m, grupo) {
+  return (grupo.miembros || []).filter(id => jugadores.some(j => j.id === id));
+}
+
+// Reparte un entero en n partes cuya suma es EXACTAMENTE el monto original.
+// El resto (siempre menor que n) se distribuye de a un peso entre las primeras partes.
+// Se trabaja sobre el valor absoluto para que el signo no cambie hacia dónde trunca la
+// división: sin esto, los egresos y los ingresos redondearían para lados distintos.
+function repartirEntero(monto, n) {
+  if (n <= 0) return [];
+  const signo = monto < 0 ? -1 : 1;
+  const abs   = Math.abs(Math.round(monto));
+  const base  = Math.floor(abs / n);
+  const resto = abs - base * n;
+  return Array.from({ length: n }, (_, i) => signo * (base + (i < resto ? 1 : 0)));
+}
+
 // anio: string "YYYY" para filtrar, o "" para todos los años
 // meses: array de "MM" a incluir dentro del año seleccionado (se ignora si anio === "")
-// agrupacion: "jugador" o "promedios" → una fila por jugador individual (solo sus movimientos directos)
-//             y una fila por grupo (monto completo, sin prorratear entre miembros).
-//             "grupo" → solo grupos, monto completo (sin filas de jugadores individuales).
-function calcJugadoresResumen(anio, meses, agrupacion) {
-  const agrupEfectiva = agrupacion === "promedios" ? "jugador" : agrupacion;
+// alcance: "individuos" → una fila por persona. Lo cargado a un grupo se PRORRATEA en partes
+//              iguales entre sus integrantes; un grupo sin miembros queda como fila residual
+//              marcada con sinRepartir (tirar el movimiento rompería el total de la tabla).
+//          "grupos"     → solo grupos, monto completo. No incluye los gastos individuales.
+//          "ambos"      → personas + grupos, cada uno con lo suyo y SIN prorrateo. Si acá
+//              también se prorrateara, la plata del grupo se contaría dos veces (en la fila
+//              de cada miembro y de nuevo en la del grupo) y el TOTAL daría casi el doble.
+// modo: "totales" | "promedios" — el promedio divide cada categoría por los meses en que ESA
+//              fila tuvo movimientos. Es independiente del alcance.
+function calcJugadoresResumen(anio, meses, alcance, modo) {
   const mesesSet = new Set(meses || []);
   const movs = movimientos.filter(m => {
     if (!m.jugadorCT) return false;
@@ -6172,7 +6223,7 @@ function calcJugadoresResumen(anio, meses, agrupacion) {
     return map[key];
   }
 
-  if (agrupEfectiva === "grupo") {
+  if (alcance === "grupos") {
     for (const m of movs) {
       const grupo = grupos.find(g => g.nombre === m.jugadorCT);
       if (!grupo) continue;
@@ -6186,6 +6237,57 @@ function calcJugadoresResumen(anio, meses, agrupacion) {
     for (const key in map) {
       const grupo = grupos.find(g => g.nombre === key);
       map[key].miembros = grupo ? jugadorResMiembrosNombres(grupo) : [];
+    }
+  } else if (alcance === "individuos") {
+    // Lo cargado a un grupo se reparte por cabeza entre sus integrantes: así todas las filas
+    // son comparables entre sí y el TOTAL sigue cubriendo toda la plata, una sola vez.
+    for (const m of movs) {
+      const cat   = jugadorResCategoria(m.codRubro);
+      const neto  = m.ingreso - m.egreso;
+      const grupo = grupos.find(g => g.nombre === stripGrpPrefix(m.jugadorCT));
+
+      // Jugador suelto, o texto libre de un import que no es ni jugador ni grupo: va entero.
+      if (!grupo) {
+        const row = ensure(m.jugadorCT, false);
+        row[cat] += neto;
+        row.mesesSet.add(m.fecha.slice(0,7));
+        row.movimientos.push({ ...m, montoAplicado: neto });
+        continue;
+      }
+
+      const ids = miembrosDelMovimiento(m, grupo).slice().sort();
+
+      // Grupo sin miembros (o con todos borrados): no hay entre quiénes repartir. Se queda como
+      // fila propia marcada, porque tirar el movimiento rompería el total de la tabla.
+      if (!ids.length) {
+        const row = ensure(grupo.nombre, true);
+        row.sinRepartir = true;
+        row[cat] += neto;
+        row.mesesSet.add(m.fecha.slice(0,7));
+        row.movimientos.push({ ...m, montoAplicado: neto });
+        continue;
+      }
+
+      // El orden de los ids se fija con sort() y no con el crudo de grupo.miembros: si no,
+      // editar el grupo movería el peso de resto de una persona a otra sin ningún motivo.
+      const partes = repartirEntero(neto, ids.length);
+      ids.forEach((idJ, i) => {
+        const nombreJ = jugadores.find(j => j.id === idJ).nombre;  // garantizado por miembrosDelMovimiento
+        const row = ensure(nombreJ, false);
+        row[cat] += partes[i];
+        row.mesesSet.add(m.fecha.slice(0,7));
+        row.movimientos.push({
+          ...m,
+          montoAplicado: partes[i],
+          grupoOrigen:   grupo.nombre,   // para el detalle y la card
+          divisor:       ids.length,
+          montoGrupo:    neto,
+        });
+      });
+    }
+    for (const key in map) {
+      const grupo = grupos.find(g => g.nombre === key);
+      if (grupo) map[key].miembros = jugadorResMiembrosNombres(grupo);
     }
   } else {
     // Cada movimiento va entero a su fila: si jugadorCT es un grupo, a la fila del grupo;
@@ -6210,7 +6312,7 @@ function calcJugadoresResumen(anio, meses, agrupacion) {
     const mesesConGasto = r.mesesSet.size;
     const row = { ...r, total: r.sueldos + r.movilidad + r.viandas + r.almacen + r.alquilerCasa + r.medico + r.otros, mesesConGasto };
     delete row.mesesSet;
-    if (agrupacion !== "promedios" || !mesesConGasto) return row;
+    if (modo !== "promedios" || !mesesConGasto) return row;
     // Promedio: cada categoría se divide por la cantidad de meses seleccionados en que
     // este jugador/grupo tuvo algún movimiento (no por el total de meses seleccionados),
     // para no diluir el promedio de quien se sumó o dejó de cobrar a mitad de período.
@@ -6251,11 +6353,18 @@ function renderJugadoresResumen() {
       <button class="reint-view-btn ${jugadorResVista==='cards'?'active':''}" onclick="setJugadorResVista('cards')">▤ Cards</button>
     </div>`;
 
-  const agrupacionToggle = `
+  // Dos ejes separados: el modo dice QUÉ número se muestra, el alcance QUÉ filas hay.
+  const modoToggle = `
     <div class="reint-view-toggle">
-      <button class="reint-view-btn ${jugadorResAgrupacion==='jugador'?'active':''}" onclick="setJugadorResAgrupacion('jugador')">👤 Por Jugador</button>
-      <button class="reint-view-btn ${jugadorResAgrupacion==='grupo'?'active':''}" onclick="setJugadorResAgrupacion('grupo')">👥 Por Grupo</button>
-      <button class="reint-view-btn ${jugadorResAgrupacion==='promedios'?'active':''}" onclick="setJugadorResAgrupacion('promedios')">📊 Promedios</button>
+      <button class="reint-view-btn ${jugadorResModo==='totales'?'active':''}" onclick="setJugadorResModo('totales')">💰 Totales</button>
+      <button class="reint-view-btn ${jugadorResModo==='promedios'?'active':''}" onclick="setJugadorResModo('promedios')">📊 Promedio mensual</button>
+    </div>`;
+
+  const alcanceToggle = `
+    <div class="reint-view-toggle">
+      <button class="reint-view-btn ${jugadorResAlcance==='individuos'?'active':''}" onclick="setJugadorResAlcance('individuos')">👤 Individuos</button>
+      <button class="reint-view-btn ${jugadorResAlcance==='grupos'?'active':''}" onclick="setJugadorResAlcance('grupos')">👥 Grupos</button>
+      <button class="reint-view-btn ${jugadorResAlcance==='ambos'?'active':''}" onclick="setJugadorResAlcance('ambos')">⚌ Ambos</button>
     </div>`;
 
   return `
@@ -6269,7 +6378,10 @@ function renderJugadoresResumen() {
       </div>
       ${mesChips}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0 8px;flex-wrap:wrap">
-        ${agrupacionToggle}
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${modoToggle}
+          ${alcanceToggle}
+        </div>
         <button class="btn-sm accent" onclick="exportJugadoresResExcel()">📥 Exportar a Excel</button>
       </div>
       <div class="search-wrap">
@@ -6308,29 +6420,42 @@ function ordenarJugadoresRes(rows) {
   });
 }
 
-// Recalcula filas + tabla/cards según año/meses/agrupación/búsqueda/orden vigentes.
+// Cada alcance cierra sus propios totales y ninguno duplica plata, pero el mismo jugador da
+// distinto en Individuos que en Ambos. Sin esta nota los números no se pueden interpretar.
+const JUGADOR_RES_NOTA_ALCANCE = {
+  individuos: "Lo cargado a un grupo se reparte en partes iguales entre sus integrantes actuales. Es una imputación para presupuestar, no lo que consumió cada uno: el alquiler de la casa no baja si son 3 en vez de 4.",
+  grupos:     "Solo movimientos cargados a un grupo. El total no incluye los gastos individuales.",
+  ambos:      "Sin prorrateo: cada jugador muestra solo lo suyo y cada grupo lo suyo. Para ver el gasto de grupo repartido por cabeza, usá Individuos.",
+};
+
+// Recalcula filas + tabla/cards según año/meses/modo/alcance/búsqueda/orden vigentes.
 // Separado de renderJugadoresResumen para poder re-renderizar solo esto al tipear en el buscador.
 function renderJugadoresResBody() {
   const filtroExp = gruposQueContienen(jugadorResFiltro);
   const rows = ordenarJugadoresRes(
-    calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
+    calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAlcance, jugadorResModo)
       .filter(r => matchJugadorOGrupo(r.nombre, jugadorResFiltro, filtroExp))
   );
 
-  const esPromedios = jugadorResAgrupacion === "promedios";
+  const esPromedios = jugadorResModo === "promedios";
   const mesesDisponibles = jugadorResMesesDisponibles(jugadorResAnio);
   const totalGastado = rows.reduce((s,r) => s + (r.total < 0 ? -r.total : 0), 0);
   const periodoTxt = (jugadorResAnio && mesesDisponibles.length && jugadorResMeses.length !== mesesDisponibles.length)
     ? ` (${jugadorResMeses.slice().sort().map(mm => MESES_ABBR[Number(mm)-1]).join(", ") || "sin meses"})`
     : "";
   const totalLabel = esPromedios ? "Promedio mensual gastado" : "Total gastado";
-  const totalesLine = `${rows.length} ${jugadorResAgrupacion==='grupo'?'grupo':'jugador'}${rows.length!==1?"s":""}${periodoTxt} · ${totalLabel}: ${fmt(totalGastado)}`;
+  const totalesLine = `${rows.length} ${jugadorResAlcance==='grupos'?'grupo':'jugador'}${rows.length!==1?"s":""}${periodoTxt} · ${totalLabel}: ${fmt(totalGastado)}`;
 
   const body = !rows.length
     ? `<p class="note" style="text-align:center;padding:16px 0">Sin movimientos con jugador/grupo asignado${jugadorResFiltro?" para esa búsqueda":""}</p>`
     : jugadorResVista === "cards" ? renderJugadoresResCards(rows, esPromedios) : renderJugadoresResTabla(rows, esPromedios);
 
-  return `<p class="note" style="margin-bottom:12px">${totalesLine}</p>${body}`;
+  const notaAlcance = `<p class="note" style="margin-top:8px;font-size:11px">${JUGADOR_RES_NOTA_ALCANCE[jugadorResAlcance] || ""}</p>`;
+  const notaSinRepartir = rows.some(r => r.sinRepartir)
+    ? `<p class="note" style="margin-top:4px;font-size:11px">⚠️ Hay grupos sin integrantes cargados: su gasto no se pudo repartir.</p>`
+    : "";
+
+  return `<p class="note" style="margin-bottom:12px">${totalesLine}</p>${body}${notaAlcance}${notaSinRepartir}`;
 }
 
 // Header ordenable: tocar la columna ordena de mayor a menor (o invierte si ya
@@ -6367,7 +6492,7 @@ function renderJugadoresResTabla(rows, esPromedios) {
     const rowClass = r.esGrupo ? "reint-row" : "reint-row";
     const otrosCell = isMobile ? "" : cell(r.otros);
     const mesesCell = esPromedios ? `<td style="text-align:center;color:var(--text3)">${r.mesesConGasto}</td>` : "";
-    const nombreLbl = (r.esGrupo ? "👥 " : "") + esc(r.nombre);
+    const nombreLbl = (r.esGrupo ? "👥 " : "") + esc(r.nombre) + (r.sinRepartir ? " (sin miembros)" : "");
     const colspan = (isMobile ? 6 : 9) + (esPromedios ? 1 : 0);
     return `
     <tr class="${rowClass}" style="${r.esGrupo?'background:var(--bg3)':''}" onclick="toggleJugadorResDetalle('${esc(escJs(r.nombre))}')">
@@ -6433,6 +6558,12 @@ function renderJugadorResCard(r, esPromedios) {
   const miembrosSub = r.esGrupo && r.miembros && r.miembros.length
     ? `<div class="entity-sub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.miembros.length} miembros: ${esc(r.miembros.join(", "))}</div>`
     : "";
+  // En alcance "individuos" una parte del total viene repartida desde grupos: decir de cuáles,
+  // porque si no la fila no se puede reconciliar contra lo que se cargó a nombre de la persona.
+  const aportes = [...new Map(r.movimientos.filter(m => m.grupoOrigen).map(m => [m.grupoOrigen, m.divisor])).entries()];
+  const aportesSub = aportes.length
+    ? `<div class="entity-sub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Incluye ${aportes.map(([g,d]) => esc(g) + " ÷" + d).join(", ")}</div>`
+    : "";
   const mesesSub = esPromedios
     ? `<div class="entity-sub">Meses con gasto: ${r.mesesConGasto}</div>`
     : "";
@@ -6446,10 +6577,11 @@ function renderJugadorResCard(r, esPromedios) {
   return `
   <div class="reint-card" onclick="toggleJugadorResDetalle('${esc(escJs(r.nombre))}')">
     <div class="reint-card-hdr">
-      <span class="reint-card-nombre" title="${esc(r.nombre)}">${r.esGrupo?"👥 ":"👤 "}${esc(r.nombre)}</span>
+      <span class="reint-card-nombre" title="${esc(r.nombre)}">${r.esGrupo?"👥 ":"👤 "}${esc(r.nombre)}${r.sinRepartir?" (sin miembros)":""}</span>
       <span class="val ${r.total<0?'egr':'ing'}" style="font-family:var(--mono);font-weight:600">${r.total<0?"-":"+"}${fmt(Math.abs(r.total))}</span>
     </div>
     ${miembrosSub}
+    ${aportesSub}
     ${mesesSub}
     <div class="reint-card-body">${colsHtml}</div>
     ${isExp ? `<div class="reint-card-detalle" onclick="event.stopPropagation()">${renderJugadorResDetalle(r)}</div>` : ""}
@@ -6462,18 +6594,40 @@ function renderJugadoresResCards(rows, esPromedios) {
 
 const JUGADOR_RES_CAT_LABEL = { sueldos:"Sueldo", movilidad:"Movilidad", viandas:"Viandas", almacen:"Almacén", alquilerCasa:"Alquiler y gastos casa", medico:"Médico", otros:"Otros" };
 
+// La columna Monto muestra el monto YA prorrateado (montoAplicado), que es lo único que hace
+// que la suma del detalle dé el total de la fila. La columna Detalle explica de dónde salió.
+// Los items van en bloques —primero lo propio, después uno por grupo— con el primero de cada
+// bloque marcado con gap. Es cosmético: si el usuario ordena por una columna, se mezclan.
 function renderJugadorResDetalle(r) {
-  const sorted = [...r.movimientos].sort((a,b) => a.fecha.localeCompare(b.fecha));
-  const items = sorted.map(m => {
-    const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
-    const mesRaw = mesFromRecord(m);
-    const cat = JUGADOR_RES_CAT_LABEL[jugadorResCategoria(m.codRubro)] || "Otros";
-    return {
-      fechaRaw: m.fecha||"", fechaD, mesRaw, mesTxt: mesLabel(mesRaw),
-      concepto: m.concepto||"", monto: m.montoAplicado, rubro: m.rubro||"", categoria: cat,
-      entidad: m.cuenta||"",
-    };
-  });
+  const porFecha = (a,b) => (a.fecha||"").localeCompare(b.fecha||"");
+  const porGrupo = new Map();
+  for (const m of r.movimientos) {
+    if (!m.grupoOrigen) continue;
+    if (!porGrupo.has(m.grupoOrigen)) porGrupo.set(m.grupoOrigen, []);
+    porGrupo.get(m.grupoOrigen).push(m);
+  }
+  const bloques = [r.movimientos.filter(m => !m.grupoOrigen).sort(porFecha)];
+  for (const g of [...porGrupo.keys()].sort((a,b) => a.localeCompare(b, "es"))) {
+    bloques.push(porGrupo.get(g).sort(porFecha));
+  }
+
+  const items = [];
+  for (const bloque of bloques) {
+    bloque.forEach((m, i) => {
+      const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
+      const mesRaw = mesFromRecord(m);
+      const cat = JUGADOR_RES_CAT_LABEL[jugadorResCategoria(m.codRubro)] || "Otros";
+      items.push({
+        fechaRaw: m.fecha||"", fechaD, mesRaw, mesTxt: mesLabel(mesRaw),
+        concepto: m.concepto||"", monto: m.montoAplicado, rubro: m.rubro||"", categoria: cat,
+        entidad: m.cuenta||"",
+        extra: m.grupoOrigen
+          ? `👥 ${m.grupoOrigen} ÷${m.divisor} · de ${m.montoGrupo < 0 ? "-" : "+"}${fmt(Math.abs(m.montoGrupo))}`
+          : "",
+        gap: i === 0 && items.length > 0,
+      });
+    });
+  }
   return renderDetTabla(`jug_${escJs(r.nombre)}`, items);
 }
 
@@ -6481,13 +6635,16 @@ function renderJugadorResDetalle(r) {
 function exportJugadoresResExcel() {
   if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
 
+  // Mismo filtro que renderJugadoresResBody —incluida la expansión a grupos— o el Excel
+  // saldría con otras filas que las que se están viendo.
+  const filtroExp = gruposQueContienen(jugadorResFiltro);
   const rows = ordenarJugadoresRes(
-    calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAgrupacion)
-      .filter(r => !jugadorResFiltro || normStr(r.nombre).includes(normStr(jugadorResFiltro)))
+    calcJugadoresResumen(jugadorResAnio, jugadorResMeses, jugadorResAlcance, jugadorResModo)
+      .filter(r => matchJugadorOGrupo(r.nombre, jugadorResFiltro, filtroExp))
   );
   if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
 
-  const esPromedios = jugadorResAgrupacion === "promedios";
+  const esPromedios = jugadorResModo === "promedios";
   const headers = ["Jugador/Grupo"];
   if (esPromedios) headers.push("Meses con gasto");
   headers.push("Sueldo","Movilidad","Viandas","Almacén","Alquiler y gastos casa","Médico","Otros","TOTAL");
@@ -6504,7 +6661,7 @@ function exportJugadoresResExcel() {
   ws["!cols"] = (esPromedios ? [24,14,12,12,12,12,20,12,12,12] : [24,12,12,12,12,20,12,12,12]).map(w => ({wch:w}));
   XLSX.utils.book_append_sheet(wb, ws, "Jugadores");
 
-  const subtabPart = jugadorResAgrupacion === "grupo" ? "por_grupo" : jugadorResAgrupacion === "promedios" ? "promedios" : "por_jugador";
+  const subtabPart = `${jugadorResAlcance}_${jugadorResModo}`;
   const anioPart = jugadorResAnio || "todos";
   const mesesDisponibles = jugadorResMesesDisponibles(jugadorResAnio);
   const todoElAnio = jugadorResAnio && mesesDisponibles.length && mesesDisponibles.every(mm => jugadorResMeses.includes(mm));

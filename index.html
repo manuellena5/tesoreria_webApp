@@ -325,6 +325,10 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 .jug-detalle-table td.ing { color:var(--green); font-family:var(--mono); text-align:right; font-weight:600; }
 .jug-detalle-table td.egr { color:var(--red); font-family:var(--mono); text-align:right; font-weight:600; }
 .jug-detalle-table tr.dt-row-gap td { color:var(--text3); font-style:italic; }
+/* Comienzo de bloque (ej. donde arrancan los movimientos prorrateados de un grupo).
+   Solo separa: NO agrisa ni pone en itálica, porque son movimientos reales que sí
+   suman al total. El gris+itálica de dt-row-gap significa otra cosa (fila fantasma). */
+.jug-detalle-table tr.dt-row-start td { border-top:2px solid var(--border); }
 .dt-edit-btn { padding:3px 7px; font-size:12px; line-height:1; }
 .dt-filterbar { padding:6px 8px 0; }
 .dt-filterbar .inp { font-size:11.5px; padding:5px 8px; height:auto; }
@@ -6035,7 +6039,10 @@ function detTablaRenderInner(key) {
       }
       return `<td${cls}>${esc(it[dtFieldFor(c)])||"—"}</td>`;
     }).join("");
-    return `<tr${it.gap ? ' class="dt-row-gap"' : ""}>${tds}</tr>`;
+    // `hueco` = fila fantasma que rellena un mes sin datos (gris + itálica).
+    // `gap`   = primer movimiento de un bloque nuevo; es real y suma, solo se separa.
+    const trCls = it.hueco ? ' class="dt-row-gap"' : it.gap ? ' class="dt-row-start"' : "";
+    return `<tr${trCls}>${tds}</tr>`;
   }).join("");
   return `<table class="${tableCls}"><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table>`;
 }
@@ -6090,7 +6097,7 @@ function renderAdherenteDetalle(r) {
     } else if (mostrarHuecos) {
       items.push({
         fechaRaw: "", fechaD: "—", mesRaw: k, mesTxt: mesLabel(k),
-        concepto: "Sin pago", monto: null, rubro: "", categoria: "", entidad: "", extra: "", gap: true,
+        concepto: "Sin pago", monto: null, rubro: "", categoria: "", entidad: "", extra: "", hueco: true,
       });
     }
     k = nextMes(k);

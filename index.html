@@ -11243,6 +11243,67 @@ async function checkAppUpdate() {
 // ATAJOS DE TECLADO (útil en PC)
 // ══════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════
+// BOTÓN ATRÁS (Android — app instalada)
+//
+// Sin esto, un toque en "atrás" cierra la app de una: el historial tiene una sola entrada y el
+// sistema sale directamente, sin avisar nada. El truco es dejar puesta una entrada centinela;
+// el toque la consume y dispara popstate, que es donde recién podemos decidir qué hacer.
+//
+// Por qué sale en el SEGUNDO toque y no en el tercero: al primero NO se repone el centinela, así
+// el historial queda parado en su primera entrada y el toque siguiente sí cierra la app. Cerrarla
+// por código no se puede (window.close() no aplica), así que el único camino es dejar el
+// historial en el punto donde el sistema sale solo. Si pasan BACK_SALIR_MS sin ese segundo
+// toque, se repone el centinela y la cuenta vuelve a empezar.
+//
+// Solo se activa en la app instalada: en una pestaña común "atrás" tiene que seguir llevando a
+// la página anterior del navegador, no quedar secuestrado por la app.
+// ══════════════════════════════════════════════════════════════
+const BACK_SALIR_MS = 2000;
+let backAvisado = null;   // id del timer que repone el centinela; no-null = ya avisamos
+
+// Qué corresponde hacer ante un toque de "atrás". Separado del manejo del historial para poder
+// probar la regla sin navegador.
+function accionBotonAtras(hayModal, yaAvisado) {
+  if (hayModal)   return "cerrar-modal";   // lo que espera cualquiera: atrás cierra el modal
+  if (yaAvisado)  return "salir";
+  return "avisar";
+}
+
+function esAppInstalada() {
+  return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+}
+
+// Repone el centinela y cancela cualquier aviso pendiente. Cancelarlo importa: si no, un modal
+// abierto durante la ventana de aviso dejaría dos centinelas apilados y "atrás" pasaría a
+// necesitar un toque de más.
+function reponerCentinelaAtras() {
+  if (backAvisado) { clearTimeout(backAvisado); backAvisado = null; }
+  history.pushState({ centinela: true }, "");
+}
+
+function initBotonAtras() {
+  if (!esAppInstalada()) return;
+  reponerCentinelaAtras();
+  window.addEventListener("popstate", () => {
+    const modalRoot = document.getElementById("modal-root");
+    const hayModal  = !!(modalRoot && modalRoot.innerHTML.trim());
+    switch (accionBotonAtras(hayModal, !!backAvisado)) {
+      case "cerrar-modal":
+        modalRoot.innerHTML = "";
+        reponerCentinelaAtras();
+        return;
+      case "salir":
+        // Ya avisamos y el historial quedó en su primera entrada: no reponemos nada y dejamos
+        // que el sistema cierre la app.
+        return;
+      default:
+        toast("Tocá atrás otra vez para salir");
+        backAvisado = setTimeout(() => { backAvisado = null; reponerCentinelaAtras(); }, BACK_SALIR_MS);
+    }
+  });
+}
+
 document.addEventListener("keydown", (e) => {
   const tag = (document.activeElement && document.activeElement.tagName) || "";
   const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
@@ -11933,6 +11994,7 @@ async function compExportar(modo) {
 document.addEventListener("DOMContentLoaded", () => {
   registerServiceWorker();
   loadAppVersion();
+  initBotonAtras();
   initApp();
 });
 </script>

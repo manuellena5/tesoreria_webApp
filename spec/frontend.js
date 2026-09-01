@@ -1398,6 +1398,22 @@ check("otro rubro NO avisa", !app.faltaMarcarReintegro());
 app.F = { codRubro: "99", tipo: "AJUSTE", seguroReintegro: 0 };
 check("un ajuste de conciliación NO avisa", !app.faltaMarcarReintegro());
 
+// ══════════════════════════════════════════════════════════════
+seccion("37 · Doble 'atrás' para salir de la app");
+
+// Sin modal y sin aviso previo: el primer toque avisa, no sale.
+igual("primer toque → avisa", app.accionBotonAtras(false, false), "avisar");
+// Ya avisamos y estamos dentro de la ventana: este toque deja salir.
+igual("segundo toque seguido → sale", app.accionBotonAtras(false, true), "salir");
+// Un modal abierto se lleva el toque: cerrarlo es lo que se espera, y NO arma la salida.
+igual("con modal abierto → cierra el modal", app.accionBotonAtras(true, false), "cerrar-modal");
+// Y sigue ganando el modal aunque ya se hubiera avisado: no se puede salir sin verlo cerrarse.
+igual("el modal gana incluso si ya se avisó", app.accionBotonAtras(true, true), "cerrar-modal");
+
+// En una pestaña común no se secuestra el botón atrás: matchMedia del harness devuelve
+// matches:false y navigator.standalone no existe.
+check("fuera de la app instalada no se intercepta nada", !app.esAppInstalada());
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

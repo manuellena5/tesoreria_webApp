@@ -1028,6 +1028,9 @@ let vincSugerenciasPendientes = [];
 let adherenteAnio       = String(new Date().getFullYear());
 let adherenteExpandido  = new Set();
 let adherenteVista      = getDefaultVista("adherentes_vista");
+let adhResFiltro        = "";
+let adhResOrdenCol      = "";   // "" = orden por defecto (los que deben primero); si no, la columna clickeada
+let adhResOrdenDir      = -1;   // -1 = mayor a menor, igual convención que el resto de las tablas
 let jugadorResAnio       = String(new Date().getFullYear());
 let jugadorResMeses      = null; // array de "MM" seleccionados; null = todavía no inicializado (se carga con todo el año disponible)
 let jugadorResExpandido  = new Set();
@@ -5576,6 +5579,71 @@ function toggleAdhResumenSoloPendientesMes() {
   renderResumen();
 }
 
+// Orden por defecto: primero los que deben (sin aportes), después los parciales, después los que
+// no tienen compromiso cargado y último los que están al día; alfabético dentro de cada grupo.
+// Es el orden útil para salir a cobrar, así que se mantiene mientras no se toque ningún encabezado.
+function ordenAdherentesPorDefecto(rows) {
+  const rank = { SIN:0, PARCIAL:1, OK:3 };
+  return [...rows].sort((a,b) => {
+    const ra = a.estado===null ? 2 : rank[a.estado];
+    const rb = b.estado===null ? 2 : rank[b.estado];
+    if (ra !== rb) return ra - rb;
+    return a.adherente.localeCompare(b.adherente);
+  });
+}
+
+// Las columnas de mes se identifican como "mes:2026-08" para que el mismo mecanismo sirva para
+// las fijas y para las que dependen del año elegido.
+function adhResOrdenValor(r, col) {
+  if (col === "adherente") return r.adherente || "";
+  if (col === "cuota")     return r.cuotaMensual || 0;
+  if (col === "prometido") return r.compromisoAnual || 0;
+  if (col === "acumulado") return r.totalAportado || 0;
+  // Un adherente sin compromiso no tiene "resta" (la celda muestra "—"); vale 0 para que quede
+  // entre los que deben y los que están sobregirados, y no simulando una deuda que no existe.
+  if (col === "resta")     return r.compromisoAnual > 0 ? (r.compromisoAnual - r.totalAportado) : 0;
+  if (col.startsWith("mes:")) return r.porMes[col.slice(4)] || 0;
+  return 0;
+}
+
+function ordenarAdherentesRes(rows) {
+  if (!adhResOrdenCol) return ordenAdherentesPorDefecto(rows);
+  const col = adhResOrdenCol, dir = adhResOrdenDir;
+  return [...rows].sort((a,b) => {
+    const va = adhResOrdenValor(a, col), vb = adhResOrdenValor(b, col);
+    const cmp = col === "adherente" ? va.localeCompare(vb, "es", { sensitivity: "base" }) : va - vb;
+    return cmp * dir;
+  });
+}
+
+// Primer clic ordena de mayor a menor; el segundo sobre la misma columna invierte. Un tercer clic
+// NO vuelve al orden por defecto a propósito: sería un estado invisible desde la flechita.
+function setAdhResOrden(col) {
+  if (adhResOrdenCol === col) adhResOrdenDir *= -1;
+  else { adhResOrdenCol = col; adhResOrdenDir = -1; }
+  const el = document.getElementById("adh-res-body");
+  if (el) el.innerHTML = renderAdherentesResBody();
+}
+
+function thOrdenAdhRes(col, label, align, extraClass) {
+  const active = adhResOrdenCol === col;
+  const arrow = active ? `<span class="rt-arrow">${adhResOrdenDir===1?"▲":"▼"}</span>` : "";
+  const cls = "rt-sortable" + (extraClass ? " " + extraClass : "");
+  return `<th class="${cls}" style="text-align:${align||'right'}" onclick="setAdhResOrden('${col}')">${label}${arrow}</th>`;
+}
+
+// Filas del año/filtros vigentes, ya filtradas por el buscador. Lo usan la pantalla y el export,
+// para que el Excel salga con las mismas filas que se están viendo.
+function filasAdherentesRes() {
+  const pendMes = calcPendientesMesActual();
+  let rows = calcAdherentesPorAnio(adherenteAnio)
+    .map(r => ({ ...r, pendienteEsteMes: !!pendMes.pendientePorNombre[r.adherente] }));
+  if (adhResumenSoloPendientesMes) rows = rows.filter(r => r.pendienteEsteMes);
+  const q = normStr(adhResFiltro);
+  if (q) rows = rows.filter(r => normStr(r.adherente).includes(q));
+  return rows;
+}
+
 function renderAdherentesResumen() {
   const movs6All = movimientos.filter(esAporteAdherente);
   const anios = [...new Set(movs6All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
@@ -5584,14 +5652,6 @@ function renderAdherentesResumen() {
   }
 
   const pendMes = calcPendientesMesActual();
-  let rows = calcAdherentesPorAnio(adherenteAnio)
-    .map(r => ({ ...r, pendienteEsteMes: !!pendMes.pendientePorNombre[r.adherente] }));
-  if (adhResumenSoloPendientesMes) rows = rows.filter(r => r.pendienteEsteMes);
-
-  // Meses a mostrar como columnas: unión de todos los adherentes del año seleccionado,
-  // solo los que tengan al menos un pago (sin meses futuros vacíos)
-  const movs6Anio = movs6All.filter(m => !adherenteAnio || m.fecha.slice(0,4) === adherenteAnio);
-  const meses = [...new Set(movs6Anio.map(m => mesFromRecord(m)))].filter(Boolean).sort();
 
   const anioOptions = `<option value="" ${adherenteAnio===""?"selected":""}>Todos los años</option>` +
     anios.map(a => `<option value="${a}" ${adherenteAnio===a?"selected":""}>${a}</option>`).join("");
@@ -5601,6 +5661,47 @@ function renderAdherentesResumen() {
       <button class="reint-view-btn ${adherenteVista==='tabla'?'active':''}" onclick="setAdherenteVista('tabla')">⊞ Tabla</button>
       <button class="reint-view-btn ${adherenteVista==='cards'?'active':''}" onclick="setAdherenteVista('cards')">▤ Cards</button>
     </div>`;
+
+  return `
+    <div class="reint-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
+          <select class="inp" style="flex:1" onchange="setAdherenteAnio(this.value)">${anioOptions}</select>
+        </div>
+        ${viewToggle}
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="pill sm ${adhResumenSoloPendientesMes?"active":""}" style="margin:0" onclick="toggleAdhResumenSoloPendientesMes()">
+          🔴 Solo pendientes de ${esc(mesLabel(pendMes.mesActual))}
+        </button>
+        <button class="btn-sm accent" onclick="exportAdherentesResExcel()">📥 Exportar a Excel</button>
+      </div>
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input class="inp" type="search" placeholder="Buscar adherente…" value="${esc(adhResFiltro)}"
+               oninput="adhResFiltro=this.value; document.getElementById('adh-res-body').innerHTML=renderAdherentesResBody()">
+      </div>
+      <div id="adh-res-body">${renderAdherentesResBody()}</div>
+    </div>`;
+}
+
+// KPIs + tabla/cards según año, "solo pendientes", buscador y orden vigentes. Separado de
+// renderAdherentesResumen para poder repintar solo esto al tipear o al ordenar una columna —
+// si se repintara todo, el input perdería el foco en cada tecla.
+//
+// Los totales de arriba se calculan sobre las filas YA filtradas: si se busca un adherente, los
+// números tienen que ser los de ese adherente, no los de la lista entera. La única excepción es
+// "Pendiente cobrar", que es del mes en curso y del club completo por definición.
+function renderAdherentesResBody() {
+  const movs6All = movimientos.filter(esAporteAdherente);
+  const pendMes  = calcPendientesMesActual();
+  const rows     = filasAdherentesRes();
+
+  // Meses a mostrar como columnas: unión de todos los adherentes del año seleccionado,
+  // solo los que tengan al menos un pago (sin meses futuros vacíos)
+  const movs6Anio = movs6All.filter(m => !adherenteAnio || m.fecha.slice(0,4) === adherenteAnio);
+  const meses = [...new Set(movs6Anio.map(m => mesFromRecord(m)))].filter(Boolean).sort();
 
   let totAportado=0, totCompromiso=0, totDiferencia=0, hayCompromiso=false;
   for (const r of rows) {
@@ -5632,29 +5733,14 @@ function renderAdherentesResumen() {
     </div>`;
   const totalesLine = `${rows.length} adherente${rows.length!==1?"s":""} con aportes o compromiso registrado`;
 
+  const vacio = adhResFiltro ? "Sin adherentes para esa búsqueda"
+    : adhResumenSoloPendientesMes ? "Nadie pendiente este mes 🎉"
+    : "Sin aportes de adherentes registrados";
   const body = !rows.length
-    ? `<p class="note" style="text-align:center;padding:16px 0">${adhResumenSoloPendientesMes ? "Nadie pendiente este mes 🎉" : "Sin aportes de adherentes registrados"}</p>`
+    ? `<p class="note" style="text-align:center;padding:16px 0">${vacio}</p>`
     : adherenteVista === "cards" ? renderAdherentesCards(rows) : renderAdherentesTabla(rows, meses);
 
-  return `
-    <div class="reint-section">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
-          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
-          <select class="inp" style="flex:1" onchange="setAdherenteAnio(this.value)">${anioOptions}</select>
-        </div>
-        ${viewToggle}
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-        <button class="pill sm ${adhResumenSoloPendientesMes?"active":""}" style="margin:0" onclick="toggleAdhResumenSoloPendientesMes()">
-          🔴 Solo pendientes de ${esc(mesLabel(pendMes.mesActual))}
-        </button>
-        <button class="btn-sm accent" onclick="exportAdherentesResExcel()">📥 Exportar a Excel</button>
-      </div>
-      ${statCards}
-      <p class="note" style="margin-bottom:12px">${totalesLine}</p>
-      ${body}
-    </div>`;
+  return `${statCards}<p class="note" style="margin-bottom:12px">${totalesLine}</p>${body}`;
 }
 
 function estadoAdherenteCorto(estado) {
@@ -5679,13 +5765,7 @@ function adhConcepto(m) {
 
 function renderAdherentesTabla(rows, meses) {
   const isMobile = window.matchMedia("(max-width:599px)").matches;
-  const rank = { SIN:0, PARCIAL:1, OK:3 };
-  const sorted = [...rows].sort((a,b) => {
-    const ra = a.estado===null ? 2 : rank[a.estado];
-    const rb = b.estado===null ? 2 : rank[b.estado];
-    if (ra !== rb) return ra - rb;
-    return a.adherente.localeCompare(b.adherente);
-  });
+  const sorted = ordenarAdherentesRes(rows);
 
   // En mobile ocultamos las columnas de mes, cuota y prometido: Adherente | Acumulado | Resta
   const showMeses = !isMobile;
@@ -5746,9 +5826,9 @@ function renderAdherentesTabla(rows, meses) {
     <td style="text-align:right;font-family:var(--mono)" class="${totResta>0?'egr':'ing'}">${fmt(Math.abs(totResta))}</td>
   </tr>`;
 
-  const cuotaHeader = showMeses ? `<th style="text-align:right">Cuota mensual</th>` : "";
-  const prometidoHeader = showMeses ? `<th style="text-align:right">Prometido</th>` : "";
-  const mesHeaders = mesCols.map(mk => `<th style="text-align:right">${mesCortoHeader(mk)}</th>`).join("");
+  const cuotaHeader = showMeses ? thOrdenAdhRes("cuota", "Cuota mensual") : "";
+  const prometidoHeader = showMeses ? thOrdenAdhRes("prometido", "Prometido") : "";
+  const mesHeaders = mesCols.map(mk => thOrdenAdhRes("mes:" + mk, mesCortoHeader(mk))).join("");
   const footnote = isMobile
     ? `<p class="note" style="margin-top:6px;font-size:11px">* Vista reducida — cambiá a Cards para ver el detalle mes a mes</p>`
     : (hayMultiPago ? `<p class="note" style="margin-top:6px;font-size:11px">* Mes con más de un pago — tocá la fila para ver el detalle</p>` : "");
@@ -5757,12 +5837,12 @@ function renderAdherentesTabla(rows, meses) {
     <div class="reint-table-wrap">
       <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}">
         <thead><tr>
-          <th class="jugador-col">Adherente</th>
+          ${thOrdenAdhRes("adherente", "Adherente", "left", "jugador-col")}
           ${cuotaHeader}
           ${mesHeaders}
           ${prometidoHeader}
-          <th style="text-align:right">Acumulado</th>
-          <th style="text-align:right">Resta</th>
+          ${thOrdenAdhRes("acumulado", "Acumulado")}
+          ${thOrdenAdhRes("resta", "Resta")}
         </tr></thead>
         <tbody>${bodyRows}${totRow}</tbody>
       </table>
@@ -5777,22 +5857,13 @@ function exportAdherentesResExcel() {
   if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
 
   const movs6All = movimientos.filter(esAporteAdherente);
-  const pendMes = calcPendientesMesActual();
-  let rows = calcAdherentesPorAnio(adherenteAnio)
-    .map(r => ({ ...r, pendienteEsteMes: !!pendMes.pendientePorNombre[r.adherente] }));
-  if (adhResumenSoloPendientesMes) rows = rows.filter(r => r.pendienteEsteMes);
+  const rows = filasAdherentesRes();
   if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
 
   const movs6Anio = movs6All.filter(m => !adherenteAnio || m.fecha.slice(0,4) === adherenteAnio);
   const meses = [...new Set(movs6Anio.map(m => mesFromRecord(m)))].filter(Boolean).sort();
 
-  const rank = { SIN:0, PARCIAL:1, OK:3 };
-  const sorted = [...rows].sort((a,b) => {
-    const ra = a.estado===null ? 2 : rank[a.estado];
-    const rb = b.estado===null ? 2 : rank[b.estado];
-    if (ra !== rb) return ra - rb;
-    return a.adherente.localeCompare(b.adherente);
-  });
+  const sorted = ordenarAdherentesRes(rows);
 
   let totAportado = 0, totCompromiso = 0;
   const totPorMes = {};

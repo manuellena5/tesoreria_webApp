@@ -1414,6 +1414,84 @@ igual("el modal gana incluso si ya se avisó", app.accionBotonAtras(true, true),
 // matches:false y navigator.standalone no existe.
 check("fuera de la app instalada no se intercepta nada", !app.esAppInstalada());
 
+// ══════════════════════════════════════════════════════════════
+seccion("38 · Resumen > Adherentes: buscador y orden de columnas");
+
+function sembrarAdherentes() {
+  app.adhResFiltro = ""; app.adhResOrdenCol = ""; app.adhResOrdenDir = -1;
+  app.adhResumenSoloPendientesMes = false;
+  app.adherenteAnio = "2026";
+  app.adherentes = [
+    { nombre: "Perez Juan",  cuotaMensual: 1000, cuotasAnuales: 12 },
+    { nombre: "Gomez Ana",   cuotaMensual: 2000, cuotasAnuales: 12 },
+    { nombre: "Álvarez Bea", cuotaMensual: 0,    cuotasAnuales: 0  }
+  ];
+  // Perez pagó de más (OK), Gomez algo (PARCIAL), Álvarez sin compromiso pero con un aporte.
+  app.movimientos = [
+    { tipo:"INGRESO", fecha:"2026-03-05", codRubro:"6", adherente:"Perez Juan",  ingreso:15000, egreso:0, concepto:"", cuenta:"EFECTIVO" },
+    { tipo:"INGRESO", fecha:"2026-04-05", codRubro:"6", adherente:"Gomez Ana",   ingreso:4000,  egreso:0, concepto:"", cuenta:"EFECTIVO" },
+    { tipo:"INGRESO", fecha:"2026-03-09", codRubro:"6", adherente:"Álvarez Bea", ingreso:9000,  egreso:0, concepto:"", cuenta:"EFECTIVO" }
+  ];
+}
+
+sembrarAdherentes();
+const nombres = () => app.filasAdherentesRes().map(r => r.adherente);
+
+igual("sin filtro salen los tres", nombres().sort(), ["Gomez Ana", "Perez Juan", "Álvarez Bea"]);
+
+app.adhResFiltro = "gomez";
+igual("el buscador filtra por nombre", nombres(), ["Gomez Ana"]);
+
+app.adhResFiltro = "GOMEZ";
+igual("no distingue mayúsculas", nombres(), ["Gomez Ana"]);
+
+app.adhResFiltro = "alvarez";
+igual("ni acentos (Álvarez se encuentra escribiendo alvarez)", nombres(), ["Álvarez Bea"]);
+
+app.adhResFiltro = "zzz";
+igual("un nombre que no existe no devuelve nada", nombres(), []);
+
+app.adhResFiltro = "";
+
+// ── Orden ──
+// Por defecto: primero el que no llegó (PARCIAL), después el que no tiene compromiso, último el OK.
+igual("orden por defecto: los que deben primero",
+      app.ordenarAdherentesRes(app.filasAdherentesRes()).map(r => r.adherente),
+      ["Gomez Ana", "Álvarez Bea", "Perez Juan"]);
+
+app.adhResOrdenCol = "acumulado"; app.adhResOrdenDir = -1;
+igual("por Acumulado, mayor a menor",
+      app.ordenarAdherentesRes(app.filasAdherentesRes()).map(r => r.totalAportado),
+      [15000, 9000, 4000]);
+
+app.adhResOrdenDir = 1;
+igual("el segundo clic invierte",
+      app.ordenarAdherentesRes(app.filasAdherentesRes()).map(r => r.totalAportado),
+      [4000, 9000, 15000]);
+
+app.adhResOrdenCol = "adherente"; app.adhResOrdenDir = 1;
+igual("por nombre ordena alfabético ignorando acentos",
+      app.ordenarAdherentesRes(app.filasAdherentesRes()).map(r => r.adherente),
+      ["Álvarez Bea", "Gomez Ana", "Perez Juan"]);
+
+// Una columna de mes: solo Perez y Álvarez pagaron en marzo.
+app.adhResOrdenCol = "mes:2026-03"; app.adhResOrdenDir = -1;
+igual("por una columna de mes, el que no pagó ese mes queda último",
+      app.ordenarAdherentesRes(app.filasAdherentesRes()).map(r => r.adherente),
+      ["Perez Juan", "Álvarez Bea", "Gomez Ana"]);
+
+// Sin compromiso no hay "resta": vale 0 y no simula una deuda.
+app.adhResOrdenCol = ""; 
+const bea = app.filasAdherentesRes().find(r => r.adherente === "Álvarez Bea");
+igual("un adherente sin compromiso tiene resta 0, no deuda", app.adhResOrdenValor(bea, "resta"), 0);
+
+// El buscador y el orden se combinan sin pisarse.
+app.adhResFiltro = "e"; app.adhResOrdenCol = "acumulado"; app.adhResOrdenDir = -1;
+igual("filtro + orden juntos",
+      app.ordenarAdherentesRes(app.filasAdherentesRes()).map(r => r.adherente),
+      ["Perez Juan", "Álvarez Bea", "Gomez Ana"]);
+app.adhResFiltro = ""; app.adhResOrdenCol = "";
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

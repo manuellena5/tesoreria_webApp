@@ -223,7 +223,7 @@ igual("ingresos de buffet",        item(placa, "Ingresos buffet (local + visitan
 igual("gastos de buffet en negativo", item(placa, "Gastos buffet").m,                     -817840);
 igual("entradas + tribuna juntas",  item(placa, "Venta entradas y tribuna").m,             1245000);
 igual("venta número queda en otros ingresos",  item(placa, "Otros ingresos (Sorteo)").m,      82000);
-igual("GoPass sale como renglón propio",       item(placa, "GoPass / PPV").m,                 25000);
+igual("GoPass sale como renglón propio",       item(placa, "GoPass").m,                 25000);
 igual("policía",                    item(placa, "Policía").m,                             -635436);
 igual("árbitros",                   item(placa, "Árbitros").m,                            -790000);
 igual("el rubro 36 sin 'ambulancia' va a Enfermera", item(placa, "Enfermera").m,            -85000);
@@ -248,7 +248,7 @@ check("y es string, no número", typeof rt.fecha === "string", typeof rt.fecha);
 igual("sub trae rival y fecha del partido", rt.sub, "vs. Colón · 03/08/2026");
 igual("título", rt.titulo, "RECAUDACIÓN");
 igual("etiqueta del saldo", rt.final, "SALDO FINAL");
-igual("pie", rt.pie, "@cdmitre · Fútbol Mayor");
+igual("pie", rt.pie, "@depmitrefutbolmayor · Fútbol Mayor");
 igual("asistencia vacía (la app no tiene el dato)", rt.asistencia, []);
 igual("neto es la etiqueta del bloque, no un número", [rt.bloques[0].neto, rt.bloques[1].neto],
       ["NETO BUFFET", "NETO CANCHA"]);
@@ -1511,13 +1511,13 @@ const jsonPlaca = app.armarPlacaJson({ p: pPlaca, pg: pgPlaca });
 const cancha = jsonPlaca.bloques.find(b => b.nombre === "CANCHA");
 const itemPlaca = c => cancha.items.find(i => i.c === c);
 
-check("existe el renglón GoPass / PPV", !!itemPlaca("GoPass / PPV"), cancha.items.map(i=>i.c).join(" | "));
-igual("GoPass lleva su propio monto", itemPlaca("GoPass / PPV").m, 40000);
-igual("y va como ingreso, no como egreso", itemPlaca("GoPass / PPV").neg, false);
+check("existe el renglón GoPass", !!itemPlaca("GoPass"), cancha.items.map(i=>i.c).join(" | "));
+igual("GoPass lleva su propio monto", itemPlaca("GoPass").m, 40000);
+igual("y va como ingreso, no como egreso", itemPlaca("GoPass").neg, false);
 // Lo importante: no se cuenta dos veces. Otros ingresos baja en lo que se llevó GoPass.
 igual("Otros ingresos descuenta GoPass", itemPlaca("Otros ingresos (Sorteo)").m, 15000);
 igual("los dos renglones siguen sumando el otrosIng original",
-      itemPlaca("GoPass / PPV").m + itemPlaca("Otros ingresos (Sorteo)").m, 55000);
+      itemPlaca("GoPass").m + itemPlaca("Otros ingresos (Sorteo)").m, 55000);
 // El saldo de la placa tiene que seguir cuadrando con el Total Neto de la tabla.
 igual("el saldo de la placa sigue dando el Total Neto",
       app.placaSaldoFinal(jsonPlaca), pgPlaca.ingresos - pgPlaca.egresos);
@@ -1525,7 +1525,7 @@ igual("el saldo de la placa sigue dando el Total Neto",
 // Un partido sin GoPass no cambia respecto de antes.
 const sinGopass = app.armarPlacaJson({ p: pPlaca, pg: { ...pgPlaca, gopass: 0 } });
 const canchaSin = sinGopass.bloques.find(b => b.nombre === "CANCHA");
-igual("sin GoPass el renglón queda en 0", canchaSin.items.find(i=>i.c==="GoPass / PPV").m, 0);
+igual("sin GoPass el renglón queda en 0", canchaSin.items.find(i=>i.c==="GoPass").m, 0);
 igual("y Otros ingresos queda intacto",
       canchaSin.items.find(i=>i.c==="Otros ingresos (Sorteo)").m, 55000);
 

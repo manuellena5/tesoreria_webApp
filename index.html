@@ -3684,7 +3684,15 @@ function sumarMontoAPartido(pg, m, monto, repartido) {
     pg.ingresos += monto;
     if (m.codRubro === "2")                             pg.buffetIng   += monto;
     else if (["1","4"].includes(m.codRubro))             pg.entradas    += monto;
-    else                                                 pg.otrosIng    += monto;
+    else {
+      pg.otrosIng += monto;
+      // GoPass (14a, "GOPASS (ingreso filmación)") es el ingreso que corresponde al egreso de
+      // filmación. La tabla lo deja adentro de "Otros ingresos", pero el flyer lo pide como
+      // renglón propio. Se acumula aparte y NO se saca de otrosIng: si se sacara, la suma de las
+      // columnas de la tabla dejaría de dar el Total Neto. Mismo criterio que policia/arbitros/…
+      // con gastosCancha — desglose fino, no una columna nueva.
+      if (m.codRubro === "14a") pg.gopass += monto;
+    }
   } else {
     pg.egresos += monto;
     if (m.codRubro === "2")                              pg.buffetEgr    += monto;
@@ -3755,10 +3763,10 @@ function calcPartidoResumenRows() {
     for (const pid of partidosDeMov(m)) (noComputadosMap[pid] || (noComputadosMap[pid] = [])).push(m);
   }
   const partidoMap = {};
-  // policia/arbitros/enfermera/ambulancia/filmacion son el desglose de gastosCancha (su suma lo iguala):
-  // no los usa la tabla, sólo la placa de redes.
+  // policia/arbitros/enfermera/ambulancia/filmacion son el desglose de gastosCancha (su suma lo iguala)
+  // y gopass lo es de otrosIng: no los usa la tabla, sólo la placa de redes.
   const partidoPg = id => partidoMap[id] || (partidoMap[id] = { ingresos:0, egresos:0, buffetIng:0, buffetEgr:0, gastosCancha:0, entradas:0, otrosIng:0, otrosEgr:0,
-                                                                policia:0, arbitros:0, enfermera:0, ambulancia:0, filmacion:0, movs:[] });
+                                                                policia:0, arbitros:0, enfermera:0, ambulancia:0, filmacion:0, gopass:0, movs:[] });
 
   for (const m of movsPartido) {
     const total = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
@@ -4036,7 +4044,11 @@ function armarPlacaJson({p, pg}) {
       ]},
       { nombre: "CANCHA", neto: "NETO CANCHA", items: [
         { c: "Venta entradas y tribuna", m:  r(pg.entradas),   g: "", neg: false },
-        { c: "Otros ingresos (Sorteo)",  m:  r(pg.otrosIng),   g: "", neg: false },
+        // GoPass sale de adentro de otrosIng (ver sumarMontoAPartido). Se restan los montos ya
+        // redondeados —no r(otrosIng - gopass)— para que los dos renglones sumen exactamente
+        // r(otrosIng) y el saldo de la placa siga cuadrando al peso con el Total Neto.
+        { c: "GoPass / PPV",             m:  r(pg.gopass),     g: "", neg: false },
+        { c: "Otros ingresos (Sorteo)",  m:  r(pg.otrosIng) - r(pg.gopass), g: "", neg: false },
         { c: "Policía",                  m: -r(pg.policia),    g: PLACA_G_SEGURIDAD, neg: true },
         { c: "Árbitros",                 m: -r(pg.arbitros),   g: PLACA_G_SEGURIDAD, neg: true },
         { c: "Enfermera",                m: -r(pg.enfermera),  g: PLACA_G_SERVICIOS, neg: true },

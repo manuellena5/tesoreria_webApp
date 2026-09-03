@@ -1529,6 +1529,29 @@ igual("sin GoPass el renglón queda en 0", canchaSin.items.find(i=>i.c==="GoPass
 igual("y Otros ingresos queda intacto",
       canchaSin.items.find(i=>i.c==="Otros ingresos (Sorteo)").m, 55000);
 
+// ══════════════════════════════════════════════════════════════
+seccion("40 · Placa: la palabra \"Fecha\" no se duplica");
+
+// El generador dibuja "FECHA " + lo que venga en el JSON, así que el JSON manda sólo el número.
+igual("con la palabra adelante, se saca",   app.placaNumeroFecha("Fecha 22"), "22");
+igual("en minúscula también",               app.placaNumeroFecha("fecha 22"), "22");
+igual("sin espacio",                        app.placaNumeroFecha("Fecha22"),  "22");
+igual("con Nº",                             app.placaNumeroFecha("Fecha Nº 5"), "5");
+igual("un número pelado no se toca",        app.placaNumeroFecha("22"),       "22");
+igual("Semi no se toca",                    app.placaNumeroFecha("Semi"),     "Semi");
+igual("Final no se toca",                   app.placaNumeroFecha("Final"),    "Final");
+// El lookahead protege palabras que apenas empiezan igual, sin bloquear el caso sin espacio.
+igual("'Fechas especiales' no se mutila",   app.placaNumeroFecha("Fechas especiales"), "Fechas especiales");
+igual("sólo 'Fecha' no deja identificador", app.placaNumeroFecha("Fecha"),    "");
+igual("vacío o ausente no rompe",           app.placaNumeroFecha(undefined),  "");
+
+// Y en el JSON completo, que es donde se veía el bug.
+app.partidos = [{ id:"pf", fecha:"2026-08-03", rival:"Colón", numeroFecha:"Fecha 22", condicion:"LOCAL" }];
+const jsonF = app.armarPlacaJson({ p: app.partidos[0], pg: {
+  buffetIng:0, buffetEgr:0, entradas:0, otrosIng:0, gopass:0, otrosEgr:0,
+  policia:0, arbitros:0, enfermera:0, ambulancia:0, filmacion:0, ingresos:0, egresos:0 } });
+igual("el JSON lleva sólo el número de fecha", jsonF.fecha, "22");
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

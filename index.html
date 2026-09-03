@@ -4016,11 +4016,26 @@ function exportPartidoResExcel() {
 const PLACA_G_SEGURIDAD = "Policía y árbitros";
 const PLACA_G_SERVICIOS = "Enfermera, filmación y ambulancia";
 
+// El generador ya dibuja la palabra "FECHA" adelante del número (ver el armado del canvas en
+// Placas_Recaudacion.html), así que el JSON tiene que mandar SOLO el identificador. Pero
+// numeroFecha es texto libre —el formulario del partido sugiere "Fecha 1, Semi, Final…"— y
+// cargado como "Fecha 22" la placa terminaba diciendo "FECHA FECHA 22".
+//
+// Se saca un "Fecha" / "Fecha Nº" inicial y se deja el resto intacto: "Semi", "Final" o un "22"
+// pelado no se tocan. El lookahead —"no sigue una letra"— es lo que distingue "Fecha22", que
+// sí hay que limpiar, de "Fechas", que quedaría mutilado en "s". Un \b no alcanzaba: entre la
+// "a" y el "2" no hay borde de palabra, así que dejaba "Fecha22" sin tocar.
+// Si alguien cargó sólo "Fecha", no hay identificador que rescatar y se manda vacío — el
+// generador ya sabe no dibujar el renglón en ese caso.
+function placaNumeroFecha(numeroFecha) {
+  return String(numeroFecha || "").trim().replace(/^fecha(?![a-zà-ÿ])\s*(n[º°]?\.?\s*)?/i, "").trim();
+}
+
 function armarPlacaJson({p, pg}) {
   const r = n => Math.round(n || 0);  // montos al peso, sin decimales ni separadores: número JSON plano
   const fechaDMY = p.fecha ? p.fecha.slice(8)+"/"+p.fecha.slice(5,7)+"/"+p.fecha.slice(0,4) : "";
   return {
-    fecha:   String(p.numeroFecha || ""),   // número de fecha del torneo, no una fecha calendario
+    fecha:   placaNumeroFecha(p.numeroFecha),   // sólo el identificador: el generador pone "FECHA" adelante
     titulo:  "RECAUDACIÓN",
     sub:     "vs. " + (p.rival || "") + (fechaDMY ? " · " + fechaDMY : ""),
     final:   "SALDO FINAL",

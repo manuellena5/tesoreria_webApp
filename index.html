@@ -434,6 +434,10 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
    con los que sí se pueden tildar. */
 .pj-premio-lbl.pj-premio-pagado { opacity:.55; cursor:default; }
 .pj-filtro-lbl { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text2); cursor:pointer; }
+.pj-jug-lbl { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+/* Fila que el usuario dejó fuera del total. Sólo se atenúa: el Total sigue visible porque el
+   dato no molesta, lo que hay que comunicar es que no está sumando. */
+.pj-table tr.pj-jug-off td { opacity:.42; }
 .pj-premio-lbl .mono { font-family:var(--mono); }
 .pj-desc-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); }
 .pj-desc-item:last-child { border-bottom:0; }
@@ -992,8 +996,9 @@ let sharedMes     = nowMes();
 let entidadesTab  = "jugadores";
 let pagosJugTab   = "partido";
 let pjPartidoSel  = null;
-let pjPartidosSel = null; // null = todavía no inicializado (se precarga con los partidos pendientes)
+let pjPartidosSel = [];   // fechas tildadas en Transferencias; arranca vacío a propósito (ver renderTransferencias)
 let pjSoloPendientes = false; // filtro de Transferencias: esconder a los jugadores que ya están al día
+let pjExcluirMensuales = false; // filtro de Transferencias: esconder a los que cobran por mes
 // Jugadores liquidados desde que se abrió la app. Con 15 jugadores de a uno hay que poder ver por
 // dónde se va sin contar de memoria: sus filas siguen en la tabla con el badge "Liquidado ✓" en vez
 // de desaparecer al quedarse sin nada pendiente (el de "por partido" se quedaba por la columna del
@@ -10148,15 +10153,25 @@ function pjTransfBase(jugadorId) {
   return total;
 }
 
+// ¿Este jugador cobra por mes? Los otros dos regímenes son "partido" y "quincenal"; el filtro de
+// Transferencias apunta sólo al mensual, que es el que descoloca el total cuando lo que se está
+// armando es la transferencia de una fecha.
+function pjEsMensual(jugadorId) {
+  const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+  return !!cfg && cfg.frecuencia === "mensual";
+}
+
+// Tilda o destilda todas las filas de jugador. No toca los premios: son dos selecciones distintas
+// (qué jugadores entran en el total vs. qué premios se le suman a cada uno).
+function pjMarcarJugadores(valor) {
+  document.querySelectorAll("#pj-transf-table .pj-jug-cb").forEach(cb => cb.checked = valor);
+  pjTransfRecalc();
+}
+
+// Arranca SIN ninguna fecha tildada. Antes se precargaban las que tuvieran algo pendiente, pero
+// eso daba un total de entrada que mezclaba fechas que no se iban a pagar juntas; el número sólo
+// significa algo cuando lo armó el usuario eligiendo las fechas de esta transferencia.
 function renderTransferencias() {
-  if (pjPartidosSel === null) {
-    // Precarga: partidos que tienen al menos una fila pendiente.
-    const idsConPendiente = new Set(
-      pagosJugadores.filter(p => p.estado === "pendiente" && pjTipoFila(p) === "partido" && p.partidosIncluidos.length === 1)
-        .map(p => p.partidosIncluidos[0])
-    );
-    pjPartidosSel = partidos.filter(p => idsConPendiente.has(p.id)).map(p => p.id);
-  }
   const sorted = [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha));
   if (!sorted.length) return '<p class="note">Todavía no hay partidos cargados.</p>';
 
@@ -10203,6 +10218,11 @@ function renderTransferencias() {
   const totalJugadores = jugadorIds.length;
   if (pjSoloPendientes) jugadorIds = jugadorIds.filter(tienePendiente);
   const ocultos = totalJugadores - jugadorIds.length;
+  // Se cuentan aparte para poder decir por qué falta cada uno: "está al día" y "cobra por mes" son
+  // dos motivos distintos y juntarlos en un solo número no le sirve a nadie.
+  const antesMensuales = jugadorIds.length;
+  if (pjExcluirMensuales) jugadorIds = jugadorIds.filter(jid => !pjEsMensual(jid));
+  const ocultosMensuales = antesMensuales - jugadorIds.length;
 
   const rows = jugadorIds.map(jid => {
     const info = filasPorJugador[jid];
@@ -10262,8 +10282,8 @@ function renderTransferencias() {
       : `<span class="pj-badge pj-badge-pagado">Liquidado ✓</span>
          <button class="btn-sm pj-comp-btn" onclick="abrirComprobantePrevio('${jid}')" title="Reemitir el comprobante de lo ya liquidado">🧾</button>`;
     return `
-    <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-base="${base}" data-total="0">
-      <td>${esc(info.nombre)}</td>
+    <tr data-jug="${jid}" data-alias="${esc(info.alias||"—")}" data-base="${base}" data-total="0" data-incluido="1">
+      <td><label class="pj-jug-lbl"><input type="checkbox" class="pj-jug-cb" checked onchange="pjTransfRecalc()">${esc(info.nombre)}</label></td>
       ${cols}
       <td class="pj-premios-cell">${premiosCell}</td>
       <td class="mono pj-total-cell">${fmt(0)}</td>
@@ -10302,10 +10322,15 @@ function renderTransferencias() {
         Sólo pendientes de pagar
       </label>
       ${pjSoloPendientes && ocultos ? `<span class="pj-acumulado">${ocultos} jugador${ocultos!==1?"es":""} al día sin mostrar</span>` : ""}
+      <label class="pj-filtro-lbl">
+        <input type="checkbox" ${pjExcluirMensuales?"checked":""} onchange="pjExcluirMensuales=this.checked; renderPagosJugadores()">
+        Ocultar los que cobran por mes
+      </label>
+      ${pjExcluirMensuales && ocultosMensuales ? `<span class="pj-acumulado">${ocultosMensuales} mensual${ocultosMensuales!==1?"es":""} sin mostrar</span>` : ""}
     </div>${totalJugadores && !jugadorIds.length ? `<p class="note">No queda nada pendiente para los partidos seleccionados.</p>` : ""}${avisoPremiosOcultos}
     <div class="pj-table-wrap pj-wide-wrap pj-transf-wrap">
       <table class="pj-table" id="pj-transf-table">
-        <thead><tr><th>Jugador</th>${partidoCols || "<th>Monto</th>"}<th>Premios y descuentos</th><th>Total</th><th>Alias/CBU</th><th>Liquidación</th></tr></thead>
+        <thead><tr><th><label class="pj-jug-lbl"><input type="checkbox" class="pj-jug-all" checked onchange="pjMarcarJugadores(this.checked)">Jugador</label></th>${partidoCols || "<th>Monto</th>"}<th>Premios y descuentos</th><th>Total</th><th>Alias/CBU</th><th>Liquidación</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="99" class="note">Sin jugadores pendientes para los partidos seleccionados</td></tr>`}</tbody>
       </table>
     </div>
@@ -10327,10 +10352,10 @@ function pjMarcarTodos(valor) {
  *  Los premios se eligen uno por uno, así que el monto a transferir depende de la selección
  *  y no se puede dejar fijo en el HTML (el CSV de transferencias sale de estos totales). */
 function pjTransfRecalc() {
-  let totalGeneral = 0, jugadores = 0;
+  let totalGeneral = 0, jugadores = 0, filas = 0, marcadas = 0;
   document.querySelectorAll("#pj-transf-table tbody tr[data-jug]").forEach(tr => {
-    // Sin checkbox de jugador: el partido y el sueldo pendientes entran siempre (data-base) y lo
-    // único opcional son los premios.
+    // El Total de la fila no depende del checkbox del jugador: el partido y el sueldo pendientes
+    // entran siempre (data-base) y lo único opcional son los premios.
     let total = Number(tr.dataset.base || 0);
     tr.querySelectorAll(".pj-premio-cb:checked").forEach(cb => total += Number(cb.dataset.monto || 0));
     tr.dataset.total = total;
@@ -10339,6 +10364,18 @@ function pjTransfRecalc() {
       cell.textContent = fmtSigned(total);
       cell.style.color = total < 0 ? "var(--red)" : "";
     }
+
+    // Lo que sí decide el checkbox del jugador: si esa fila entra en los KPI de arriba y en el CSV.
+    // Sirve para responder "¿cuánto me sale lo que pago HOY?" dejando afuera al que se paga después,
+    // sin tener que destildarle los premios ni sacarlo de la pantalla. La fila destildada sigue
+    // mostrando su Total —el dato no se esconde— pero atenuada, para que se vea que no suma.
+    const cb = tr.querySelector(".pj-jug-cb");
+    const incluido = !cb || cb.checked;
+    filas++;
+    if (incluido) marcadas++;
+    tr.dataset.incluido = incluido ? "1" : "0";
+    tr.classList.toggle("pj-jug-off", !incluido);
+    if (!incluido) return;
     if (total !== 0) jugadores++;
     totalGeneral += total;
   });
@@ -10346,6 +10383,13 @@ function pjTransfRecalc() {
   if (elT) elT.textContent = fmtSigned(totalGeneral);
   const elJ = document.getElementById("pj-jugadores-pagar");
   if (elJ) elJ.textContent = jugadores;
+  // El maestro refleja el estado real: tildado si están todas, indeterminado si hay mezcla. Sin
+  // esto quedaba tildado aunque el usuario hubiera destildado filas a mano.
+  const todas = document.querySelector("#pj-transf-table .pj-jug-all");
+  if (todas) {
+    todas.checked = filas > 0 && marcadas === filas;
+    todas.indeterminate = marcadas > 0 && marcadas < filas;
+  }
 }
 
 function pjToggleChip(partidoId) {
@@ -10447,8 +10491,11 @@ function csvCell(v) {
  * recién después se liquida de a un jugador con el extracto a la vista.
  */
 function exportarTransferencias() {
+  // Se exporta lo mismo que suman los KPI: las filas tildadas con total distinto de cero. Si el
+  // CSV trajera también las destildadas, el listado que se lleva al homebanking no coincidiría
+  // con el "Total a transferir" que se estuvo mirando para decidir.
   const filas = [...document.querySelectorAll("#pj-transf-table tbody tr[data-jug]")]
-    .filter(tr => Number(tr.dataset.total || 0) !== 0);
+    .filter(tr => tr.dataset.incluido !== "0" && Number(tr.dataset.total || 0) !== 0);
   if (!filas.length) { toast("No hay filas seleccionadas para exportar", "err"); return; }
 
   // Mismo orden que las columnas de la tabla (ver renderTransferencias).

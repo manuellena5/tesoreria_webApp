@@ -1552,6 +1552,56 @@ const jsonF = app.armarPlacaJson({ p: app.partidos[0], pg: {
   policia:0, arbitros:0, enfermera:0, ambulancia:0, filmacion:0, ingresos:0, egresos:0 } });
 igual("el JSON lleva sólo el número de fecha", jsonF.fecha, "22");
 
+// ══════════════════════════════════════════════════════════════
+seccion("41 · Transferencias: sin fechas por defecto, filtros y selección");
+
+sembrar();
+app.pjLiquidadosSesion = new Set();
+app.pjSoloPendientes = false;
+app.pjExcluirMensuales = false;
+
+// ── Ninguna fecha tildada de entrada ──
+app.pjPartidosSel = [];
+igual("sin fechas tildadas, el jugador por partido no arrastra nada", app.pjTransfBase("j1"), 0);
+// El mensual no depende de las fechas: su sueldo y su descuento entran igual.
+igual("el mensual sigue trayendo su sueldo neto", app.pjTransfBase("j2"), 80000 - 8000);
+// Al tildar una fecha recién ahí aparece la plata del partido.
+app.pjPartidosSel = ["p1"];
+igual("tildando la fecha, el partido suma", app.pjTransfBase("j1"), 50000);
+app.pjPartidosSel = [];
+
+// ── Quién cobra por mes ──
+check("GOMEZ cobra por mes",        app.pjEsMensual("j2"));
+check("PEREZ no (cobra por partido)", !app.pjEsMensual("j1"));
+check("un id que no existe no es mensual", !app.pjEsMensual("no-existe"));
+
+// ── La tabla ──
+let htmlTr = app.renderTransferencias();
+check("cada fila trae su checkbox tildado",
+      (htmlTr.match(/class="pj-jug-cb" checked/g) || []).length >= 1,
+      "checkbox por fila no encontrado");
+check("y hay un maestro en el encabezado", htmlTr.includes("pj-jug-all"), "sin maestro");
+check("las filas arrancan contando para el total", htmlTr.includes('data-incluido="1"'), "sin data-incluido");
+check("sin fechas tildadas el encabezado cae en la columna Monto", htmlTr.includes("<th>Monto</th>"), "sin fallback");
+check("con 0 fechas, el KPI de partidos incluidos dice 0",
+      htmlTr.includes('<div class="stat-val">0</div>'), "el KPI no arrancó en 0");
+
+// ── Filtro de mensuales ──
+check("sin filtro, el mensual está en la tabla", htmlTr.includes("GOMEZ"), "GOMEZ no aparece");
+app.pjExcluirMensuales = true;
+htmlTr = app.renderTransferencias();
+check("con el filtro, el mensual desaparece", !htmlTr.includes("GOMEZ"), "GOMEZ sigue estando");
+check("y el que cobra por partido se queda", htmlTr.includes("PEREZ"), "PEREZ desapareció");
+check("se avisa cuántos quedaron sin mostrar", htmlTr.includes("sin mostrar"), "sin aviso de ocultos");
+app.pjExcluirMensuales = false;
+
+// El checkbox del jugador NO toca pjIdsDeSeleccion: la liquidación sigue siendo de a uno con el
+// botón de la fila, y esa regla es la que evitó que un premio se cobrara solo.
+app.pjPartidosSel = ["p1"];
+igual("liquidar un jugador sigue trayendo sólo lo suyo",
+      app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: [] }]), ["f-part"]);
+app.pjPartidosSel = [];
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

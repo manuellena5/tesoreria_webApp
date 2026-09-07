@@ -1644,12 +1644,12 @@ check("un jugador sin ficha de cobro frena", app.pjLoteMotivoBloqueo("nadie").in
 const lote = { items: [{jugadorId:"j1",nombre:"PEREZ"},{jugadorId:"j2",nombre:"GOMEZ"},{jugadorId:"j3",nombre:"LOPEZ"}],
                i: 0, enviados: [], salteados: [] };
 app.pjLoteAvanzar(lote, "enviado");
-igual("el enviado queda registrado", lote.enviados, ["PEREZ"]);
+igual("el enviado queda registrado", lote.enviados.map(e => e.nombre), ["PEREZ"]);
 igual("y la cola avanza", lote.i, 1);
 
 app.pjLoteAvanzar(lote, "salteado", "no tiene celular cargado");
 igual("el salteado guarda el motivo", lote.salteados, [{ nombre: "GOMEZ", motivo: "no tiene celular cargado" }]);
-igual("y no cuenta como enviado", lote.enviados, ["PEREZ"]);
+igual("y no cuenta como enviado", lote.enviados.map(e => e.nombre), ["PEREZ"]);
 
 app.pjLoteAvanzar(lote, "enviado");
 igual("al terminar, enviados + salteados = total",
@@ -1677,6 +1677,50 @@ check("en el último dice Terminar", app.pjLoteBarraHTML().includes("Terminar"),
 app.pjLote.i = 2;
 igual("terminada la cola la barra desaparece", app.pjLoteBarraHTML(), "");
 app.pjLote = null;
+
+// ══════════════════════════════════════════════════════════════
+seccion("44 · Mensaje para el chat de Mercado Pago");
+
+const enviadosMP = [
+  { jugadorId: "j1", nombre: "BERNAUS",  alias: "federico.bernaus", monto: 170000 },
+  { jugadorId: "j2", nombre: "CARRANZA", alias: "maticarranza04",   monto: 110000 },
+  { jugadorId: "j3", nombre: "DIAZ",     alias: "jonatandv7",       monto: 300000 }
+];
+
+igual("el mensaje sale con el formato que pide Mercado Pago",
+      app.pjLoteMensajeMP(enviadosMP, "10/09/2026"),
+      "Fecha: 10/09/2026\n\n" +
+      "1. alias: federico.bernaus — monto: $170.000\n" +
+      "2. alias: maticarranza04 — monto: $110.000\n" +
+      "3. alias: jonatandv7 — monto: $300.000");
+
+// ── El alias tiene que ser usable ──
+igual("un alias normal pasa",        app.pjAliasParaMP("federico.bernaus"), "federico.bernaus");
+igual("el guión de la tabla no",     app.pjAliasParaMP("—"), "");
+igual("un guión común tampoco",      app.pjAliasParaMP("-"), "");
+igual("vacío tampoco",               app.pjAliasParaMP("   "), "");
+igual("se le sacan los espacios",    app.pjAliasParaMP("  mati.mp  "), "mati.mp");
+
+// Quien no tiene alias no genera línea —Mercado Pago la rechazaría sin decir cuál— pero se avisa
+// aparte para que no desaparezca en silencio.
+const conUnoSinAlias = [...enviadosMP, { jugadorId: "j4", nombre: "SIN ALIAS", alias: "—", monto: 50000 }];
+check("el que no tiene alias no entra en el mensaje",
+      !app.pjLoteMensajeMP(conUnoSinAlias, "10/09/2026").includes("50.000"),
+      app.pjLoteMensajeMP(conUnoSinAlias, "10/09/2026"));
+igual("la numeración no deja huecos",
+      app.pjLoteMensajeMP(conUnoSinAlias, "10/09/2026").split("\n").filter(l => /^\d+\./.test(l)).length, 3);
+igual("y se lo reporta aparte",
+      app.pjLoteSinAlias(conUnoSinAlias).map(e => e.nombre), ["SIN ALIAS"]);
+igual("sin faltantes la lista viene vacía", app.pjLoteSinAlias(enviadosMP), []);
+
+// Los montos se formatean como plata argentina, sin decimales.
+igual("un monto con centavos se redondea al peso",
+      app.pjLoteMensajeMP([{ alias: "x.y", monto: 170000.4 }], "10/09/2026"),
+      "Fecha: 10/09/2026\n\n1. alias: x.y — monto: $170.000");
+
+// Mercado Pago exige fecha futura: el default del modal es mañana, no hoy.
+check("la fecha por defecto es posterior a hoy", app.manana() > app.today(),
+      app.manana() + " vs " + app.today());
 
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);

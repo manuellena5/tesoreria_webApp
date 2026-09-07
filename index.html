@@ -11791,7 +11791,10 @@ function pjLoteMotivoBloqueo(jugadorId) {
 function pjLoteAvanzar(lote, resultado, motivo) {
   if (!lote || lote.i >= lote.items.length) return lote;
   const it = lote.items[lote.i];
-  if (resultado === "enviado") lote.enviados.push(it.nombre);
+  // Se guarda el item entero (no sólo el nombre): el mensaje para Mercado Pago necesita el alias
+  // y el monto, y tienen que ser los del comprobante que se mandó, no los que la tabla muestre
+  // después de un repintado.
+  if (resultado === "enviado") lote.enviados.push(it);
   else lote.salteados.push({ nombre: it.nombre, motivo: motivo || "salteado" });
   lote.i++;
   return lote;
@@ -11807,7 +11810,12 @@ function pjLoteIniciar() {
   pjLote = {
     items: filas.map(tr => {
       const cfg = configJugadores.find(c => c.idJugador === tr.dataset.jug);
-      return { jugadorId: tr.dataset.jug, nombre: cfg ? cfg.nombre : tr.dataset.jug };
+      return {
+        jugadorId: tr.dataset.jug,
+        nombre: cfg ? cfg.nombre : tr.dataset.jug,
+        alias:  cfg ? String(cfg.alias || "") : "",
+        monto:  Number(tr.dataset.total || 0)
+      };
     }),
     i: 0, enviados: [], salteados: []
   };
@@ -11855,21 +11863,115 @@ function pjLoteCancelar() {
   toast(hechos ? "Envío cancelado — " + hechos + " ya salieron" : "Envío cancelado", "ok");
 }
 
+// ── Mensaje para el chat de Mercado Pago ──────────────────────────────────────────────────────
+// Con los comprobantes ya enviados, Mercado Pago programa las transferencias desde su chat si se
+// le pasa la fecha y una línea por transferencia. Se arma desde los ENVIADOS, no desde todos los
+// tildados: programarle una transferencia a alguien que quedó salteado y nunca vio su comprobante
+// es justo lo que no queremos.
+//
+// Mercado Pago valida y programa una por una, y exige que la fecha sea futura — por eso el default
+// es mañana y no hoy.
+
+// El alias sirve si es un alias de verdad. La tabla usa "—" cuando la ficha no tiene ninguno, y
+// mandarlo así generaría una línea que Mercado Pago rechaza sin decir cuál.
+function pjAliasParaMP(alias) {
+  const a = String(alias || "").trim();
+  return (!a || a === "—" || a === "-") ? "" : a;
+}
+
+function manana() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate());
+}
+
+// La numeración se hace DESPUÉS de filtrar por alias: si numerara antes, la lista saldría
+// "1, 2, 4" y Mercado Pago la lee como que falta una transferencia.
+function pjLoteMensajeMP(enviados, fechaDMY) {
+  const lineas = (enviados || [])
+    .filter(e => pjAliasParaMP(e.alias))
+    .map((e, i) => (i + 1) + ". alias: " + pjAliasParaMP(e.alias) + " — monto: " + fmt(e.monto));
+  return "Fecha: " + fechaDMY + "\n\n" + lineas.join("\n");
+}
+
+/** Los enviados que no van a entrar en el mensaje porque no tienen alias cargado. */
+function pjLoteSinAlias(enviados) {
+  return (enviados || []).filter(e => !pjAliasParaMP(e.alias));
+}
+
+// Datos del último lote terminado, para poder regenerar el mensaje al cambiar la fecha.
+let pjLoteMP = null; // { enviados, fecha }
+
+function pjLoteMPSetFecha(v) {
+  if (!pjLoteMP) return;
+  pjLoteMP.fecha = v;
+  const ta = document.getElementById("pj-mp-texto");
+  if (ta) ta.value = pjLoteMensajeMP(pjLoteMP.enviados, fmtFechaDMY(v));
+}
+
+function pjLoteMPCopiar() {
+  const ta = document.getElementById("pj-mp-texto");
+  if (!ta) return;
+  const fallback = () => {
+    try {
+      ta.removeAttribute("readonly");
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.setAttribute("readonly", "readonly");
+      toast(ok ? "Mensaje copiado ✓" : "No se pudo copiar — copialo del cuadro", ok ? "ok" : "err");
+    } catch (e) {
+      ta.setAttribute("readonly", "readonly");
+      toast("No se pudo copiar — copialo del cuadro", "err");
+    }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ta.value).then(() => toast("Mensaje copiado ✓", "ok"), fallback);
+  } else {
+    fallback();
+  }
+}
+
 function pjLoteResumen() {
   const l = pjLote;
   pjLote = null;
+  pjLoteMP = { enviados: l.enviados, fecha: manana() };
   const pendientes = (l.salteados || []).map(s => `
     <div class="modal-detail-row"><span class="modal-detail-lbl">${esc(s.nombre)}</span></div>
     <div class="pj-acumulado" style="margin:-6px 0 6px">${esc(s.motivo)}</div>`).join("");
+
+  const sinAlias = pjLoteSinAlias(l.enviados);
+  const avisoAlias = sinAlias.length ? `
+    <p class="note" style="border-left:3px solid var(--warn);padding-left:8px;margin:8px 0 0">
+      ${sinAlias.length === 1 ? "Este jugador recibió su comprobante pero no entra en el mensaje" :
+        "Estos jugadores recibieron su comprobante pero no entran en el mensaje"} porque no tienen
+      alias cargado: <b>${esc(sinAlias.map(e => e.nombre).join(", "))}</b>. Cargáselo en Entidades → Cobros
+      y agregá la línea a mano.</p>` : "";
+
+  // El bloque de Mercado Pago sólo tiene sentido si hay al menos una línea que mandar.
+  const hayMensaje = l.enviados.length > sinAlias.length;
+  const bloqueMP = !hayMensaje ? "" : `
+    <div class="divider"></div>
+    <div class="sec-hdr"><span class="sec-title">Programar en Mercado Pago</span></div>
+    <p class="note" style="margin:0 0 8px">Pegá esto en el chat de Mercado Pago. La fecha tiene que ser futura — por eso arranca en mañana.</p>
+    <div class="field">
+      <label>Fecha de las transferencias</label>
+      <input class="inp" type="date" value="${pjLoteMP.fecha}" onchange="pjLoteMPSetFecha(this.value)">
+    </div>
+    <textarea class="inp" id="pj-mp-texto" readonly rows="${Math.min(14, l.enviados.length - sinAlias.length + 3)}"
+              style="font-family:var(--mono);font-size:12px;resize:vertical">${esc(pjLoteMensajeMP(l.enviados, fmtFechaDMY(pjLoteMP.fecha)))}</textarea>
+    <button class="btn-secondary" style="width:100%;margin-top:8px" onclick="pjLoteMPCopiar()">📋 Copiar mensaje</button>`;
+
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
-      <div class="modal-card" onclick="event.stopPropagation()">
+      <div class="modal-card" onclick="event.stopPropagation()" style="max-width:620px">
         <div class="modal-handle"></div>
         <div style="text-align:center;font-size:12px;font-weight:600;color:var(--green);letter-spacing:.05em;margin-bottom:2px">
           ✓ ENVÍO TERMINADO
         </div>
         <div class="modal-monto-big">${l.enviados.length} de ${l.items.length}</div>
         ${pendientes ? `<p class="note" style="margin-top:10px">Quedaron sin enviar:</p>${pendientes}` : ""}
+        ${avisoAlias}
+        ${bloqueMP}
         <p class="note" style="margin-top:10px">Los pagos <b>no</b> se registraron: liquidá a cada uno desde la tabla cuando tengas el extracto.</p>
         <div class="modal-footer">
           <button class="btn-main" style="flex:1" onclick="closeModal()">Listo</button>
@@ -11877,7 +11979,6 @@ function pjLoteResumen() {
       </div>
     </div>`;
 }
-
 /** Barra de la cola dentro del modal del comprobante. Vacía cuando no hay lote en curso. */
 function pjLoteBarraHTML() {
   if (!pjLote || pjLote.i >= pjLote.items.length) return "";

@@ -435,6 +435,8 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 .pj-premio-lbl.pj-premio-pagado { opacity:.55; cursor:default; }
 .pj-filtro-lbl { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text2); cursor:pointer; }
 .pj-jug-lbl { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+.pj-lote-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
+  background:var(--bg3); border-radius:var(--rs); padding:8px 10px; margin-bottom:8px; font-size:12px; color:var(--text2); }
 /* Fila que el usuario dejó fuera del total. Sólo se atenúa: el Total sigue visible porque el
    dato no molesta, lo que hay que comunicar es que no está sumando. */
 .pj-table tr.pj-jug-off td { opacity:.42; }
@@ -10341,7 +10343,10 @@ function renderTransferencias() {
       </table>
     </div>
     <button class="btn-export" style="margin-bottom:10px" onclick="exportarTransferencias()">📋 Exportar lista de transferencias</button>
-    <p class="note">El flujo es: exportás el listado, hacés las transferencias en el homebanking, y después liquidás de a un jugador con el extracto a la vista.</p>
+    <button class="btn-export" style="margin-bottom:10px" onclick="pjLoteIniciar()">📤 ${pjLote && pjLote.i < pjLote.items.length
+      ? `Retomar envío de comprobantes (${pjLote.i + 1} de ${pjLote.items.length})`
+      : `Enviar comprobantes de los tildados`}</button>
+    <p class="note">El flujo es: exportás el listado, hacés las transferencias en el homebanking, y después liquidás de a un jugador con el extracto a la vista. El envío de comprobantes no registra nada — es sólo el aviso al jugador.</p>
   `;
 }
 
@@ -11718,17 +11723,17 @@ function abrirComprobantePrevio(jugadorId, opciones) {
   // grabado — más fiel que rearmarlo de las filas.
   if (!filas.length) {
     const movId = pjUltimoMovimientoDe(jugadorId);
-    if (!movId) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return; }
+    if (!movId) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return false; }
     const pagadas = pagosJugadores.filter(p => p.movimientoId === movId);
-    if (movimientos.some(m => m.id === movId)) { abrirComprobanteModal(movId); return; }
+    if (movimientos.some(m => m.id === movId)) { abrirComprobanteModal(movId); return true; }
     // El movimiento no está cargado (offline, o todavía no se refrescó la lista): se arma
     // con las filas que quedaron apuntando a él, que son las mismas que lo componen.
     filas.push(...pagadas);
-    if (!filas.length) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return; }
+    if (!filas.length) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return false; }
   }
 
   const total = filas.reduce((s,p) => s + Number(p.montoFinal||0), 0);
-  if (total <= 0) { toast("El neto de " + (filas[0].jugadorNombre || "el jugador") + " no da un monto a pagar", "err"); return; }
+  if (total <= 0) { toast("El neto de " + (filas[0].jugadorNombre || "el jugador") + " no da un monto a pagar", "err"); return false; }
 
   const mes = (filas.find(p => p.mes) || {}).mes || "";
   // Si ya se pagó, la fecha del comprobante es la de la transferencia, no la de hoy.
@@ -11752,6 +11757,141 @@ function abrirComprobantePrevio(jugadorId, opciones) {
   };
   renderComprobanteModal();
   escudoBN().then(() => compRefreshDoc());
+  return true;
+}
+
+// ══════════════════════════════════════════════════════════════
+// ENVÍO DE COMPROBANTES EN LOTE (desde Transferencias)
+//
+// Recorre los jugadores tildados emitiendo el comprobante de cada uno y abriendo su chat de
+// WhatsApp. NO liquida nada: la liquidación sigue siendo de a uno, a mano y con el extracto a la
+// vista, que es lo que evita registrar pagos que todavía no se hicieron. Esta cola sólo ahorra el
+// ir y venir de buscar a cada jugador en la tabla.
+//
+// El paso de WhatsApp no se puede automatizar más que esto: wa.me no permite adjuntar imágenes,
+// así que la imagen va al portapapeles y el usuario la pega en el chat (ver compEnviarWhatsApp).
+//
+// Ante un problema la cola FRENA y espera —no saltea sola— porque saltear en silencio a alguien
+// deja un jugador sin comprobante y nadie se entera hasta que reclama.
+// ══════════════════════════════════════════════════════════════
+let pjLote = null; // { items:[{jugadorId,nombre}], i:0, enviados:[], salteados:[{nombre,motivo}] }
+
+// Por qué este jugador no puede recibir el comprobante ahora ("" = puede). Se chequea ANTES de
+// abrir el modal: frenar con el comprobante ya en pantalla confunde sobre qué se mandó y qué no.
+function pjLoteMotivoBloqueo(jugadorId) {
+  if (!configJugadores.some(c => c.idJugador === jugadorId)) return "no tiene cobro configurado";
+  const cel = waCelularDeJugador(jugadorId);
+  if (!cel) return "no tiene celular cargado (Entidades → Cobros)";
+  if (!waCelularValido(cel)) return "el celular cargado (" + cel + ") no es un número válido";
+  return "";
+}
+
+// Avanza la cola registrando qué pasó con el jugador actual. Separada del DOM para poder
+// verificar la contabilidad de la cola sin navegador.
+function pjLoteAvanzar(lote, resultado, motivo) {
+  if (!lote || lote.i >= lote.items.length) return lote;
+  const it = lote.items[lote.i];
+  if (resultado === "enviado") lote.enviados.push(it.nombre);
+  else lote.salteados.push({ nombre: it.nombre, motivo: motivo || "salteado" });
+  lote.i++;
+  return lote;
+}
+
+/** Arranca —o retoma— la cola con los jugadores tildados de la tabla. */
+function pjLoteIniciar() {
+  if (pjLote && pjLote.i < pjLote.items.length) { pjLoteAbrirActual(); return; }
+  // Mismo criterio que el CSV: tildados y con algo para cobrar.
+  const filas = [...document.querySelectorAll("#pj-transf-table tbody tr[data-jug]")]
+    .filter(tr => tr.dataset.incluido !== "0" && Number(tr.dataset.total || 0) !== 0);
+  if (!filas.length) { toast("No hay jugadores tildados con monto para enviar", "err"); return; }
+  pjLote = {
+    items: filas.map(tr => {
+      const cfg = configJugadores.find(c => c.idJugador === tr.dataset.jug);
+      return { jugadorId: tr.dataset.jug, nombre: cfg ? cfg.nombre : tr.dataset.jug };
+    }),
+    i: 0, enviados: [], salteados: []
+  };
+  pjLoteAbrirActual();
+}
+
+/** Abre el comprobante del jugador en curso, o frena la cola si no se puede. */
+function pjLoteAbrirActual() {
+  if (!pjLote) return;
+  if (pjLote.i >= pjLote.items.length) { pjLoteResumen(); return; }
+  const it = pjLote.items[pjLote.i];
+  const motivo = pjLoteMotivoBloqueo(it.jugadorId);
+  if (motivo) { pjLoteFrenar(motivo); return; }
+  // abrirComprobantePrevio avisa con un toast y devuelve false cuando no hay nada que emitir.
+  if (!abrirComprobantePrevio(it.jugadorId, {})) { pjLoteFrenar("no hay nada para poner en el comprobante"); }
+}
+
+/** La cola se detiene en el jugador actual y espera una decisión. */
+function pjLoteFrenar(motivo) {
+  const it = pjLote.items[pjLote.i];
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Envío frenado</div>
+        <p class="note" style="border-left:3px solid var(--warn);padding-left:8px">
+          <b>${esc(it.nombre)}</b> ${esc(motivo)}.
+        </p>
+        <p class="note">Jugador ${pjLote.i + 1} de ${pjLote.items.length}. Corregilo y volvé a empezar, o salteálo y seguí con el resto.</p>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="pjLoteCancelar()">Cancelar envío</button>
+          <button class="btn-main" style="flex:1" onclick="pjLoteSaltear('${esc(escJs(motivo))}')">Saltear y seguir</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function pjLoteSiguiente() { pjLoteAvanzar(pjLote, "enviado"); pjLoteAbrirActual(); }
+function pjLoteSaltear(motivo) { pjLoteAvanzar(pjLote, "salteado", motivo); pjLoteAbrirActual(); }
+
+function pjLoteCancelar() {
+  const hechos = pjLote ? pjLote.enviados.length : 0;
+  pjLote = null;
+  closeModal();
+  toast(hechos ? "Envío cancelado — " + hechos + " ya salieron" : "Envío cancelado", "ok");
+}
+
+function pjLoteResumen() {
+  const l = pjLote;
+  pjLote = null;
+  const pendientes = (l.salteados || []).map(s => `
+    <div class="modal-detail-row"><span class="modal-detail-lbl">${esc(s.nombre)}</span></div>
+    <div class="pj-acumulado" style="margin:-6px 0 6px">${esc(s.motivo)}</div>`).join("");
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div style="text-align:center;font-size:12px;font-weight:600;color:var(--green);letter-spacing:.05em;margin-bottom:2px">
+          ✓ ENVÍO TERMINADO
+        </div>
+        <div class="modal-monto-big">${l.enviados.length} de ${l.items.length}</div>
+        ${pendientes ? `<p class="note" style="margin-top:10px">Quedaron sin enviar:</p>${pendientes}` : ""}
+        <p class="note" style="margin-top:10px">Los pagos <b>no</b> se registraron: liquidá a cada uno desde la tabla cuando tengas el extracto.</p>
+        <div class="modal-footer">
+          <button class="btn-main" style="flex:1" onclick="closeModal()">Listo</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/** Barra de la cola dentro del modal del comprobante. Vacía cuando no hay lote en curso. */
+function pjLoteBarraHTML() {
+  if (!pjLote || pjLote.i >= pjLote.items.length) return "";
+  const it = pjLote.items[pjLote.i];
+  const ultimo = pjLote.i === pjLote.items.length - 1;
+  return `
+    <div class="pj-lote-bar">
+      <span><b>${pjLote.i + 1} de ${pjLote.items.length}</b> · ${esc(it.nombre)}</span>
+      <span style="display:flex;gap:6px">
+        <button class="btn-sm" onclick="pjLoteCancelar()">Cancelar</button>
+        <button class="btn-sm" onclick="pjLoteSaltear('salteado a mano')">Saltear</button>
+        <button class="btn-sm accent" onclick="pjLoteSiguiente()">${ultimo ? "Terminar" : "Siguiente →"}</button>
+      </span>
+    </div>`;
 }
 
 // ── Modal: campos editables arriba, vista previa abajo ────────
@@ -11809,6 +11949,7 @@ function renderComprobanteModal() {
         </div>
 
         <p class="note" id="comp-status" style="text-align:center"></p>
+        ${pjLoteBarraHTML()}
         ${d.volverALiquidar ? `<button class="btn-secondary" style="width:100%;margin-bottom:8px"
             onclick="abrirLiquidacionModal('${d.volverALiquidar}')">← Volver a la liquidación</button>` : ""}
         <div class="modal-footer">

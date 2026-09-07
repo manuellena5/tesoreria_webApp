@@ -1624,6 +1624,60 @@ check("el texto no repite el monto ni el período",
       !/\$|total|liquidaci/i.test(app.compMensajeWhatsApp("Nico")),
       app.compMensajeWhatsApp("Nico"));
 
+// ══════════════════════════════════════════════════════════════
+seccion("43 · Envío de comprobantes en lote");
+
+app.configJugadores = [
+  { idJugador: "j1", nombre: "PEREZ",  celular: "3492 123456", frecuencia: "partido", premios: [] },
+  { idJugador: "j2", nombre: "GOMEZ",  celular: "123",         frecuencia: "partido", premios: [] },
+  { idJugador: "j3", nombre: "LOPEZ",  celular: "",            frecuencia: "partido", premios: [] }
+];
+
+// ── Quién puede recibir ──
+igual("con celular válido no hay bloqueo", app.pjLoteMotivoBloqueo("j1"), "");
+check("un celular inválido frena",  app.pjLoteMotivoBloqueo("j2").includes("no es un número válido"), app.pjLoteMotivoBloqueo("j2"));
+check("sin celular también frena",  app.pjLoteMotivoBloqueo("j3").includes("no tiene celular cargado"), app.pjLoteMotivoBloqueo("j3"));
+check("un jugador sin ficha de cobro frena", app.pjLoteMotivoBloqueo("nadie").includes("no tiene cobro configurado"),
+      app.pjLoteMotivoBloqueo("nadie"));
+
+// ── La contabilidad de la cola ──
+const lote = { items: [{jugadorId:"j1",nombre:"PEREZ"},{jugadorId:"j2",nombre:"GOMEZ"},{jugadorId:"j3",nombre:"LOPEZ"}],
+               i: 0, enviados: [], salteados: [] };
+app.pjLoteAvanzar(lote, "enviado");
+igual("el enviado queda registrado", lote.enviados, ["PEREZ"]);
+igual("y la cola avanza", lote.i, 1);
+
+app.pjLoteAvanzar(lote, "salteado", "no tiene celular cargado");
+igual("el salteado guarda el motivo", lote.salteados, [{ nombre: "GOMEZ", motivo: "no tiene celular cargado" }]);
+igual("y no cuenta como enviado", lote.enviados, ["PEREZ"]);
+
+app.pjLoteAvanzar(lote, "enviado");
+igual("al terminar, enviados + salteados = total",
+      lote.enviados.length + lote.salteados.length, lote.items.length);
+igual("la cola quedó al final", lote.i, 3);
+
+// Pasado el final no sigue acumulando: sin esto, un doble clic en "Siguiente" duplicaba un nombre.
+app.pjLoteAvanzar(lote, "enviado");
+igual("avanzar de más no agrega nada", lote.enviados.length + lote.salteados.length, 3);
+igual("ni mueve el índice", lote.i, 3);
+
+// Un motivo vacío no deja el resumen mudo.
+const lote2 = { items: [{jugadorId:"j1",nombre:"PEREZ"}], i: 0, enviados: [], salteados: [] };
+app.pjLoteAvanzar(lote2, "salteado");
+igual("saltear sin motivo deja uno por defecto", lote2.salteados[0].motivo, "salteado");
+
+// La barra sólo aparece con una cola en curso.
+app.pjLote = null;
+igual("sin lote no hay barra", app.pjLoteBarraHTML(), "");
+app.pjLote = { items: [{jugadorId:"j1",nombre:"PEREZ"},{jugadorId:"j2",nombre:"GOMEZ"}], i: 0, enviados: [], salteados: [] };
+check("con lote muestra la posición", app.pjLoteBarraHTML().includes("1 de 2"), app.pjLoteBarraHTML());
+check("y ofrece seguir", app.pjLoteBarraHTML().includes("Siguiente"), "");
+app.pjLote.i = 1;
+check("en el último dice Terminar", app.pjLoteBarraHTML().includes("Terminar"), app.pjLoteBarraHTML());
+app.pjLote.i = 2;
+igual("terminada la cola la barra desaparece", app.pjLoteBarraHTML(), "");
+app.pjLote = null;
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

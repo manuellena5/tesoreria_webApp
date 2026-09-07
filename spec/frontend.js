@@ -709,14 +709,12 @@ igual("un recibo de adherente no muestra el botón", app.compBotonWhatsAppHTML()
 app.compData = { jugadorId: "sin-config", receptor: "X", items: [] };
 igual("un jugador sin config de cobro tampoco", app.compBotonWhatsAppHTML(), "");
 
-igual("el mensaje sale con los datos interpolados",
-      app.compMensajeWhatsApp("PEREZ", "Junio 2026", "$80.000"),
-      "Hola PEREZ, te paso el comprobante de la liquidación de Junio 2026.\n" +
-      "Total transferido: $80.000.\n" +
-      "Cualquier cosa avisame.");
-check("sin período no queda la preposición colgada",
-      !app.compMensajeWhatsApp("PEREZ", "", "$80.000").includes("liquidación de ."),
-      app.compMensajeWhatsApp("PEREZ", "", "$80.000"));
+// El armado del texto y la resolución del apodo se verifican en la sección 42; acá sólo que el
+// botón y el mensaje se apoyan en el mismo jugador.
+app.configJugadores[0].apodo = "Colo";
+igual("el mensaje del botón saluda por el apodo de la ficha",
+      app.compMensajeWhatsApp(app.compSaludoJugador("j1", "PEREZ")),
+      "Hola Colo, esto te va a estar llegando hoy. Cualquier cosa avisame. Abrazo.");
 
 // ══════════════════════════════════════════════════════════════
 // El pago en lote se reemplazó por una liquidación jugador por jugador. La regla de que un premio
@@ -1601,6 +1599,30 @@ app.pjPartidosSel = ["p1"];
 igual("liquidar un jugador sigue trayendo sólo lo suyo",
       app.pjIdsDeSeleccion([{ jugadorId: "j1", incluido: true, premiosIds: [] }]), ["f-part"]);
 app.pjPartidosSel = [];
+
+// ══════════════════════════════════════════════════════════════
+seccion("42 · Apodo y mensaje de WhatsApp del comprobante");
+
+app.configJugadores = [
+  { idJugador: "j1", nombre: "LENCINA Nicolás", apodo: "Nico",  frecuencia: "partido", premios: [] },
+  { idJugador: "j2", nombre: "GOMEZ Pablo",     apodo: "",      frecuencia: "mensual", premios: [] },
+  { idJugador: "j3", nombre: "PEREZ Juan",      apodo: "   ",   frecuencia: "partido", premios: [] }
+];
+
+igual("con apodo cargado, saluda por el apodo",  app.compSaludoJugador("j1", "LENCINA Nicolás"), "Nico");
+igual("sin apodo, cae al nombre completo",       app.compSaludoJugador("j2", "GOMEZ Pablo"),     "GOMEZ Pablo");
+igual("un apodo de puros espacios no cuenta",    app.compSaludoJugador("j3", "PEREZ Juan"),      "PEREZ Juan");
+igual("un jugador sin ficha usa el nombre que traiga el comprobante",
+      app.compSaludoJugador("no-existe", "Alguien"), "Alguien");
+
+igual("el mensaje es exactamente el pedido",
+      app.compMensajeWhatsApp("Nico"),
+      "Hola Nico, esto te va a estar llegando hoy. Cualquier cosa avisame. Abrazo.");
+// El monto vive en la imagen del comprobante, no en el texto: si estuviera en los dos lados,
+// tarde o temprano uno de los dos quedaría desactualizado.
+check("el texto no repite el monto ni el período",
+      !/\$|total|liquidaci/i.test(app.compMensajeWhatsApp("Nico")),
+      app.compMensajeWhatsApp("Nico"));
 
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);

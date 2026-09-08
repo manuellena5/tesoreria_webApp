@@ -435,6 +435,8 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 .pj-premio-lbl.pj-premio-pagado { opacity:.55; cursor:default; }
 .pj-filtro-lbl { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text2); cursor:pointer; }
 .pj-jug-lbl { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+.pj-alias-wrap { display:inline-flex; align-items:center; gap:5px; }
+.pj-alias-copy { padding:2px 6px; font-size:12px; line-height:1.2; }
 .pj-lote-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
   background:var(--bg3); border-radius:var(--rs); padding:8px 10px; margin-bottom:8px; font-size:12px; color:var(--text2); }
 /* Fila que el usuario dejó fuera del total. Sólo se atenúa: el Total sigue visible porque el
@@ -10164,6 +10166,14 @@ function pjTransfBase(jugadorId) {
 // ¿Este jugador cobra por mes? Los otros dos regímenes son "partido" y "quincenal"; el filtro de
 // Transferencias apunta sólo al mensual, que es el que descoloca el total cuando lo que se está
 // armando es la transferencia de una fecha.
+// Celda de Alias/CBU: el texto más un botón para copiarlo. Sin alias cargado no hay botón —
+// ofrecer copiar un "—" es peor que no ofrecer nada.
+function pjAliasCeldaHTML(jugadorId, alias) {
+  if (!pjAliasParaMP(alias)) return `<span style="color:var(--text3)">—</span>`;
+  return `<span class="pj-alias-wrap"><span>${esc(alias)}</span>` +
+         `<button class="btn-sm pj-alias-copy" title="Copiar alias" onclick="pjCopiarAlias('${escJs(jugadorId)}')">📋</button></span>`;
+}
+
 function pjEsMensual(jugadorId) {
   const cfg = configJugadores.find(c => c.idJugador === jugadorId);
   return !!cfg && cfg.frecuencia === "mensual";
@@ -10295,7 +10305,7 @@ function renderTransferencias() {
       ${cols}
       <td class="pj-premios-cell">${premiosCell}</td>
       <td class="mono pj-total-cell">${fmt(0)}</td>
-      <td>${esc(info.alias || "—")}</td>
+      <td>${pjAliasCeldaHTML(jid, info.alias)}</td>
       <td style="text-align:center;white-space:nowrap">${accion}</td>
     </tr>`;
   }).join("");
@@ -11877,6 +11887,38 @@ function pjLoteCancelar() {
 function pjAliasParaMP(alias) {
   const a = String(alias || "").trim();
   return (!a || a === "—" || a === "-") ? "" : a;
+}
+
+/** Copia un texto corto al portapapeles. El fallback con execCommand cubre los contextos donde
+ *  navigator.clipboard no existe o está bloqueado (http sin TLS, permisos denegados). */
+function copiarAlPortapapeles(texto, msgOk) {
+  const fallback = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = texto;
+      // Fuera de la vista pero enfocable: un display:none no se puede seleccionar y execCommand falla.
+      ta.style.position = "fixed"; ta.style.top = "-1000px"; ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      toast(ok ? msgOk : "No se pudo copiar", ok ? "ok" : "err");
+    } catch (e) { toast("No se pudo copiar", "err"); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(texto).then(() => toast(msgOk, "ok"), fallback);
+  } else {
+    fallback();
+  }
+}
+
+/** Copia el alias del jugador. Se busca por id en vez de recibir el texto por parámetro para no
+ *  tener que escapar un alias con comillas dentro de un onclick. */
+function pjCopiarAlias(jugadorId) {
+  const cfg = configJugadores.find(c => c.idJugador === jugadorId);
+  const a = pjAliasParaMP(cfg && cfg.alias);
+  if (!a) { toast("Este jugador no tiene alias cargado", "err"); return; }
+  copiarAlPortapapeles(a, "Alias copiado ✓");
 }
 
 function manana() {

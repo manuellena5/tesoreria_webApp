@@ -1568,6 +1568,19 @@ app.pjPartidosSel = ["p1"];
 igual("tildando la fecha, el partido suma", app.pjTransfBase("j1"), 50000);
 app.pjPartidosSel = [];
 
+// ── Celda del alias con botón de copiar ──
+igual("sin alias no hay botón, sólo el guión",
+      app.pjAliasCeldaHTML("j1", ""), '<span style="color:var(--text3)">—</span>');
+igual("un alias en blanco cuenta como sin alias",
+      app.pjAliasCeldaHTML("j1", "   "), '<span style="color:var(--text3)">—</span>');
+igual("el guión que pone la tabla tampoco genera botón",
+      app.pjAliasCeldaHTML("j1", "—"), '<span style="color:var(--text3)">—</span>');
+const celdaAlias = app.pjAliasCeldaHTML("j1", "perez.mp");
+check("con alias se muestra el texto", celdaAlias.includes("perez.mp"), celdaAlias);
+check("y aparece el botón de copiar", celdaAlias.includes("pjCopiarAlias('j1')"), celdaAlias);
+// El onclick recibe el ID, no el alias: así un alias con comillas no puede romper el atributo.
+check("el onclick no interpola el alias", !celdaAlias.includes("pjCopiarAlias('perez.mp')"), celdaAlias);
+
 // ── Quién cobra por mes ──
 check("GOMEZ cobra por mes",        app.pjEsMensual("j2"));
 check("PEREZ no (cobra por partido)", !app.pjEsMensual("j1"));

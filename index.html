@@ -544,6 +544,18 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
   padding:6px 12px; font-family:var(--font); font-size:12px; font-weight:600; cursor:pointer;
 }
 
+/* ── Recordatorio de sueldo mensual ── */
+.record-banner {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  background:var(--accent-bg); border:1px solid rgba(96,165,250,.35); color:var(--accent);
+  font-size:12px; font-weight:500; padding:9px 14px; border-radius:var(--rs); margin:0 18px 8px;
+}
+.record-banner.vencido { background:var(--warn-bg); border-color:rgba(251,191,36,.4); color:var(--warn); }
+.record-banner button {
+  background:none; border:1px solid currentColor; color:inherit; border-radius:6px;
+  padding:4px 9px; font-family:var(--font); font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap;
+}
+
 /* ── Offline / sync banner ── */
 .offline-banner {
   display:flex; align-items:center; justify-content:space-between; gap:8px;
@@ -820,6 +832,7 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
   </div>
   <div class="hdr-sub" id="hdr-sub">Gestión de tesorería</div>
   <div id="offline-banner-root"></div>
+  <div id="recordatorios-root"></div>
   <div class="content" id="content"></div>
 
   <nav class="bnav">
@@ -1631,6 +1644,121 @@ async function syncPendingMovs() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// RECORDATORIOS DE SUELDO MENSUAL
+//
+// Los jugadores con frecuencia "mensual" y día de cobro cargado generan un aviso que aparece en
+// TODAS las pantallas —vive fuera de #content, así que no se lo lleva el cambio de tab— desde
+// RECORD_DIAS_AVISO días antes y hasta que el mes quede pagado.
+//
+// Son DOS avisos distintos, y la diferencia importa: la app no crea sola la fila del sueldo del
+// mes (se carga a mano desde Jugad. $ → Mensual), así que "no cargaste el monto" y "lo cargaste
+// pero no lo pagaste" son dos cosas que se olvidan por separado.
+//
+// Se puede ocultar, pero sólo por hoy: la clave de localStorage lleva la fecha, así que mañana
+// vuelve. Un "no mostrar más" sobre un pago pendiente es una forma elegante de olvidarse.
+//
+// Alcance: sólo el mes en curso. Un sueldo de un mes anterior que quedó sin pagar deja de avisar
+// cuando cambia el mes — mirarlo hacia atrás haría que cada mes sin cargar de cada jugador se
+// encienda para siempre, que es exactamente el ruido que arruina un recordatorio.
+// ══════════════════════════════════════════════════════════════
+const RECORD_DIAS_AVISO = 3;
+const RECORD_OCULTOS_KEY = "recordatorios_ocultos";
+
+/** Día real de cobro en un mes dado: el 31 en febrero es el 28 (o 29). */
+function recordFechaCobro(mesISO, dia) {
+  const [y, m] = mesISO.split("-").map(Number);
+  const ultimoDia = new Date(y, m, 0).getDate();   // día 0 del mes siguiente = último de este
+  return mesISO + "-" + pad2(Math.min(Math.max(1, dia), ultimoDia));
+}
+
+/** Días entre dos fechas ISO. Positivo = `hasta` está en el futuro. */
+function recordDiasEntre(desdeISO, hastaISO) {
+  return Math.round((Date.parse(hastaISO + "T00:00:00Z") - Date.parse(desdeISO + "T00:00:00Z")) / 86400000);
+}
+
+/** Ids ocultados HOY. Si la marca guardada es de otro día se descarta entera (se autolimpia). */
+function recordOcultosHoy(hoyISO) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECORD_OCULTOS_KEY) || "null");
+    return raw && raw.fecha === hoyISO ? (raw.ids || []) : [];
+  } catch (e) { return []; }
+}
+
+function recordOcultar(jugadorId, hoyISO) {
+  const hoy = hoyISO || today();
+  const ids = recordOcultosHoy(hoy);
+  if (!ids.includes(jugadorId)) ids.push(jugadorId);
+  try { localStorage.setItem(RECORD_OCULTOS_KEY, JSON.stringify({ fecha: hoy, ids })); } catch (e) {}
+  renderRecordatorios();
+}
+
+/**
+ * Recordatorios vigentes. Devuelve [] cuando no hay nada que avisar.
+ * estado: "sin-cargar" (no hay filas del mes) | "pendiente" (hay filas sin pagar).
+ * dias: días que faltan; negativo = ya venció y sigue sin pagarse.
+ */
+function recordatoriosSueldo(hoyISO) {
+  const hoy = hoyISO || today();
+  const mes = hoy.slice(0, 7);
+  const out = [];
+  for (const cfg of configJugadores) {
+    if (cfg.frecuencia !== "mensual") continue;
+    const dia = Number(cfg.diaPago || 0);
+    if (!dia) continue;
+
+    const filas = pjFilasMes(cfg.idJugador, mes);
+    // Cargado y todo pagado: no hay nada que recordar.
+    if (filas.length && filas.every(p => p.estado === "pagado")) continue;
+
+    const fecha = recordFechaCobro(mes, dia);
+    const dias  = recordDiasEntre(hoy, fecha);
+    if (dias > RECORD_DIAS_AVISO) continue;   // todavía falta
+
+    out.push({
+      jugadorId: cfg.idJugador,
+      nombre:    cfg.nombre,
+      fecha, dias,
+      estado:    filas.length ? "pendiente" : "sin-cargar",
+      monto:     filas.filter(p => p.estado === "pendiente").reduce((s,p) => s + Number(p.montoFinal||0), 0)
+    });
+  }
+  return out.sort((a,b) => a.dias - b.dias || a.nombre.localeCompare(b.nombre));
+}
+
+/** "en 3 días" / "mañana" / "hoy" / "hace 2 días". */
+function recordCuandoTxt(dias) {
+  if (dias === 0) return "hoy";
+  if (dias === 1) return "mañana";
+  if (dias > 1)   return "en " + dias + " días";
+  if (dias === -1) return "venció ayer";
+  return "venció hace " + Math.abs(dias) + " días";
+}
+
+function recordTextoAviso(r) {
+  const cuando = recordCuandoTxt(r.dias);
+  return r.estado === "sin-cargar"
+    ? "Falta cargar el sueldo de " + r.nombre + " — " + cuando
+    : "Pago sueldo a " + r.nombre + " — " + cuando + " · " + fmt(r.monto);
+}
+
+function renderRecordatorios() {
+  const root = document.getElementById("recordatorios-root");
+  if (!root) return;
+  const hoy = today();
+  const ocultos = recordOcultosHoy(hoy);
+  const vigentes = recordatoriosSueldo(hoy).filter(r => !ocultos.includes(r.jugadorId));
+  if (!vigentes.length) { root.innerHTML = ""; return; }
+  root.innerHTML = vigentes.map(r => `
+    <div class="record-banner${r.dias < 0 ? " vencido" : ""}">
+      <span>${r.dias < 0 ? "🔴" : "🔔"} ${esc(recordTextoAviso(r))}</span>
+      <span style="display:flex;gap:6px;white-space:nowrap">
+        <button onclick="goTab('pagosjug'); setPagosJugTab('mensual')">Ver</button>
+        <button onclick="recordOcultar('${escJs(r.jugadorId)}')" title="Se oculta por hoy — mañana vuelve a aparecer">Ocultar</button>
+      </span>
+    </div>`).join("");
+}
+
 function renderOfflineBanner() {
   const root = document.getElementById("offline-banner-root");
   if (!root) return;
@@ -1683,7 +1811,7 @@ async function initApp() {
     goTab("nuevo");
     mostrarRefrescando(true);
     loadAllData()
-      .then(() => { rerenderTabActual(); renderOfflineBanner(); })
+      .then(() => { rerenderTabActual(); renderOfflineBanner(); renderRecordatorios(); })
       .finally(() => {
         mostrarRefrescando(false);
         if (navigator.onLine) syncPendingMovs().then(renderOfflineBanner);
@@ -1924,6 +2052,7 @@ function updateBadge() {
 
 function goTab(tab) {
   currentTab = tab;
+  renderRecordatorios();
   document.getElementById("app").classList.toggle("tab-resumen", tab === "resumen");
   document.querySelectorAll(".bnav-btn").forEach(b => b.classList.remove("active"));
   const btn = document.getElementById("nav-" + tab);
@@ -7982,6 +8111,12 @@ function openConfigJugadorModal(idJugador) {
             <input class="inp" id="cfgjug-celular" type="text" placeholder="3492 123456" value="${esc(c?c.celular:"")}">
             <p class="note" style="margin:4px 0 0">Escribilo como lo tengas anotado. Se usa para mandarle el comprobante por WhatsApp.</p>
           </div>
+          <div class="field" id="cfgjug-diapago-box">
+            <label>Día de cobro</label>
+            <input class="inp" id="cfgjug-diapago" type="number" min="1" max="31" step="1"
+                   placeholder="15" value="${c && c.diaPago ? c.diaPago : ""}">
+            <p class="note" style="margin:4px 0 0">Día del mes en que se le paga. Sirve para que la app te recuerde el pago 3 días antes. Vacío = sin recordatorio.</p>
+          </div>
           <div class="field">
             <label>Apodo</label>
             <input class="inp" id="cfgjug-apodo" type="text" placeholder="Cómo lo llamás" value="${esc(c?(c.apodo||""):"")}">
@@ -8015,6 +8150,10 @@ function toggleCfgJugFrecuencia() {
   const box   = document.getElementById("cfgjug-montos-supmin-suplente");
   const label = document.getElementById("cfgjug-titular-label");
   if (box) box.style.display = frec === "partido" ? "" : "none";
+  // El día de cobro sólo tiene sentido en los mensuales: los de partido cobran cuando hay fecha
+  // y los quincenales no tienen un día fijo.
+  const diaBox = document.getElementById("cfgjug-diapago-box");
+  if (diaBox) diaBox.style.display = frec === "mensual" ? "" : "none";
   if (label) label.textContent = frec === "quincenal" ? "Monto por quincena"
     : frec === "mensual" ? "Monto mensual" : "Monto Titular";
 }
@@ -8041,8 +8180,12 @@ async function saveConfigJugadorForm(idJugador) {
   const celular              = (document.getElementById("cfgjug-celular")?.value || "").trim();
   const codRubroSueldo       = document.getElementById("cfgjug-rubro-sueldo")?.value || CFGJ_RUBRO_SUELDO_DEFAULT;
   const apodo                = (document.getElementById("cfgjug-apodo")?.value || "").trim();
+  // Se guarda sólo si es mensual: dejar un día colgado en alguien que pasó a cobrar por partido
+  // haría aparecer un recordatorio que nadie entiende.
+  const diaPagoRaw           = parseInt(document.getElementById("cfgjug-diapago")?.value || "0", 10) || 0;
+  const diaPago              = frecuencia === "mensual" ? Math.min(31, Math.max(0, diaPagoRaw)) : 0;
   const premiosCfg           = leerPremiosCfg();
-  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias, celular, codRubroSueldo, apodo, premios: premiosCfg };
+  const config = { idJugador, nombre, montoTitular, montoSuplenteConMin, montoSuplente, frecuencia, alias, celular, codRubroSueldo, apodo, diaPago, premios: premiosCfg };
   setBtnState(btnId, "saving");
   try {
     const r = await Storage.saveConfigJugador(config);

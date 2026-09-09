@@ -1735,6 +1735,78 @@ igual("un monto con centavos se redondea al peso",
 check("la fecha por defecto es posterior a hoy", app.manana() > app.today(),
       app.manana() + " vs " + app.today());
 
+// ══════════════════════════════════════════════════════════════
+seccion("45 · Recordatorio de sueldo mensual");
+
+// ── El día real de cobro: el 31 no existe en todos los meses ──
+igual("un día normal queda igual",        app.recordFechaCobro("2026-09", 15), "2026-09-15");
+igual("el 31 en septiembre (30 días) cae al 30", app.recordFechaCobro("2026-09", 31), "2026-09-30");
+igual("el 31 en febrero cae al 28",       app.recordFechaCobro("2026-02", 31), "2026-02-28");
+igual("y en un febrero bisiesto al 29",   app.recordFechaCobro("2028-02", 31), "2028-02-29");
+igual("un día menor a 1 se lleva al 1",   app.recordFechaCobro("2026-09", 0),  "2026-09-01");
+
+igual("los días se cuentan derecho",      app.recordDiasEntre("2026-09-09", "2026-09-15"), 6);
+igual("y en negativo cuando ya pasó",     app.recordDiasEntre("2026-09-20", "2026-09-15"), -5);
+// Cruce de mes: sin esto, un cobro del 1 visto desde el 29 daba cualquier cosa.
+igual("cruzando el mes también",          app.recordDiasEntre("2026-08-30", "2026-09-01"), 2);
+
+// ── Cuándo aparece ──
+app.configJugadores = [
+  { idJugador: "m1", nombre: "PEREZ", frecuencia: "mensual", diaPago: 15, premios: [] },
+  { idJugador: "m2", nombre: "GOMEZ", frecuencia: "mensual", diaPago: 0,  premios: [] },  // sin día
+  { idJugador: "p1", nombre: "LOPEZ", frecuencia: "partido", diaPago: 15, premios: [] }   // no es mensual
+];
+app.pagosJugadores = [];
+
+const recNombres = h => app.recordatoriosSueldo(h).map(r => r.nombre);
+igual("faltando 10 días todavía no avisa", recNombres("2026-09-05"), []);
+igual("faltando 3 días ya avisa",          recNombres("2026-09-12"), ["PEREZ"]);
+igual("el día del pago sigue avisando",    recNombres("2026-09-15"), ["PEREZ"]);
+igual("y vencido también",                 recNombres("2026-09-20"), ["PEREZ"]);
+check("sin día de cobro nunca avisa",      !recNombres("2026-09-12").includes("GOMEZ"));
+check("un jugador por partido tampoco",    !recNombres("2026-09-12").includes("LOPEZ"));
+
+// ── Los dos estados ──
+igual("sin filas del mes, el aviso es que falta CARGAR el monto",
+      app.recordatoriosSueldo("2026-09-12")[0].estado, "sin-cargar");
+
+app.pagosJugadores = [
+  { id: "f1", jugadorId: "m1", jugadorNombre: "PEREZ", mes: "2026-09", tipo: "periodico",
+    montoFinal: 180000, estado: "pendiente", partidosIncluidos: [], etiqueta: "", partidoId: "" }
+];
+const conFila = app.recordatoriosSueldo("2026-09-12")[0];
+igual("cargado y sin pagar, el aviso es de PAGO", conFila.estado, "pendiente");
+igual("y lleva el monto pendiente", conFila.monto, 180000);
+
+app.pagosJugadores[0].estado = "pagado";
+igual("pagado el mes, deja de avisar", recNombres("2026-09-12"), []);
+igual("y tampoco avisa aunque esté vencido", recNombres("2026-09-25"), []);
+
+// ── Los textos ──
+igual("hoy",        app.recordCuandoTxt(0),  "hoy");
+igual("mañana",     app.recordCuandoTxt(1),  "mañana");
+igual("en N días",  app.recordCuandoTxt(3),  "en 3 días");
+igual("ayer",       app.recordCuandoTxt(-1), "venció ayer");
+igual("hace N días",app.recordCuandoTxt(-4), "venció hace 4 días");
+
+app.pagosJugadores[0].estado = "pendiente";
+check("el texto de pago nombra al jugador y el monto",
+      app.recordTextoAviso(app.recordatoriosSueldo("2026-09-12")[0]).includes("PEREZ"), "");
+app.pagosJugadores = [];
+check("el texto de 'falta cargar' dice justamente eso",
+      app.recordTextoAviso(app.recordatoriosSueldo("2026-09-12")[0]).startsWith("Falta cargar"),
+      app.recordTextoAviso(app.recordatoriosSueldo("2026-09-12")[0]));
+
+// ── Ocultar dura un día ──
+app.localStorage.removeItem(app.RECORD_OCULTOS_KEY);
+igual("sin nada oculto la lista viene vacía", app.recordOcultosHoy("2026-09-12"), []);
+app.recordOcultar("m1", "2026-09-12");
+igual("ocultado hoy queda registrado",  app.recordOcultosHoy("2026-09-12"), ["m1"]);
+igual("pero mañana vuelve a aparecer",  app.recordOcultosHoy("2026-09-13"), []);
+app.recordOcultar("m1", "2026-09-12");
+igual("ocultar dos veces no lo duplica", app.recordOcultosHoy("2026-09-12"), ["m1"]);
+app.localStorage.removeItem(app.RECORD_OCULTOS_KEY);
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

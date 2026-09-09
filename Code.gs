@@ -52,7 +52,10 @@ const CFGJ_SHEET = "Config Jugadores";
 // Vacío = "19", que es lo que hacía el código antes de existir la columna: no hay backfill.
 // Apodo (col 11): cómo se lo saluda en el mensaje de WhatsApp del comprobante. Vacío = se usa
 // el Nombre. Es dato de trato, no de identidad: nada lo busca ni lo compara.
-const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios","Celular","CodRubroSueldo","Apodo"];
+// DiaPago (col 12): día del mes en que se le paga. Sólo aplica a los mensuales — los de
+// partido cobran cuando hay fecha y los quincenales no tienen un día fijo. 0 = sin definir,
+// que es lo mismo que no querer recordatorio.
+const CFGJ_COLS  = ["IdJugador","Nombre","MontoTitular","MontoSuplenteConMin","MontoSuplente","Frecuencia","Alias","Activo","Premios","Celular","CodRubroSueldo","Apodo","DiaPago"];
 // Rubro por defecto del sueldo, y fallback cuando la ficha trae un código que no está en RUBROS_MAP.
 const CFGJ_RUBRO_SUELDO_DEFAULT = "19";
 // Categoría de la que salen las opciones de "Rubro del sueldo" en la ficha del jugador. Espejo de
@@ -1404,7 +1407,8 @@ function handleAction(data) {
           // recién al armar el link (index.html), no al guardar — ver saveConfigJugador.
           celular:             String(r[9]||""),
           codRubroSueldo:      String(r[10]||""),  // "" = 19 (SUELDO JUGADORES)
-          apodo:               String(r[11]||"")   // "" = saludarlo por su Nombre
+          apodo:               String(r[11]||""),  // "" = saludarlo por su Nombre
+          diaPago:             Number(r[12]||0)    // 0 = sin día de cobro definido
         }));
       return { ok: true, configJugadores };
     }
@@ -1421,7 +1425,7 @@ function handleAction(data) {
           sh.getRange(i + 1, 1, 1, CFGJ_COLS.length).setValues([[
             c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
             Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true",
-            JSON.stringify(c.premios||[]), c.celular||"", c.codRubroSueldo||"", c.apodo||""
+            JSON.stringify(c.premios||[]), c.celular||"", c.codRubroSueldo||"", c.apodo||"", Number(c.diaPago||0)
           ]]);
           return { ok: true, idJugador: c.idJugador };
         }
@@ -1429,7 +1433,7 @@ function handleAction(data) {
       sh.appendRow([
         c.idJugador, c.nombre||"", Number(c.montoTitular||0), Number(c.montoSuplenteConMin||0),
         Number(c.montoSuplente||0), c.frecuencia||"partido", c.alias||"", "true",
-        JSON.stringify(c.premios||[]), c.celular||"", c.codRubroSueldo||"", c.apodo||""
+        JSON.stringify(c.premios||[]), c.celular||"", c.codRubroSueldo||"", c.apodo||"", Number(c.diaPago||0)
       ]);
       return { ok: true, idJugador: c.idJugador };
     }

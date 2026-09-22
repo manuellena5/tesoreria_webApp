@@ -1043,6 +1043,9 @@ let reportesState = {
 let reintegroAnio     = String(new Date().getFullYear());
 let reintegroExpandido = new Set();
 let reintegroVista     = getDefaultVista("reintegros_vista");
+let reintegroFiltro    = "";
+let reintegroOrdenCol  = "";   // "" = orden por defecto (mayor pendiente primero)
+let reintegroOrdenDir  = -1;   // -1 = mayor a menor, igual convención que el resto de las tablas
 let vincJugadorFiltro       = "";
 let vincExpandedIngresoId   = null;
 let vincAsignaciones        = {};
@@ -4914,14 +4917,63 @@ function calcReintegrosPorJugador(anio) {
   }).sort((a,b) => b.pendiente - a.pendiente || (b.sinVincular||0) - (a.sinVincular||0));
 }
 
+// Orden por defecto: el que más debe cobrar primero. Ya viene así de calcReintegrosPorJugador,
+// así que mientras no se toque un encabezado no se reordena nada.
+//
+// Para ordenar por Estado se usa un rango donde MÁS alto = más urgente, así el primer clic
+// (mayor a menor, como en el resto de las tablas) deja arriba a los que no cobraron nada.
+const REINT_ESTADO_RANK = { SIN: 3, PARCIAL: 2, DIF: 1, OK: 0 };
+
+function reintegroOrdenValor(r, col) {
+  if (col === "jugador")      return r.jugador || "";
+  if (col === "abonado")      return r.abonado || 0;
+  if (col === "reintegrado")  return r.reintegrado || 0;
+  // La tabla muestra el pendiente con piso en 0 (un saldo a favor no es una deuda negativa):
+  // se ordena por lo mismo que se ve, o la columna diría una cosa y el orden otra.
+  if (col === "pendiente")    return Math.max(r.pendiente || 0, 0);
+  if (col === "sinReintegro") return r.sinReintegro || 0;
+  if (col === "estado")       return REINT_ESTADO_RANK[r.estado] !== undefined ? REINT_ESTADO_RANK[r.estado] : -1;
+  return 0;
+}
+
+function ordenarReintegros(rows) {
+  if (!reintegroOrdenCol) return rows;   // el default ya lo aplicó calcReintegrosPorJugador
+  const col = reintegroOrdenCol, dir = reintegroOrdenDir;
+  return [...rows].sort((a,b) => {
+    const va = reintegroOrdenValor(a, col), vb = reintegroOrdenValor(b, col);
+    const cmp = col === "jugador" ? va.localeCompare(vb, "es", { sensitivity: "base" }) : va - vb;
+    return cmp * dir;
+  });
+}
+
+// Primer clic de mayor a menor; el segundo sobre la misma columna invierte.
+function setReintegroOrden(col) {
+  if (reintegroOrdenCol === col) reintegroOrdenDir *= -1;
+  else { reintegroOrdenCol = col; reintegroOrdenDir = -1; }
+  const el = document.getElementById("reint-res-body");
+  if (el) el.innerHTML = renderReintegrosBody();
+}
+
+function thOrdenReintegro(col, label, align, extraClass) {
+  const active = reintegroOrdenCol === col;
+  const arrow = active ? `<span class="rt-arrow">${reintegroOrdenDir===1?"▲":"▼"}</span>` : "";
+  const cls = "rt-sortable" + (extraClass ? " " + extraClass : "");
+  return `<th class="${cls}" style="text-align:${align||'right'}" onclick="setReintegroOrden('${col}')">${label}${arrow}</th>`;
+}
+
+/** Filas del año vigente, ya filtradas por el buscador. */
+function filasReintegros() {
+  const rows = calcReintegrosPorJugador(reintegroAnio);
+  const q = normStr(reintegroFiltro);
+  return q ? rows.filter(r => normStr(r.jugador).includes(q)) : rows;
+}
+
 function renderReintegrosMedicos() {
   const movs21All = movimientos.filter(m => m.codRubro === "21" && (m.tipo === "EGRESO" || m.tipo === "INGRESO"));
   const anios = [...new Set(movs21All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
   if (reintegroAnio !== "" && !anios.includes(reintegroAnio)) {
     reintegroAnio = anios[0] || String(new Date().getFullYear());
   }
-
-  const rows = calcReintegrosPorJugador(reintegroAnio);
 
   const anioOptions = `<option value="" ${reintegroAnio===""?"selected":""}>Todos los años</option>` +
     anios.map(a => `<option value="${a}" ${reintegroAnio===a?"selected":""}>${a}</option>`).join("");
@@ -4931,10 +4983,6 @@ function renderReintegrosMedicos() {
       <button class="reint-view-btn ${reintegroVista==='tabla'?'active':''}" onclick="setReintegroVista('tabla')">⊞ Tabla</button>
       <button class="reint-view-btn ${reintegroVista==='cards'?'active':''}" onclick="setReintegroVista('cards')">▤ Cards</button>
     </div>`;
-
-  const body = !rows.length
-    ? `<p class="note" style="text-align:center;padding:16px 0">Sin movimientos de rubro médico</p>`
-    : reintegroVista === "cards" ? renderReintegrosCards(rows) : renderReintegrosTabla(rows);
 
   return `
     <div class="reint-section">
@@ -4947,10 +4995,30 @@ function renderReintegrosMedicos() {
         </div>
         ${viewToggle}
       </div>
-      ${body}
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input class="inp" type="search" placeholder="Buscar jugador…" value="${esc(reintegroFiltro)}"
+               oninput="reintegroFiltro=this.value; document.getElementById('reint-res-body').innerHTML=renderReintegrosBody()">
+      </div>
+      <div id="reint-res-body">${renderReintegrosBody()}</div>
     </div>`;
 }
 
+// Tabla o cards según el buscador y el orden vigentes. Separado de renderReintegrosMedicos para
+// poder repintar sólo esto al tipear —si no, el input perdería el foco en cada tecla— y al
+// ordenar una columna.
+//
+// El orden por columna aplica sólo a la tabla: las cards agrupan aparte a los que no tienen
+// pendiente (colapsados abajo), y reordenarlas romperia esa separación, que es lo que hace útil
+// esa vista.
+function renderReintegrosBody() {
+  const rows = filasReintegros();
+  if (!rows.length) {
+    return `<p class="note" style="text-align:center;padding:16px 0">${
+      reintegroFiltro ? "Sin jugadores para esa búsqueda" : "Sin movimientos de rubro médico"}</p>`;
+  }
+  return reintegroVista === "cards" ? renderReintegrosCards(rows) : renderReintegrosTabla(ordenarReintegros(rows));
+}
 function estadoCorto(estado, diferencia, sinVincular) {
   if (estado === "DIF") {
     const partes = [];
@@ -4998,19 +5066,19 @@ function renderReintegrosTabla(rows) {
     <td></td>
   </tr>`;
 
-  const reintegradoHeader = isMobile ? "" : `<th style="text-align:right">Reintegrado</th>`;
+  const reintegradoHeader = isMobile ? "" : thOrdenReintegro("reintegrado", "Reintegrado");
   const footnote = isMobile ? `<p class="note" style="margin-top:6px;font-size:11px">* Reintegrado puede superar lo Abonado si algún reintegro vino de más (saldo a favor) — ver detalle de cada jugador.</p>` : "";
 
   return `
     <div class="reint-table-wrap">
       <table class="sum-table reint-table ${isMobile?'reint-table-mobile':''}">
         <thead><tr>
-          <th class="jugador-col">Jugador</th>
-          <th style="text-align:right">Abonado</th>
+          ${thOrdenReintegro("jugador", "Jugador", "left", "jugador-col")}
+          ${thOrdenReintegro("abonado", "Abonado")}
           ${reintegradoHeader}
-          <th style="text-align:right">Pendiente</th>
-          <th style="text-align:right">Sin reintegro</th>
-          <th>Estado</th>
+          ${thOrdenReintegro("pendiente", "Pendiente")}
+          ${thOrdenReintegro("sinReintegro", "Sin reintegro")}
+          ${thOrdenReintegro("estado", "Estado", "left")}
         </tr></thead>
         <tbody>${bodyRows}${totRow}</tbody>
       </table>

@@ -1807,6 +1807,73 @@ app.recordOcultar("m1", "2026-09-12");
 igual("ocultar dos veces no lo duplica", app.recordOcultosHoy("2026-09-12"), ["m1"]);
 app.localStorage.removeItem(app.RECORD_OCULTOS_KEY);
 
+// ══════════════════════════════════════════════════════════════
+seccion("46 · Resumen > Reintegros: buscador y orden de columnas");
+
+// Rubro 21 = médico. El EGRESO marcado con seguroReintegro es lo que el seguro debería devolver;
+// el INGRESO vinculado es lo que volvió.
+app.reintegroFiltro = ""; app.reintegroOrdenCol = ""; app.reintegroOrdenDir = -1;
+app.reintegroAnio = "2026";
+app.movimientos = [
+  // PEREZ: abonó 100.000 y no volvió nada → SIN
+  { id:"e1", tipo:"EGRESO", fecha:"2026-05-10", codRubro:"21", jugadorCT:"PEREZ Juan",
+    egreso:100000, ingreso:0, seguroReintegro:1, concepto:"Kinesiología", vinculos:[] },
+  // ÁLVAREZ: abonó 60.000 y le reintegraron todo → OK
+  { id:"e2", tipo:"EGRESO", fecha:"2026-05-12", codRubro:"21", jugadorCT:"Álvarez Bea",
+    egreso:60000, ingreso:0, seguroReintegro:1, concepto:"Estudios", vinculos:[] },
+  { id:"i2", tipo:"INGRESO", fecha:"2026-06-01", codRubro:"21", jugadorCT:"Álvarez Bea",
+    egreso:0, ingreso:60000, concepto:"Reintegro", vinculos:[{ egresoId:"e2", monto:60000 }] },
+  // GOMEZ: abonó 200.000 y volvió la mitad → PARCIAL
+  { id:"e3", tipo:"EGRESO", fecha:"2026-05-20", codRubro:"21", jugadorCT:"GOMEZ Ana",
+    egreso:200000, ingreso:0, seguroReintegro:1, concepto:"Traumatólogo", vinculos:[] },
+  { id:"i3", tipo:"INGRESO", fecha:"2026-06-05", codRubro:"21", jugadorCT:"GOMEZ Ana",
+    egreso:0, ingreso:50000, concepto:"Reintegro parcial", vinculos:[{ egresoId:"e3", monto:50000 }] }
+];
+
+const reintNombres = () => app.filasReintegros().map(r => r.jugador);
+igual("sin filtro salen los tres",
+      reintNombres().slice().sort((a,b) => a.localeCompare(b, "es")),
+      ["Álvarez Bea", "GOMEZ Ana", "PEREZ Juan"]);
+
+app.reintegroFiltro = "gomez";
+igual("el buscador filtra por jugador", reintNombres(), ["GOMEZ Ana"]);
+app.reintegroFiltro = "GOMEZ";
+igual("no distingue mayúsculas", reintNombres(), ["GOMEZ Ana"]);
+app.reintegroFiltro = "alvarez";
+igual("ni acentos", reintNombres(), ["Álvarez Bea"]);
+app.reintegroFiltro = "zzz";
+igual("un nombre inexistente no devuelve nada", reintNombres(), []);
+app.reintegroFiltro = "";
+
+// ── Orden ──
+const reintOrden = () => app.ordenarReintegros(app.filasReintegros()).map(r => r.jugador);
+igual("sin columna elegida manda el default: más pendiente primero",
+      reintOrden(), ["GOMEZ Ana", "PEREZ Juan", "Álvarez Bea"]);
+
+app.reintegroOrdenCol = "abonado"; app.reintegroOrdenDir = -1;
+igual("por Abonado, mayor a menor", reintOrden(), ["GOMEZ Ana", "PEREZ Juan", "Álvarez Bea"]);
+app.reintegroOrdenDir = 1;
+igual("el segundo clic invierte", reintOrden(), ["Álvarez Bea", "PEREZ Juan", "GOMEZ Ana"]);
+
+app.reintegroOrdenCol = "jugador"; app.reintegroOrdenDir = 1;
+igual("por nombre, alfabético ignorando acentos",
+      reintOrden(), ["Álvarez Bea", "GOMEZ Ana", "PEREZ Juan"]);
+
+// Estado: el primer clic (mayor a menor) tiene que dejar arriba al que no cobró nada.
+app.reintegroOrdenCol = "estado"; app.reintegroOrdenDir = -1;
+igual("por Estado, lo más urgente primero",
+      app.ordenarReintegros(app.filasReintegros()).map(r => r.estado), ["SIN", "PARCIAL", "OK"]);
+
+// El pendiente se ordena por el mismo número que muestra la tabla (con piso en 0), no por el
+// crudo: un saldo a favor no es una deuda negativa que deba quedar última.
+const filaOK = app.filasReintegros().find(r => r.jugador === "Álvarez Bea");
+igual("un pendiente saldado vale 0 al ordenar", app.reintegroOrdenValor(filaOK, "pendiente"), 0);
+
+// Filtro y orden se combinan sin pisarse.
+app.reintegroFiltro = "e"; app.reintegroOrdenCol = "abonado"; app.reintegroOrdenDir = -1;
+igual("filtro + orden juntos", reintOrden(), ["GOMEZ Ana", "PEREZ Juan", "Álvarez Bea"]);
+app.reintegroFiltro = ""; app.reintegroOrdenCol = "";
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

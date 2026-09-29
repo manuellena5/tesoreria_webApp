@@ -133,7 +133,7 @@ const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
-  "Vinculos","ItemsDetalle","JugadorID","AdherenteID"
+  "Vinculos","ItemsDetalle","JugadorID","AdherenteID","Adjuntos"
 ];
 // Índices de columna (1-based) de MOV_COLS que se escriben o leen sueltos. Están acá
 // para que agregar una columna nueva al final no vuelva a desalinear una escritura
@@ -144,8 +144,13 @@ const MOV_IX = {
   VINCULOS:     23,
   ITEMS:        24,
   JUGADOR_ID:   25,
-  ADHERENTE_ID: 26
+  ADHERENTE_ID: 26,
+  ADJUNTOS:     27
 };
+// Adjuntos: JSON de [{id, nombre, url, mime, bytes, subido}] — comprobantes (fotos / PDF) guardados
+// en Drive (ver subirAdjunto). Sólo lo escriben subirAdjunto / borrarAdjunto: saveMov y updateMov
+// no lo tocan, para que editar el movimiento con un estado de cliente viejo no pise un adjunto
+// subido en el medio. No confundir con "Comprobante", que es el Nro. de comprobante (texto).
 // JugadorID / AdherenteID: el vínculo durable de un movimiento con su entidad. Las columnas
 // de texto (JugadorCT, Adherente) quedan como copia legible del nombre — cómoda para leer la
 // hoja a ojo, pero NO son la referencia: renombrar reescribe el texto en cascada usando el ID.
@@ -605,6 +610,7 @@ function handleAction(data) {
         itemsDetalle:  parseItemsDetalleJson(r[23]),
         jugadorId:     String(r[24]||""),
         adherenteId:   String(r[25]||""),
+        adjuntos:      parseAdjuntosJson(r[26]),
       }));
       return { ok: true, movimientos };
     }
@@ -664,7 +670,10 @@ function handleAction(data) {
           // El timestamp es la marca de ALTA, no de última modificación: editar un
           // movimiento no debe moverlo de lugar en el orden de carga.
           const tsOriginal = tsToIsoLocal(all[i][19]) || nowTsLocal();
-          sh.getRange(i + 1, 1, 1, MOV_COLS.length).setValues([[
+          // Se escribe hasta AdherenteID y no MOV_COLS.length: Adjuntos (y cualquier columna que
+          // venga después) no es de la edición — la escriben subirAdjunto / borrarAdjunto, y pisarla
+          // con vacío dejaría archivos en Drive sin nadie que los referencie.
+          sh.getRange(i + 1, 1, 1, MOV_IX.ADHERENTE_ID).setValues([[
             m.id, m.mes||"", m.fecha||"", m.codRubro||"", m.rubro||"", m.categoria||"",
             m.concepto||"", Number(m.egreso||0), Number(m.ingreso||0), Number(m.montoFinal||0),
             m.cuenta||"", m.cuentaDestino||"", m.modoPago||"",
@@ -745,8 +754,60 @@ function handleAction(data) {
       // cobrado sin egreso en la contabilidad, y la pantalla de Transferencias no lo deja
       // volver a incluir. Borrar el movimiento ES el deshacer, así que revierte primero.
       const revertido = revertirPagosDeMovimiento_(String(data.id));
+      // Los comprobantes adjuntos van a la papelera de Drive (recuperables 30 días) y no se
+      // borran para siempre: si el movimiento se eliminó por error, se recupera el archivo.
+      const adjuntosPapelera = mandarAdjuntosAPapelera_(parseAdjuntosJson(all[filas[0] - 1][MOV_IX.ADJUNTOS - 1]));
       sh.deleteRow(filas[0]);
-      return { ok: true, revertido };
+      return { ok: true, revertido, adjuntosPapelera };
+    }
+
+    // ─── ADJUNTOS (comprobantes en Drive) ────────────────────
+    //
+    // Van como acción aparte, después de que el movimiento ya existe en la hoja, y de a un
+    // archivo por request: un base64 de varios MB no puede viajar en la cola offline de saveMov
+    // (pendingMovs vive en localStorage) y un pedido con varios archivos juntos puede pasar el
+    // límite de payload de Apps Script. Corren dentro del lock de doPost como el resto.
+
+    case "subirAdjunto": {
+      const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const all = sh.getDataRange().getValues();
+      const i   = filaDeMovimiento_(all, data.movId);
+      if (i < 0) return { ok: false, error: "Movimiento no encontrado: " + data.movId };
+      const mime = String(data.mime || "").toLowerCase();
+      const ext  = ADJ_MIMES[mime];
+      if (!ext) return { ok: false, error: "Tipo de archivo no permitido (" + (mime || "desconocido") + "). Sólo fotos JPG, PNG, WEBP o PDF." };
+      let bytes;
+      try { bytes = Utilities.base64Decode(String(data.base64 || "")); }
+      catch (e) { return { ok: false, error: "El archivo llegó dañado, probá de nuevo." }; }
+      if (!bytes || !bytes.length) return { ok: false, error: "El archivo está vacío." };
+      if (bytes.length > ADJ_MAX_BYTES) {
+        return { ok: false, error: "El archivo pesa " + (bytes.length / 1048576).toFixed(1) + " MB; el máximo es 5 MB." };
+      }
+      const r        = all[i];
+      const adjuntos = parseAdjuntosJson(r[MOV_IX.ADJUNTOS - 1]);
+      const nombre   = nombreArchivoAdjunto_(r, ext, adjuntos);
+      const file     = carpetaAdjuntosDeMov_(r).createFile(Utilities.newBlob(bytes, mime, nombre));
+      // El nombre original (IMG_2034.jpg, "orden.pdf") no sirve para ordenar la carpeta, pero sí
+      // para reconocer el archivo desde Drive: queda en la descripción.
+      if (data.nombreOriginal) { try { file.setDescription("Original: " + String(data.nombreOriginal)); } catch (e) {} }
+      // Sin setSharing: son datos de salud de jugadores, el link sólo lo abre la cuenta dueña.
+      const adjunto = { id: file.getId(), nombre, url: file.getUrl(), mime, bytes: bytes.length, subido: nowTsLocal() };
+      adjuntos.push(adjunto);
+      sh.getRange(i + 1, MOV_IX.ADJUNTOS).setValue(JSON.stringify(adjuntos));
+      return { ok: true, adjunto, adjuntos };
+    }
+
+    case "borrarAdjunto": {
+      const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const all = sh.getDataRange().getValues();
+      const i   = filaDeMovimiento_(all, data.movId);
+      if (i < 0) return { ok: false, error: "Movimiento no encontrado: " + data.movId };
+      const adjuntos = parseAdjuntosJson(all[i][MOV_IX.ADJUNTOS - 1]);
+      const quedan   = adjuntos.filter(a => String(a.id) !== String(data.fileId));
+      if (quedan.length === adjuntos.length) return { ok: false, error: "Ese adjunto ya no está en el movimiento." };
+      mandarAdjuntosAPapelera_(adjuntos.filter(a => String(a.id) === String(data.fileId)));
+      sh.getRange(i + 1, MOV_IX.ADJUNTOS).setValue(quedan.length ? JSON.stringify(quedan) : "");
+      return { ok: true, adjuntos: quedan };
     }
 
     // ─── JUGADORES ───────────────────────────────────────────
@@ -2350,6 +2411,106 @@ function parseItemsDetalleJson(raw) {
 function stringifyItemsDetalle(items) {
   if (!items || !Array.isArray(items) || !items.length) return "";
   return JSON.stringify(items);
+}
+
+// ── Adjuntos de movimientos (comprobantes en Drive) ──────────
+// Se guardan en el Drive de la cuenta que corre el script, en
+//   <raíz>/<AAAA>/<CodRubro> - <Rubro>/<fecha>_<persona>_<concepto>_<movId>.<ext>
+// Año primero porque es como se revisa (el seguro pide lo del año; un rubro sin año mezcla
+// temporadas). La raíz sale de la propiedad COMPROBANTES_FOLDER_ID: si no está, se crea
+// "Comprobantes Tesorería" y se guarda su ID, así anda sin configurar nada y quien quiera otra
+// ubicación sólo cambia la propiedad.
+const ADJ_FOLDER_PROP = "COMPROBANTES_FOLDER_ID";
+const ADJ_FOLDER_NAME = "Comprobantes Tesorería";
+const ADJ_MAX_BYTES   = 5 * 1024 * 1024;
+const ADJ_MIMES       = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" };
+
+function parseAdjuntosJson(raw) {
+  if (!raw) return [];
+  const arr = safeParseJSON(String(raw), []);
+  return Array.isArray(arr) ? arr : [];
+}
+
+/** Índice (0-based, sobre getValues()) de la fila del movimiento, o -1. */
+function filaDeMovimiento_(all, movId) {
+  for (let i = 1; i < all.length; i++) if (String(all[i][0]) === String(movId)) return i;
+  return -1;
+}
+
+/** Saca lo que Drive / Windows no aceptan en un nombre y colapsa los espacios. */
+function sanearNombreArchivo_(s) {
+  return String(s || "").replace(/[\/\\:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function carpetaComprobantesRaiz_() {
+  const props = PropertiesService.getScriptProperties();
+  const id    = String(props.getProperty(ADJ_FOLDER_PROP) || "").trim();
+  if (id) {
+    // Si la propiedad está pero no abre, se corta con un error claro: crear otra carpeta en
+    // silencio repartiría los comprobantes entre dos lugares sin que nadie se entere.
+    try { return DriveApp.getFolderById(id); }
+    catch (e) { throw new Error("No se pudo abrir la carpeta de comprobantes (propiedad " + ADJ_FOLDER_PROP + " = " + id + "). Revisá el ID o borrá la propiedad para que se cree una nueva."); }
+  }
+  const carpeta = DriveApp.createFolder(ADJ_FOLDER_NAME);
+  props.setProperty(ADJ_FOLDER_PROP, carpeta.getId());
+  return carpeta;
+}
+
+/** Subcarpeta por nombre; se busca antes de crear para no terminar con dos "2026". */
+function subcarpeta_(padre, nombre) {
+  const it = padre.getFoldersByName(nombre);
+  return it.hasNext() ? it.next() : padre.createFolder(nombre);
+}
+
+/** Carpeta <AAAA>/<CodRubro> - <Rubro> de una fila de Movimientos. El año es el de la FECHA del
+ *  movimiento, no el de hoy: la factura de diciembre subida en enero va con diciembre. */
+function carpetaAdjuntosDeMov_(r) {
+  const fecha = formatFecha(r[2]);
+  const anio  = /^\d{4}/.test(fecha) ? fecha.slice(0, 4)
+              : /^\d{4}/.test(String(r[1] || "")) ? String(r[1]).slice(0, 4)
+              : String(new Date().getFullYear());
+  const cod   = String(r[3] || "").trim();
+  const cat   = RUBROS_MAP[cod];
+  const rubro = String((cat && cat.nombre) || r[4] || "").replace(/\s*\|\s*/g, " - ");
+  const nombreRubro = sanearNombreArchivo_(cod ? cod + " - " + rubro : (rubro || "Sin rubro"));
+  return subcarpeta_(subcarpeta_(carpetaComprobantesRaiz_(), anio), nombreRubro);
+}
+
+/** AAAA-MM-DD_<Jugador o Adherente>_<Concepto>_<movId>[_n].<ext>. `existentes` son los adjuntos
+ *  que ya tiene el movimiento: el segundo lleva _2, el tercero _3… salteando nombres ya usados
+ *  (tras borrar uno, el siguiente no repite el sufijo del que sigue en la lista). */
+function nombreArchivoAdjunto_(r, ext, existentes) {
+  const persona  = sanearNombreArchivo_(String(r[MOV_IX.JUGADOR_CT - 1] || "").trim() || String(r[MOV_IX.ADHERENTE - 1] || "").trim());
+  const concepto = sanearNombreArchivo_(r[6]).slice(0, 60).trim();
+  const base     = [formatFecha(r[2]), persona, concepto, sanearNombreArchivo_(r[0])].join("_");
+  // Se compara sin extensión: "_2.pdf" y "_2.jpg" del mismo movimiento se confunden igual.
+  const usados   = {};
+  (existentes || []).forEach(a => { usados[String(a.nombre || "").replace(/\.[^.]*$/, "")] = true; });
+  let n = (existentes || []).length + 1;
+  let nombre = base + (n > 1 ? "_" + n : "");
+  while (usados[nombre]) { n++; nombre = base + "_" + n; }
+  return nombre + "." + ext;
+}
+
+/** Papelera, nunca borrado definitivo: queda 30 días para recuperar. Un archivo que ya no existe
+ *  (borrado a mano en Drive) no frena nada — lo importante es sacarlo de la lista. */
+function mandarAdjuntosAPapelera_(adjuntos) {
+  let n = 0;
+  for (const a of (adjuntos || [])) {
+    try { DriveApp.getFileById(String(a.id)).setTrashed(true); n++; } catch (e) {}
+  }
+  return n;
+}
+
+/**
+ * Correr UNA VEZ desde el editor (elegir "autorizarDrive" → Ejecutar) después de pegar esta
+ * versión: dispara el pedido de permiso de Google Drive. Sin ese permiso aceptado, el Web App
+ * falla al subir el primer comprobante. Crea (u obtiene) la carpeta raíz y deja su URL en el log.
+ */
+function autorizarDrive() {
+  const carpeta = carpetaComprobantesRaiz_();
+  Logger.log("Carpeta de comprobantes: " + carpeta.getUrl());
+  return carpeta.getUrl();
 }
 
 function normalizeMovFields(m) {

@@ -1449,7 +1449,10 @@ const Storage = {
   async saveMov(mov, descontarDelSueldo)   { return this._post({ action:"saveMov",   mov, descontarDelSueldo }); },
   async updateMov(mov, descontarDelSueldo) { return this._post({ action:"updateMov", mov, descontarDelSueldo }); },
   async deleteMov(id)       { return this._post({ action:"deleteMov",    id  }); },
-  async listJugadores()     { return this._post({ action:"listJugadores"      }); },
+  // Comprobantes adjuntos: uno por request y siempre sobre un movimiento ya guardado (ver adjSubir).
+  async subirAdjunto(movId, nombreOriginal, mime, base64) { return this._post({ action:"subirAdjunto", movId, nombreOriginal, mime, base64 }); },
+  async borrarAdjunto(movId, fileId) { return this._post({ action:"borrarAdjunto", movId, fileId }); },
+  async listJugadores()    { return this._post({ action:"listJugadores"      }); },
   async saveJugador(j)      { return this._post({ action:"saveJugador",   jugador:j }); },
   async renameJugador(id, nombre) { return this._post({ action:"renameJugador", id, nombre }); },
   async deleteJugador(id)   { return this._post({ action:"deleteJugador", id  }); },
@@ -2842,7 +2845,11 @@ async function saveMovimiento() {
     const prev = movimientos.find(m => m.id === mov.id);
     mov.timestamp = (prev && prev.timestamp) || "";
     mov.orden     = prev && prev.orden !== undefined ? prev.orden : 0;
+    // Los adjuntos no son parte del formulario (el backend ni los lee en updateMov): se arrastran
+    // del movimiento anterior para que la edición no los haga desaparecer de la pantalla.
+    mov.adjuntos  = (prev && prev.adjuntos) || [];
   } else {
+    mov.adjuntos  = [];
     mov.timestamp = nowTimestamp();
     // Al final de la lista hasta el próximo refresco desde la hoja
     mov.orden = movimientos.reduce((mx, m) => Math.max(mx, m.orden || 0), 0) + 1;
@@ -3198,7 +3205,8 @@ function renderMovTabla(movMes) {
       cargaMs: movTsMs(m),
       cargaOrden: m.orden || 0,
       fechaD: m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "",
-      concepto: m.concepto || "",
+      // 📎 al final y no al principio: así no altera el orden alfabético de la columna.
+      concepto: (m.concepto || "") + ((m.adjuntos||[]).length ? " 📎" : ""),
       monto,
       rubro: m.rubro || "",
       categoria: m.categoria || "",
@@ -3331,7 +3339,7 @@ function renderMovList() {
     return `
     <div class="mov-card" onclick="openMovModal('${m.id}')">
       <div class="mov-card-row1">
-        <span class="mov-card-fecha-big">${fechaCorta(m.fecha)}</span>
+        <span class="mov-card-fecha-big">${fechaCorta(m.fecha)}${(m.adjuntos||[]).length ? ` <span style="font-size:12px" title="Tiene comprobante adjunto">📎</span>` : ""}</span>
         <span class="monto ${montoClass} mov-card-monto">${montoSign}${fmt(montoVal)}</span>
       </div>
       <div class="mov-card-rubro-full">${esc(m.rubro)}</div>
@@ -3361,6 +3369,197 @@ function changeMes(delta) {
     adhResumenOpen = false;
     renderResumen();
   }
+}
+
+// ══════════════════════════════════════════════════════════════
+// COMPROBANTES ADJUNTOS (fotos / PDF en Drive)
+//
+// Se suben SIEMPRE después de guardar el movimiento, como acción aparte con su movId, y nunca
+// dentro de saveMov: un movimiento cargado offline viaja en pendingMovs (localStorage) y un base64
+// de varios MB ni entra ahí. Por eso sin conexión, o con el movimiento pendiente de sincronizar,
+// el botón queda deshabilitado. Van de a un archivo por request, para no pasar el límite de
+// payload de Apps Script con una tanda de fotos.
+// ══════════════════════════════════════════════════════════════
+const ADJ_MAX_BYTES = 5 * 1024 * 1024;   // mismo tope que Code.gs (ADJ_MAX_BYTES)
+const ADJ_LADO_MAX  = 1600;              // una foto de celular queda en ~200–400 KB y sigue legible
+const ADJ_CALIDAD   = 0.7;
+const ADJ_EXT       = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" };
+let adjSubiendo = false;
+
+/** Tamaño al que se redimensiona una foto: lado mayor a `max`, sin agrandar las que ya son chicas. */
+function adjDimensionesDestino(w, h, max = ADJ_LADO_MAX) {
+  w = Number(w) || 0; h = Number(h) || 0;
+  if (!w || !h) return { w, h };
+  const k = Math.min(1, max / Math.max(w, h));
+  return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
+}
+
+/** Nombre con el que viaja el archivo. La foto se re-codifica a JPEG, así que "IMG_2034.HEIC" tiene
+ *  que llegar como "IMG_2034.jpg" — si no, la descripción en Drive miente sobre el formato. */
+function adjNombreSubida(nombreOriginal, mime) {
+  const base = String(nombreOriginal || "").replace(/\.[^.]*$/, "").trim() || "comprobante";
+  return ADJ_EXT[mime] ? base + "." + ADJ_EXT[mime] : base;
+}
+
+/** Gasto con reintegro del seguro que todavía no tiene comprobante: es lo que el seguro pide para
+ *  pagar, así que se marca en Reintegros para que no se descubra al ir a reclamar. */
+function reintegroSinComprobante(m) {
+  return !!m && m.tipo === "EGRESO" && !!m.seguroReintegro && !(m.adjuntos || []).length;
+}
+
+/** null si al movimiento se le puede adjuntar/borrar ahora; si no, el motivo para mostrar. */
+function adjMotivoNoDisponible(m) {
+  if (viendoSnapshotHistorico) return "Estás viendo una copia vieja: no se pueden cambiar los adjuntos";
+  if (!m || m._pending || !navigator.onLine) return "Se puede adjuntar cuando el movimiento esté sincronizado";
+  return null;
+}
+
+function adjMovPorId(movId) {
+  return movimientos.find(m => m.id === movId) || (compMovPendiente && compMovPendiente.id === movId ? compMovPendiente : null);
+}
+
+function adjCargarImagen(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload  = () => { URL.revokeObjectURL(url); res(img); };
+    img.onerror = () => { URL.revokeObjectURL(url);
+      rej(new Error(`No se pudo leer la imagen "${file.name}". Si es HEIC, sacá la foto desde la cámara del navegador o pasala a JPG.`)); };
+    img.src = url;
+  });
+}
+
+/** { blob, mime } listo para subir: las fotos redimensionadas a JPEG, los PDF tal cual. */
+async function adjPrepararArchivo(file) {
+  const mime = String(file.type || "").toLowerCase();
+  if (mime === "application/pdf") return { blob: file, mime };
+  if (!mime.startsWith("image/")) throw new Error(`"${file.name}" no es una foto ni un PDF`);
+  const img = await adjCargarImagen(file);
+  const { w, h } = adjDimensionesDestino(img.naturalWidth || img.width, img.naturalHeight || img.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";            // un PNG con transparencia pasado a JPEG quedaría con fondo negro
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", ADJ_CALIDAD));
+  if (!blob) throw new Error(`No se pudo comprimir "${file.name}"`);
+  // Una captura chica ya en un formato aceptado puede pesar menos que su versión re-codificada.
+  if (ADJ_EXT[mime] && file.size <= blob.size) return { blob: file, mime };
+  return { blob, mime: "image/jpeg" };
+}
+
+function adjBlobABase64(blob) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload  = () => res(String(fr.result).split(",")[1] || "");
+    fr.onerror = () => rej(new Error("No se pudo leer el archivo"));
+    fr.readAsDataURL(blob);
+  });
+}
+
+async function adjSubir(movId, files) {
+  const lista = Array.from(files || []);
+  if (!lista.length || adjSubiendo) return;
+  const mov = adjMovPorId(movId);
+  const motivo = adjMotivoNoDisponible(mov);
+  if (motivo) { toast(motivo, "err"); return; }
+  adjSubiendo = true;
+  let subidos = 0;
+  const errores = [];
+  try {
+    for (let i = 0; i < lista.length; i++) {
+      const f = lista[i];
+      adjEstadoBoton(`Subiendo… ${i + 1} de ${lista.length}`);
+      try {
+        const p = await adjPrepararArchivo(f);
+        if (p.blob.size > ADJ_MAX_BYTES) {
+          throw new Error(`"${f.name}" pesa ${(p.blob.size / 1048576).toFixed(1)} MB; el máximo es 5 MB`);
+        }
+        const r = await Storage.subirAdjunto(movId, adjNombreSubida(f.name, p.mime), p.mime, await adjBlobABase64(p.blob));
+        if (!r.ok) throw new Error(r.error || "Error al subir");
+        mov.adjuntos = r.adjuntos || [];
+        saveSnapshotToCache();
+        subidos++;
+      } catch (e) {
+        if (isNetworkError(e)) { errores.push("Sin conexión — no se subió " + (lista.length - i) + " archivo(s)"); break; }
+        errores.push(e.message);
+      }
+    }
+  } finally {
+    adjSubiendo = false;
+    adjRefrescarSeccion(movId);
+    if (currentTab === "movimientos") renderMovList();
+  }
+  if (errores.length) toast((subidos ? `Se subieron ${subidos}. ` : "") + errores.join(" · "), "err");
+  else toast(subidos === 1 ? "Comprobante adjuntado" : `${subidos} comprobantes adjuntados`, "ok");
+}
+
+function adjEstadoBoton(texto) {
+  const btn = document.getElementById("adj-btn");
+  if (btn) { btn.disabled = true; btn.textContent = texto; }
+}
+
+// Confirmación en dos toques dentro del modal (mismo patrón que confirmDelete), sin confirm() del
+// navegador: en el celular el diálogo nativo tapa el modal y se pierde el contexto.
+function adjConfirmarBorrado(movId, fileId) {
+  const btn = document.getElementById("adj-del-" + fileId);
+  if (!btn) return;
+  if (btn.dataset.confirm) { adjBorrar(movId, fileId); return; }
+  btn.dataset.confirm = "1";
+  btn.textContent = "¿Borrar?";
+  btn.style.color = "var(--red)";
+  setTimeout(() => { if (btn && btn.dataset.confirm) { btn.dataset.confirm = ""; btn.textContent = "🗑"; btn.style.color = ""; } }, 3000);
+}
+
+async function adjBorrar(movId, fileId) {
+  const mov = adjMovPorId(movId);
+  const motivo = adjMotivoNoDisponible(mov);
+  if (motivo) { toast(motivo, "err"); return; }
+  const btn = document.getElementById("adj-del-" + fileId);
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    const r = await Storage.borrarAdjunto(movId, fileId);
+    if (!r.ok) throw new Error(r.error || "Error al borrar");
+    mov.adjuntos = r.adjuntos || [];
+    saveSnapshotToCache();
+    toast("Comprobante enviado a la papelera de Drive", "ok");
+  } catch (e) {
+    toast(isNetworkError(e) ? "Sin conexión — no se pudo borrar, probá de nuevo" : "Error: " + e.message, "err");
+  }
+  adjRefrescarSeccion(movId);
+  if (currentTab === "movimientos") renderMovList();
+}
+
+/** Repinta la sección de adjuntos del modal abierto, si es la de este movimiento. */
+function adjRefrescarSeccion(movId) {
+  const sec = document.getElementById("adj-sec");
+  const mov = adjMovPorId(movId);
+  if (sec && mov && sec.dataset.mov === movId) sec.outerHTML = renderAdjuntosSeccion(mov);
+}
+
+/** Sección "📎 Adjuntos" — la usan el detalle del movimiento y la confirmación post-guardado. */
+function renderAdjuntosSeccion(m) {
+  const adj    = m.adjuntos || [];
+  const motivo = adjMotivoNoDisponible(m);
+  const idJs   = esc(escJs(m.id));
+  const items  = adj.map(a => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <a href="${esc(a.url)}" target="_blank" rel="noopener"
+           style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent);font-size:12px">${a.mime === "application/pdf" ? "📄" : "🖼️"} ${esc(a.nombre)}</a>
+        <button class="btn-sm danger" id="adj-del-${esc(a.id)}" ${motivo ? "disabled" : ""}
+                onclick="adjConfirmarBorrado('${idJs}','${esc(escJs(a.id))}')">🗑</button>
+      </div>`).join("");
+  return `
+    <div id="adj-sec" data-mov="${esc(m.id)}" style="padding:9px 0;border-bottom:1px solid var(--border)">
+      <div class="modal-detail-lbl" style="font-size:13px">📎 Adjuntos${adj.length ? ` (${adj.length})` : ""}</div>
+      ${items}
+      <input type="file" id="adj-input" accept="image/*,application/pdf" multiple style="display:none"
+             onchange="adjSubir('${idJs}', Array.from(this.files)); this.value=''">
+      <button class="btn-secondary" id="adj-btn" style="width:100%;margin-top:6px" ${motivo || adjSubiendo ? "disabled" : ""}
+              onclick="document.getElementById('adj-input').click()">${adjSubiendo ? "Subiendo…" : "📎 Adjuntar comprobante"}</button>
+      ${motivo ? `<div class="note" style="margin-top:4px">${esc(motivo)}</div>` : ""}
+    </div>`;
 }
 
 /**
@@ -3408,6 +3607,7 @@ function openMovModal(id, volverALiquidar) {
         <div class="modal-handle"></div>
         <div class="modal-monto-big ${montoClass}">${montoSign}${fmt(montoVal)}</div>
         ${rows}
+        ${renderAdjuntosSeccion(m)}
         ${volverALiquidar ? `<button class="btn-secondary" style="width:100%;margin-top:8px" onclick="renderLiquidacionModal()">← Volver a la liquidación</button>` : ""}
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="abrirComprobanteModal('${id}')">🧾 Comprobante</button>
@@ -3515,7 +3715,10 @@ async function deleteMovimiento(id) {
       nJ ? `${nJ} pago${nJ!==1?"s":""} a jugadores` : "",
       nC ? `${nC} cuota${nC!==1?"s":""}` : ""
     ].filter(Boolean).join(" y ");
-    toast(detalle ? `Movimiento eliminado — ${detalle} volvió a pendiente` : "Movimiento eliminado", "ok");
+    // Los comprobantes quedan 30 días en la papelera de Drive: se dice para que se sepa dónde buscarlos.
+    const nA = Number(r.adjuntosPapelera) || 0;
+    const papelera = nA ? ` · ${nA} comprobante${nA!==1?"s":""} a la papelera de Drive` : "";
+    toast((detalle ? `Movimiento eliminado — ${detalle} volvió a pendiente` : "Movimiento eliminado") + papelera, "ok");
     const nD = (rev.desvinculados || []).length;
     if (nD) toast(nD === 1
       ? "Un descuento salía de ese movimiento: sigue cargado, pero ya sin el vínculo"
@@ -3593,6 +3796,8 @@ function showMovSavedModal(mov, wasEdit, hermanos) {
   const desglose = !esReparto ? "" :
     `<div class="modal-detail-row"><span class="modal-detail-lbl">Entró en ${partes.length} cuentas</span><span class="modal-detail-val"></span></div>` +
     partes.map(m => `<div class="modal-detail-row"><span class="modal-detail-lbl">${esc(m.cuenta)}${m.modoPago ? " · " + esc(m.modoPago) : ""}</span><span class="modal-detail-val ${montoClass}">${montoSign}${fmt(montoDe(m))}</span></div>`).join("");
+  // Adjuntos: la factura suele estar en la mano al cargar el gasto, y adjuntarla acá evita tener
+  // que buscar el movimiento después. En un cobro dividido va a la primera fila.
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
@@ -3604,6 +3809,7 @@ function showMovSavedModal(mov, wasEdit, hermanos) {
         ${esReparto ? `<div style="text-align:center;font-size:11px;color:var(--text3);margin:-4px 0 6px">total del cobro</div>` : ""}
         ${detalles}
         ${desglose}
+        ${renderAdjuntosSeccion(mov)}
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="abrirComprobanteModal('${mov.id}')">🧾 Generar comprobante</button>
           <button class="btn-main" style="flex:1" onclick="document.getElementById('modal-root').innerHTML=''">Aceptar</button>
@@ -5289,10 +5495,16 @@ function renderMovGrupoRow(m, tipo, tieneVinculo) {
   }
   const btn = tieneVinculo
     ? `<button class="btn-sm" style="align-self:flex-start;margin-top:2px" onclick="verVinculosMovimiento('${m.id}')">Ver / cambiar vínculo</button>` : "";
+  // Un 📎 por archivo, que lo abre directo: al armar el reclamo al seguro se revisan de a uno.
+  const clips = (m.adjuntos || []).map(a =>
+    `<a href="${esc(a.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${esc(a.nombre)}" style="text-decoration:none">📎</a>`).join(" ");
+  const sinComp = tipo === "EGRESO" && reintegroSinComprobante(m)
+    ? `<div style="font-size:11px;color:var(--text3)">sin comprobante</div>` : "";
   return `
     <div class="reint-grupo-mov">
       <div class="top"><span style="color:var(--text3)">${fechaD}</span><span class="${montoCls}">${fmt(montoVal)}</span></div>
-      <div>${esc(m.concepto)||"—"}</div>
+      <div>${esc(m.concepto)||"—"}${clips ? " " + clips : ""}</div>
+      ${sinComp}
       ${nota}
       ${btn}
     </div>`;

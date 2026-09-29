@@ -1926,6 +1926,42 @@ const rows3m = app.calcReintegrosPorJugador("3m").filter(r => r.pendiente > 0);
 check("en 3 meses no queda nada de mayo para atrás", rows3m.every(r => r.movs.filter(m => m.tipo === "EGRESO").every(m => m.fecha >= app.reintegroDesde3m())));
 app.reintegroAnio = "3m";
 
+// ══════════════════════════════════════════════════════════════
+seccion("48 · Comprobantes adjuntos");
+
+igual("una foto de celular vertical baja a 1600 de alto", app.adjDimensionesDestino(3000, 4000), { w: 1200, h: 1600 });
+igual("una horizontal, a 1600 de ancho",               app.adjDimensionesDestino(4032, 3024), { w: 1600, h: 1200 });
+igual("una chica no se agranda",                        app.adjDimensionesDestino(800, 600),   { w: 800,  h: 600 });
+igual("exactamente 1600 queda igual",                   app.adjDimensionesDestino(1600, 900),  { w: 1600, h: 900 });
+igual("sin dimensiones no revienta",                    app.adjDimensionesDestino(0, 0),       { w: 0,    h: 0 });
+
+igual("la foto re-codificada viaja como .jpg",      app.adjNombreSubida("IMG_2034.HEIC", "image/jpeg"), "IMG_2034.jpg");
+igual("el PDF conserva su extensión",               app.adjNombreSubida("orden medica.pdf", "application/pdf"), "orden medica.pdf");
+igual("sin nombre, 'comprobante'",                  app.adjNombreSubida("", "image/png"), "comprobante.png");
+igual("un nombre con puntos sólo pierde la última", app.adjNombreSubida("ticket.farmacia.png", "image/jpeg"), "ticket.farmacia.jpg");
+
+const gasto = { tipo: "EGRESO", seguroReintegro: 1, adjuntos: [] };
+check("gasto con reintegro sin archivos → aviso 'sin comprobante'", app.reintegroSinComprobante(gasto));
+check("con un adjunto ya no",        !app.reintegroSinComprobante({ ...gasto, adjuntos: [{ id: "f1" }] }));
+check("sin reintegro no se avisa",   !app.reintegroSinComprobante({ ...gasto, seguroReintegro: 0 }));
+check("un ingreso no se avisa",      !app.reintegroSinComprobante({ ...gasto, tipo: "INGRESO" }));
+check("un movimiento viejo sin el campo adjuntos se toma como sin comprobante",
+      app.reintegroSinComprobante({ tipo: "EGRESO", seguroReintegro: 1 }));
+
+igual("sincronizado y con conexión se puede adjuntar", app.adjMotivoNoDisponible({ id: "m1" }), null);
+check("pendiente de sincronizar no", /sincronizado/.test(app.adjMotivoNoDisponible({ id: "m1", _pending: true })));
+app.navigator.onLine = false;
+check("sin conexión no", /sincronizado/.test(app.adjMotivoNoDisponible({ id: "m1" })));
+app.navigator.onLine = true;
+
+// El detalle por jugador de Reintegros: 📎 que abre el archivo, y el aviso en el que no tiene.
+const filaCon = app.renderMovGrupoRow({ id: "g1", tipo: "EGRESO", fecha: "2026-08-14", egreso: 1000, seguroReintegro: 1, concepto: "RX",
+  adjuntos: [{ id: "f1", nombre: "rx.jpg", url: "https://drive.google.com/file/d/f1/view", mime: "image/jpeg" }] }, "EGRESO", false);
+check("el gasto con adjunto muestra el 📎 con el link", filaCon.includes("📎") && filaCon.includes("drive.google.com/file/d/f1"));
+check("y no el aviso", !filaCon.includes("sin comprobante"));
+const filaSin = app.renderMovGrupoRow({ id: "g2", tipo: "EGRESO", fecha: "2026-08-14", egreso: 1000, seguroReintegro: 1, concepto: "RX" }, "EGRESO", false);
+check("el que no tiene muestra 'sin comprobante'", filaSin.includes("sin comprobante") && !filaSin.includes("📎"));
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

@@ -88,12 +88,12 @@ function movRow(campos) {
     egreso: 7, ingreso: 8, montoFinal: 9, cuenta: 10, cuentaDestino: 11, modoPago: 12,
     jugadorCT: 13, adherente: 14, observacion: 15, comprobante: 16, seguroReintegro: 17,
     tipo: 18, timestamp: 19, partidoId: 20, eventoId: 21,
-    vinculos: 22, itemsDetalle: 23, jugadorId: 24, adherenteId: 25
+    vinculos: 22, itemsDetalle: 23, jugadorId: 24, adherenteId: 25, adjuntos: 26
   };
   for (const k of Object.keys(campos)) {
     if (ix[k] === undefined) throw new Error("Campo desconocido en movRow: " + k);
     const v = campos[k];
-    r[ix[k]] = (k === "vinculos" || k === "itemsDetalle") && typeof v !== "string" ? JSON.stringify(v) : v;
+    r[ix[k]] = (k === "vinculos" || k === "itemsDetalle" || k === "adjuntos") && typeof v !== "string" ? JSON.stringify(v) : v;
   }
   return r;
 }
@@ -126,7 +126,9 @@ module.exports = { SHEETS, Sheet, reset, hoja, filas, movRow, check, igual, secc
                    rubro: (cod) => RUBROS_MAP[String(cod)],
                    // Los datos del sitio público no pasan por handleAction (se sirven por doGet):
                    // se expone la función directamente, salteando el caché, que acá sólo estorbaría.
-                   datosPublicos: () => construirDatosPublicos_() };
+                   datosPublicos: () => construirDatosPublicos_(),
+                   // Se corre a mano desde el editor de Apps Script, no por handleAction.
+                   autorizarDrive: () => autorizarDrive() };
 
 // ── Ejemplo ejecutable: sanity check del ciclo de pagos ──────
 if (require.main === module) {

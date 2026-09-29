@@ -1962,6 +1962,24 @@ check("y no el aviso", !filaCon.includes("sin comprobante"));
 const filaSin = app.renderMovGrupoRow({ id: "g2", tipo: "EGRESO", fecha: "2026-08-14", egreso: 1000, seguroReintegro: 1, concepto: "RX" }, "EGRESO", false);
 check("el que no tiene muestra 'sin comprobante'", filaSin.includes("sin comprobante") && !filaSin.includes("📎"));
 
+// Alta desde el formulario: sólo el egreso del rubro 21 pregunta si se guarda sin adjunto.
+const Fprev = app.F;
+app.F = { ...app.buildDefaultF(), codRubro: "21", tipo: "EGRESO" };
+check("egreso 21 sin archivos → pregunta",            app.faltaAdjuntoGastoMedico([], false));
+check("con un archivo elegido no",                    !app.faltaAdjuntoGastoMedico([{ name: "rx.jpg" }], false));
+check("editando no (igual que el aviso del reintegro)", !app.faltaAdjuntoGastoMedico([], true));
+app.F.tipo = "INGRESO";
+check("un ingreso del 21 no",                         !app.faltaAdjuntoGastoMedico([], false));
+app.F = { ...app.buildDefaultF(), codRubro: "6", tipo: "EGRESO" };
+check("otro rubro no",                                !app.faltaAdjuntoGastoMedico([], false));
+app.F = { ...app.buildDefaultF(), codRubro: "21", tipo: "EGRESO" };
+app.adjFormArchivos = [{ name: "orden.pdf", type: "application/pdf", size: 20480 }];
+const campo = app.renderAdjFormField();
+check("el formulario muestra el botón y lo elegido", campo.includes("Adjuntar archivo") && campo.includes("orden.pdf") && campo.includes("20 KB"));
+app.resetF();
+igual("resetF descarta lo elegido", app.adjFormArchivos.length, 0);
+app.F = Fprev;
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

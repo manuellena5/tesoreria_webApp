@@ -1009,6 +1009,10 @@ let pagosJugadores  = [];
 
 let currentTab    = "nuevo";
 let editId        = null;
+// Archivos elegidos en el formulario de alta, todavía sin subir: se suben recién cuando el
+// movimiento ya existe en la hoja (ver adjuntos en saveMovimiento). File no es serializable, así
+// que viven fuera de F y se pierden si se recarga la página antes de guardar.
+let adjFormArchivos = [];
 let sharedMes     = nowMes();
 let entidadesTab  = "jugadores";
 let pagosJugTab   = "partido";
@@ -1344,6 +1348,7 @@ function resetF() {
   F.fecha  = savedFecha;
   F.cuenta = savedCuenta;
   editId = null;
+  adjFormArchivos = [];
 }
 
 function toast(msg, type = "ok") {
@@ -2376,6 +2381,8 @@ function renderNuevo() {
                oninput="F.comprobante=this.value">
       </div>` : ""}
 
+      ${!isAdj ? `<div class="field" id="f-adj-field">${renderAdjFormField()}</div>` : ""}
+
       <button class="btn-main ${editId?"editing":""}" id="btn-guardar-mov" onclick="saveMovimiento()">
         ${editId ? "💾 ACTUALIZAR" : "✓ GUARDAR"}
       </button>
@@ -2657,6 +2664,57 @@ function faltaMarcarReintegro() {
   return F.codRubro === "21" && F.tipo === "EGRESO" && !F.seguroReintegro;
 }
 
+// Gasto médico (21) dado de alta sin ningún archivo adjunto. Sólo el 21: es el único rubro donde
+// el comprobante hace falta después (el seguro no reintegra sin factura/orden). En los demás el
+// adjunto es opcional y preguntar sería ruido. Sólo altas, igual que faltaMarcarReintegro.
+function faltaAdjuntoGastoMedico(archivos, editando) {
+  return !editando && F.codRubro === "21" && F.tipo === "EGRESO" && !(archivos || []).length;
+}
+
+// ── Adjuntos elegidos en el formulario (antes de guardar) ──
+function renderAdjFormField() {
+  const offline = !navigator.onLine;
+  const prev    = editId ? movimientos.find(m => m.id === editId) : null;
+  const yaTiene = prev ? (prev.adjuntos || []).length : 0;
+  const items = adjFormArchivos.map((f, i) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.type === "application/pdf" ? "📄" : "🖼️"} ${esc(f.name)}</span>
+        <span style="color:var(--text3)">${Math.max(1, Math.round(f.size / 1024))} KB</span>
+        <button class="btn-sm danger" onclick="adjFormQuitar(${i})" title="Quitar">✕</button>
+      </div>`).join("");
+  return `
+        <label>Comprobantes adjuntos (foto o PDF)${F.codRubro === "21" && F.tipo === "EGRESO" ? " — lo pide el seguro" : " (opcional)"}</label>
+        ${yaTiene ? `<div class="note">Ya tiene ${yaTiene} adjunto${yaTiene !== 1 ? "s" : ""} (se ven en el detalle del movimiento)</div>` : ""}
+        ${items}
+        <input type="file" id="f-adj-input" accept="image/*,application/pdf" multiple style="display:none"
+               onchange="adjFormAgregar(Array.from(this.files)); this.value=''">
+        <button type="button" class="btn-secondary" style="width:100%" ${offline ? "disabled" : ""}
+                onclick="document.getElementById('f-adj-input').click()">📎 Adjuntar archivo</button>
+        ${offline ? `<div class="note">Sin conexión: se puede adjuntar cuando el movimiento esté sincronizado</div>`
+                  : adjFormArchivos.length ? `<div class="note">Se sube${adjFormArchivos.length !== 1 ? "n" : ""} al guardar el movimiento</div>` : ""}`;
+}
+
+function adjFormRefrescar() {
+  const el = document.getElementById("f-adj-field");
+  if (el) el.innerHTML = renderAdjFormField();
+}
+
+function adjFormAgregar(files) {
+  for (const f of files || []) {
+    const mime = String(f.type || "").toLowerCase();
+    if (mime !== "application/pdf" && !mime.startsWith("image/")) { toast(`"${f.name}" no es una foto ni un PDF`, "err"); continue; }
+    // Las fotos se comprimen al subir; un PDF va tal cual, así que el tope se puede chequear ya.
+    if (mime === "application/pdf" && f.size > ADJ_MAX_BYTES) { toast(`"${f.name}" pesa más de 5 MB`, "err"); continue; }
+    adjFormArchivos.push(f);
+  }
+  adjFormRefrescar();
+}
+
+function adjFormQuitar(i) {
+  adjFormArchivos.splice(i, 1);
+  adjFormRefrescar();
+}
+
 function selectRubroItem(item, input, drop, blurAfter) {
   if (!item) return;
   const firmaAntes = firmaCamposDelRubro();
@@ -2826,6 +2884,15 @@ async function saveMovimiento() {
                  "¿Guardar igual?")) return;
   }
 
+  // Se copian ahora: resetF() los vacía antes de que termine el guardado.
+  const archivosPend = F.tipo === "AJUSTE" ? [] : adjFormArchivos.slice();
+  if (faltaAdjuntoGastoMedico(archivosPend, !!editId)) {
+    if (!confirm("No adjuntaste ningún comprobante (factura, orden o receta) a este gasto médico.\n\n" +
+                 "Para reclamar el reintegro al seguro vas a necesitarlo. Podés cancelar y tocar " +
+                 "\"📎 Adjuntar archivo\", o adjuntarlo más tarde desde el detalle del movimiento.\n\n" +
+                 "¿Guardar igual?")) return;
+  }
+
   const wasEdit = !!editId;
 
   // Las filas 2..N del reparto: clones del movimiento principal que sólo difieren en monto, cuenta
@@ -2906,6 +2973,9 @@ async function saveMovimiento() {
     renderNuevo();
     setSaveBtnState("saved");
     showMovSavedModal(mov, wasEdit, movsExtra);
+    // Los archivos elegidos en el formulario se suben ahora que el movimiento tiene ID en la hoja.
+    // El progreso ("Subiendo… 1 de 2") y el resultado se ven en la sección Adjuntos del modal.
+    if (archivosPend.length) adjSubir(mov.id, archivosPend);
   } catch(e) {
     hideOverlay();
     if (isNetworkError(e)) {
@@ -2935,6 +3005,8 @@ async function saveMovimiento() {
       renderOfflineBanner();
       setSaveBtnState("saved");
       toast("Sin conexión — guardado localmente, se sincroniza al reconectar", "ok");
+      // Un archivo no puede esperar en la cola offline (localStorage): se avisa en vez de perderlo callado.
+      if (archivosPend.length) toast(`Los ${archivosPend.length} adjunto(s) no se subieron: adjuntalos desde el detalle cuando el movimiento esté sincronizado`, "err");
     } else {
       setSaveBtnState("error");
       toast("Error: " + e.message, "err");
@@ -3460,7 +3532,8 @@ function adjBlobABase64(blob) {
 
 async function adjSubir(movId, files) {
   const lista = Array.from(files || []);
-  if (!lista.length || adjSubiendo) return;
+  if (!lista.length) return;
+  if (adjSubiendo) { toast("Hay otra subida en curso — probá de nuevo cuando termine", "err"); return; }
   const mov = adjMovPorId(movId);
   const motivo = adjMotivoNoDisponible(mov);
   if (motivo) { toast(motivo, "err"); return; }
@@ -3731,6 +3804,7 @@ async function deleteMovimiento(id) {
 function editMovimiento(id) {
   const m = movimientos.find(x => x.id === id);
   if (!m) return;
+  adjFormArchivos = [];   // lo elegido para otro movimiento no se tiene que colar en éste
   F.id          = m.id;
   F.tipo        = m.tipo;
   F.fecha       = m.fecha;

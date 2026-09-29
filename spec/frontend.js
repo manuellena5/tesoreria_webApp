@@ -1980,6 +1980,82 @@ app.resetF();
 igual("resetF descarta lo elegido", app.adjFormArchivos.length, 0);
 app.F = Fprev;
 
+// ══════════════════════════════════════════════════════════════
+seccion("49 · Movimientos: filtro por columna estilo Excel");
+
+app.sharedMes = "2026-09";
+app.listFiltros = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", evento: "", search: "" };
+app.movColFiltros = {};
+app.movimientos = [
+  { id: "c1", tipo: "INGRESO", fecha: "2026-09-01", mes: "202609", rubro: "ENTRADAS", categoria: "Cancha", concepto: "Entradas", ingreso: 1000, egreso: 0, montoFinal: 1000, cuenta: "EFECTIVO" },
+  { id: "c2", tipo: "EGRESO",  fecha: "2026-09-02", mes: "202609", rubro: "ARBITROS", categoria: "Cancha", concepto: "Terna",    ingreso: 0, egreso: 400, montoFinal: 400,  cuenta: "EFECTIVO" },
+  { id: "c3", tipo: "EGRESO",  fecha: "2026-09-02", mes: "202609", rubro: "ARBITROS", categoria: "Cancha", concepto: "Terna 2",  ingreso: 0, egreso: 400, montoFinal: 400,  cuenta: "MACRO", jugadorCT: "PEREZ" },
+  { id: "c4", tipo: "INTERNO", fecha: "2026-09-03", mes: "202609", rubro: "TRANSFERENCIA", categoria: "Internos", concepto: "Depósito", ingreso: 0, egreso: 500, montoFinal: 500, cuenta: "EFECTIVO", cuentaDestino: "MACRO" },
+  { id: "c5", tipo: "INGRESO", fecha: "2026-08-30", mes: "202608", rubro: "ENTRADAS", categoria: "Cancha", concepto: "Otro mes", ingreso: 9, egreso: 0, montoFinal: 9, cuenta: "EFECTIVO" }
+];
+const ids2 = () => app.getMovimientosFiltrados().map(m => m.id).sort();
+igual("sin filtros, todo el mes", ids2(), ["c1", "c2", "c3", "c4"]);
+
+igual("valores distintos de Rubro con su cantidad",
+      app.movColValoresDistintos(app.getMovimientosFiltrados("rubro"), "rubro").map(v => v.etiqueta + ":" + v.cantidad),
+      ["ARBITROS:2", "ENTRADAS:1", "TRANSFERENCIA:1"]);
+igual("la cuenta de un interno es 'ORIGEN → DESTINO', como en la celda",
+      app.movColValoresDistintos(app.movimientos.slice(0, 4), "cuenta").map(v => v.valor), ["EFECTIVO", "EFECTIVO → MACRO", "MACRO"]);
+igual("montos con signo y ordenados de menor a mayor",
+      app.movColValoresDistintos(app.movimientos.slice(0, 4), "monto").map(v => v.etiqueta), [-500, -400, 1000].map(n => (n < 0 ? "-" : "+") + app.fmt(Math.abs(n))));
+igual("(Vacías) va al final", app.movColValoresDistintos(app.movimientos.slice(0, 4), "entidad").map(v => v.etiqueta), ["PEREZ", "(Vacías)"]);
+
+app.movColFiltros = { rubro: new Set(["ARBITROS"]) };
+igual("filtrar un rubro deja sólo esos", ids2(), ["c2", "c3"]);
+check("y cuenta como filtro activo (la nota de KPIs lo muestra)", app.listFiltrosActive());
+app.movColFiltros.cuenta = new Set(["MACRO"]);
+igual("dos columnas se combinan (Y)", ids2(), ["c3"]);
+igual("los valores de Cuenta salen de lo que dejan las OTRAS columnas, no de sí misma",
+      app.movColValoresDistintos(app.getMovimientosFiltrados("cuenta"), "cuenta").map(v => v.valor), ["EFECTIVO", "MACRO"]);
+app.movColFiltros = { entidad: new Set([""]) };
+igual("se puede filtrar por (Vacías)", ids2(), ["c1", "c2", "c4"]);
+
+app.movColFiltros = { fecha: new Set(["2026-09-02"]), rubro: new Set(["ARBITROS"]) };
+app.changeMes(-1);
+check("cambiar de mes descarta el filtro de fecha", !("fecha" in app.movColFiltros));
+check("pero conserva el de rubro", "rubro" in app.movColFiltros);
+const renderMovPrev = app.renderMovimientos;
+app.renderMovimientos = () => {};   // sin DOM en las pruebas
+app.clearListFilters();
+app.renderMovimientos = renderMovPrev;
+igual("'Ver mes completo' limpia también los de columna", Object.keys(app.movColFiltros), []);
+app.sharedMes = "2026-09";
+
+seccion("50 · Movimientos: el texto de la tabla también filtra los KPIs");
+app.movColFiltros = {};
+app.detTablaCols.movlist = app.MOV_TABLE_COLS;
+app.detTablaGetState("movlist").filtro = "terna";
+app.movVista = "tabla";
+igual("en vista tabla, el texto recorta lo que suman los KPIs", ids2(), ["c2", "c3"]);
+igual("sinTexto devuelve la base que recibe la tabla (para poder borrar letras)",
+      app.getMovimientosFiltrados(undefined, true).map(m => m.id).sort(), ["c1", "c2", "c3", "c4"]);
+check("cuenta como filtro activo", app.listFiltrosActive());
+app.detTablaGetState("movlist").filtro = "02/09/2026";
+igual("busca en lo que muestra la celda (la fecha como dd/mm/aaaa)", ids2(), ["c2", "c3"]);
+app.detTablaGetState("movlist").filtro = "efectivo → macro";
+igual("y en la cuenta de un interno", ids2(), ["c4"]);
+app.detTablaGetState("movlist").filtro = "400";
+igual("no busca en el monto (igual que la tabla)", ids2(), []);
+app.detTablaGetState("movlist").filtro = "perez";
+app.detTablaGetHidden("movlist").add("entidad");
+igual("ni en una columna oculta", ids2(), []);
+app.detTablaGetHidden("movlist").delete("entidad");
+igual("al volver a mostrarla, sí", ids2(), ["c3"]);
+app.movColFiltros = { cuenta: new Set(["MACRO"]) };
+igual("se combina con los filtros de columna", ids2(), ["c3"]);
+app.movVista = "tarjetas";
+check("en tarjetas el campo no se ve, así que no filtra", ids2().length === 1 && !app.movTextoTablaActivo());
+app.movVista = "tabla";
+app.renderMovimientos = () => {};
+app.clearListFilters();
+app.renderMovimientos = renderMovPrev;
+igual("'Ver mes completo' borra también el texto", app.detTablaGetState("movlist").filtro, "");
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

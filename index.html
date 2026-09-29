@@ -311,6 +311,14 @@ textarea.inp { resize:none; }
 .jug-detalle-table th.dt-sortable { cursor:pointer; user-select:none; }
 .jug-detalle-table th.dt-sortable:hover { color:var(--text); }
 .jug-detalle-table th .dt-arrow { color:var(--accent); margin-left:2px; }
+/* Filtro por columna estilo Excel (tabla de Movimientos) */
+.dt-colfilt { border:none; background:none; color:var(--text3); font-size:10px; line-height:1; padding:2px 4px; margin-left:3px; cursor:pointer; border-radius:3px; }
+.dt-colfilt:hover { color:var(--text); background:var(--bg3); }
+.dt-colfilt.activo { color:#fff; background:var(--accent); }
+.mcf-item { display:flex; align-items:center; gap:8px; padding:8px 2px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--border); }
+.mcf-item input { width:16px; height:16px; accent-color:var(--accent); flex-shrink:0; }
+.mcf-cant { margin-left:auto; color:var(--text3); font-size:11px; }
+.mcf-chip { display:inline-flex; align-items:center; gap:4px; margin:2px 4px 0 0; padding:2px 8px; border-radius:10px; background:var(--accent); color:#fff; font-size:11px; cursor:pointer; }
 /* Headers ordenables de tablas de resumen (ej. Resumen > Jugadores) — misma convención que .dt-sortable */
 th.rt-sortable { cursor:pointer; user-select:none; }
 th.rt-sortable:hover { color:var(--text); }
@@ -1028,6 +1036,10 @@ let pjExcluirMensuales = false; // filtro de Transferencias: esconder a los que 
 let pjLiquidadosSesion = new Set();
 let pjMesSel      = null; // null = todavía no inicializado (se precarga con el mes actual); "" = "Sin mes asignado"
 let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", evento: "", search: "" };
+// Filtros por columna de la tabla de Movimientos, al estilo Excel: colKey → Set de valores que se
+// muestran (ver movColValor). Una columna ausente no filtra. Viven al lado de listFiltros y se
+// aplican en getMovimientosFiltrados, así los KPIs, el contador y el Excel exportado los respetan.
+let movColFiltros = {};
 let F             = buildDefaultF();
 let resumenSubTab     = "mensual";
 let catResExpandido   = new Set();
@@ -3250,50 +3262,238 @@ function setMovVista(v) {
 const MOV_TABLE_COLS = [
   { key:"acciones",  label:"",                  sortable:false, pinned:true,
     render: it => `<button class="btn-sm accent dt-edit-btn" onclick="openMovModal('${escJs(it.id)}')">✏️</button>` },
-  { key:"fecha",     label:"Fecha",             sortable:true },
-  { key:"concepto",  label:"Concepto",          sortable:true, cls:"jd-concepto" },
-  { key:"monto",     label:"Monto",             sortable:true },
-  { key:"rubro",     label:"Rubro",             sortable:true },
-  { key:"categoria", label:"Categoría",         sortable:true },
-  { key:"cuenta",    label:"Cuenta",            sortable:true },
-  { key:"entidad",   label:"Jugador/Adherente", sortable:true },
-  { key:"partido",   label:"Partido",           sortable:true },
+  { key:"fecha",     label:"Fecha",             sortable:true, headExtra: () => movColFiltroBtn("fecha") },
+  { key:"concepto",  label:"Concepto",          sortable:true, cls:"jd-concepto", headExtra: () => movColFiltroBtn("concepto") },
+  { key:"monto",     label:"Monto",             sortable:true, headExtra: () => movColFiltroBtn("monto") },
+  { key:"rubro",     label:"Rubro",             sortable:true, headExtra: () => movColFiltroBtn("rubro") },
+  { key:"categoria", label:"Categoría",         sortable:true, headExtra: () => movColFiltroBtn("categoria") },
+  { key:"cuenta",    label:"Cuenta",            sortable:true, headExtra: () => movColFiltroBtn("cuenta") },
+  { key:"entidad",   label:"Jugador/Adherente", sortable:true, headExtra: () => movColFiltroBtn("entidad") },
+  { key:"partido",   label:"Partido",           sortable:true, headExtra: () => movColFiltroBtn("partido") },
 ];
+
+// Monto con signo tal como lo muestra la tabla. INTERNO: sin filtro de cuenta (o filtrando por la
+// cuenta de origen) se ve como egreso (sale de esa cuenta); si se filtra justo por la cuenta
+// DESTINO, es un ingreso real para esa cuenta y debe verse en verde, no en rojo.
+function movMontoTabla(m, cuentaFiltro) {
+  return m.tipo==="INGRESO" ? m.ingreso
+       : m.tipo==="EGRESO"  ? -m.egreso
+       : m.tipo==="AJUSTE"  ? m.montoFinal
+       : (cuentaFiltro && m.cuentaDestino === cuentaFiltro) ? m.montoFinal : -m.montoFinal;
+}
+
+/** Valor de un movimiento en una columna de la tabla, como string comparable. Es la clave del
+ *  filtro por columna: tiene que coincidir con lo que se ve en la celda (por eso la cuenta de un
+ *  INTERNO es "ORIGEN → DESTINO" y la entidad es jugador o adherente, igual que renderMovTabla). */
+function movColValor(m, col) {
+  switch (col) {
+    case "fecha":     return m.fecha || "";
+    case "concepto":  return (m.concepto || "").trim();
+    case "monto":     return String(movMontoTabla(m, listFiltros.cuenta) || 0);
+    case "rubro":     return m.rubro || "";
+    case "categoria": return m.categoria || "";
+    case "cuenta":    return m.tipo==="INTERNO" ? `${m.cuenta||""} → ${m.cuentaDestino||""}` : (m.cuenta||"");
+    case "entidad":   return m.jugadorCT || m.adherente || "";
+    case "partido":   return m.partidoId ? partidoLabel(m.partidoId) : "";
+  }
+  return "";
+}
+
+/** Cómo se muestra un valor en la lista del filtro. */
+function movColEtiqueta(col, v) {
+  if (v === "") return "(Vacías)";
+  if (col === "fecha") return v.slice(8,10) + "/" + v.slice(5,7) + "/" + v.slice(0,4);
+  if (col === "monto") { const n = Number(v); return (n < 0 ? "-" : "+") + fmt(Math.abs(n)); }
+  return v;
+}
+
+/** ¿El movimiento pasa los filtros por columna? `exceptoCol` se saltea: al abrir el filtro de una
+ *  columna, sus valores salen de lo que dejan pasar las OTRAS (como Excel), no de sí misma. */
+function movColFiltrosPasa(m, exceptoCol) {
+  for (const col in movColFiltros) {
+    if (col === exceptoCol) continue;
+    if (!movColFiltros[col].has(movColValor(m, col))) return false;
+  }
+  return true;
+}
+
+/** Valores distintos de una columna con su cantidad de movimientos, ordenados como la columna. */
+function movColValoresDistintos(movs, col) {
+  const cuenta = new Map();
+  for (const m of movs) { const v = movColValor(m, col); cuenta.set(v, (cuenta.get(v) || 0) + 1); }
+  const vals = [...cuenta.keys()];
+  vals.sort((a, b) => {
+    if (a === "" || b === "") return a === "" ? 1 : -1;          // (Vacías) al final, como Excel
+    if (col === "monto") return Number(a) - Number(b);
+    if (col === "fecha") return a.localeCompare(b);
+    return normStr(a).localeCompare(normStr(b));
+  });
+  return vals.map(v => ({ valor: v, etiqueta: movColEtiqueta(col, v), cantidad: cuenta.get(v) }));
+}
 
 function renderMovTabla(movMes) {
   const cuentaFiltro = listFiltros.cuenta;
-  const items = movMes.map(m => {
-    // INTERNO: sin filtro de cuenta (o filtrando por la cuenta de origen) se ve como
-    // egreso (sale de esa cuenta); si se filtra justo por la cuenta DESTINO, es un
-    // ingreso real para esa cuenta y debe verse en verde, no en rojo.
-    const monto = m.tipo==="INGRESO" ? m.ingreso
-                : m.tipo==="EGRESO"  ? -m.egreso
-                : m.tipo==="AJUSTE"  ? m.montoFinal
-                : (cuentaFiltro && m.cuentaDestino === cuentaFiltro) ? m.montoFinal : -m.montoFinal;
-    return {
-      id: m.id,
-      fechaRaw: m.fecha || "",
-      // Desempate de la columna Fecha: orden de carga (ver detTablaRenderInner)
-      cargaMs: movTsMs(m),
-      cargaOrden: m.orden || 0,
-      fechaD: m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "",
-      // 📎 al final y no al principio: así no altera el orden alfabético de la columna.
-      concepto: (m.concepto || "") + ((m.adjuntos||[]).length ? " 📎" : ""),
-      monto,
-      rubro: m.rubro || "",
-      categoria: m.categoria || "",
-      cuenta: m.tipo==="INTERNO" ? `${m.cuenta||""} → ${m.cuentaDestino||""}` : (m.cuenta||""),
-      entidad: m.jugadorCT || m.adherente || "",
-      partido: m.partidoId ? partidoLabel(m.partidoId) : "",
-    };
-  });
-  return renderDetTabla("movlist", items, MOV_TABLE_COLS);
+  return renderDetTabla("movlist", movMes.map(m => movItemTabla(m, cuentaFiltro)), MOV_TABLE_COLS);
 }
 
-// Movimientos del mes seleccionado con todos los filtros de listFiltros aplicados
-// (usado tanto por renderMovList como por exportExcelFiltrado, para no duplicar la lógica)
-function getMovimientosFiltrados() {
+/** Fila de la tabla de Movimientos. Aparte de renderMovTabla porque el filtro de texto de la tabla
+ *  también se evalúa en getMovimientosFiltrados (para los KPIs) y tiene que mirar la misma fila. */
+function movItemTabla(m, cuentaFiltro) {
+  const monto = movMontoTabla(m, cuentaFiltro);
+  return {
+    id: m.id,
+    fechaRaw: m.fecha || "",
+    // Desempate de la columna Fecha: orden de carga (ver detTablaRenderInner)
+    cargaMs: movTsMs(m),
+    cargaOrden: m.orden || 0,
+    fechaD: m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "",
+    // 📎 al final y no al principio: así no altera el orden alfabético de la columna.
+    concepto: (m.concepto || "") + ((m.adjuntos||[]).length ? " 📎" : ""),
+    monto,
+    rubro: m.rubro || "",
+    categoria: m.categoria || "",
+    cuenta: m.tipo==="INTERNO" ? `${m.cuenta||""} → ${m.cuentaDestino||""}` : (m.cuenta||""),
+    entidad: m.jugadorCT || m.adherente || "",
+    partido: m.partidoId ? partidoLabel(m.partidoId) : "",
+  };
+}
+
+/** ¿Hay texto en el "Filtrar…" de la tabla de Movimientos? Sólo cuenta en la vista tabla: en la de
+ *  tarjetas ese campo no se ve, y un filtro invisible dejaría KPIs que nadie puede explicar. */
+function movTextoTablaActivo() {
+  return movVista === "tabla" && !!normStr(detTablaGetState("movlist").filtro);
+}
+
+// ── Filtro por columna, estilo Excel ─────────────────────────
+// Va en un modal (y no en un desplegable pegado al encabezado) porque la tabla scrollea en
+// horizontal y en el celular un desplegable quedaría cortado o fuera de la pantalla.
+let movColFiltroEd = null; // { col, valores:[{valor, etiqueta, cantidad}], sel:Set, q }
+
+function movColLabel(col) {
+  const c = MOV_TABLE_COLS.find(x => x.key === col);
+  return c ? c.label : col;
+}
+
+function movColFiltroBtn(col) {
+  const activo = !!movColFiltros[col];
+  return `<button class="dt-colfilt${activo ? " activo" : ""}" title="${activo ? "Filtro activo — tocá para cambiarlo" : "Filtrar esta columna"}"
+            onclick="event.stopPropagation(); movColFiltroAbrir('${col}')" onmousedown="event.stopPropagation()">${activo ? "▼" : "▾"}</button>`;
+}
+
+function movColFiltroAbrir(col) {
+  const valores = movColValoresDistintos(getMovimientosFiltrados(col), col);
+  const actual  = movColFiltros[col];
+  movColFiltroEd = { col, valores, q: "", sel: new Set(valores.map(v => v.valor).filter(v => !actual || actual.has(v))) };
+  const st = detTablaGetState("movlist");
+  const orden = st.sortCol === col ? st.sortDir : 0;
+  const [asc, desc] = col === "monto" ? ["Menor a mayor", "Mayor a menor"]
+                    : col === "fecha" ? ["Más viejo primero", "Más nuevo primero"] : ["A → Z", "Z → A"];
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Filtrar: ${esc(movColLabel(col))}</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <button class="pill sm${orden === 1 ? " active" : ""}"  onclick="movColFiltroOrdenar(1)">↑ ${asc}</button>
+          <button class="pill sm${orden === -1 ? " active" : ""}" onclick="movColFiltroOrdenar(-1)">↓ ${desc}</button>
+        </div>
+        <input class="inp" type="search" placeholder="Buscar…" oninput="movColFiltroBuscar(this.value)">
+        <div id="mcf-lista" style="max-height:50vh;overflow:auto;margin-top:6px">${movColFiltroListaHtml()}</div>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="movColFiltroQuitar()">Quitar filtro</button>
+          <button class="btn-main" style="flex:1" onclick="movColFiltroAplicar()">Aplicar</button>
+        </div>
+      </div>
+    </div>`;
+  movColFiltroSyncTodo();
+}
+
+function movColFiltroVisibles() {
+  const ed = movColFiltroEd;
+  const q = normStr(ed.q);
+  return ed.valores.map((v, i) => ({ ...v, i })).filter(v => !q || normStr(v.etiqueta).includes(q));
+}
+
+function movColFiltroListaHtml() {
+  const ed = movColFiltroEd;
+  const vis = movColFiltroVisibles();
+  if (!vis.length) return `<p class="note" style="padding:8px 2px">Sin valores${ed.q ? " para esa búsqueda" : ""}</p>`;
+  return `
+    <label class="mcf-item" style="font-weight:600">
+      <input type="checkbox" id="mcf-todo" onchange="movColFiltroTodo(this.checked)"> (Seleccionar todo)
+    </label>` + vis.map(v => `
+    <label class="mcf-item">
+      <input type="checkbox" ${ed.sel.has(v.valor) ? "checked" : ""} onchange="movColFiltroToggle(${v.i}, this.checked)">
+      <span style="min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(v.etiqueta)}</span>
+      <span class="mcf-cant">${v.cantidad}</span>
+    </label>`).join("");
+}
+
+/** "(Seleccionar todo)" tildado si están todos los visibles, a medias si algunos. */
+function movColFiltroSyncTodo() {
+  const cb = document.getElementById("mcf-todo");
+  if (!cb) return;
+  const vis = movColFiltroVisibles();
+  const n = vis.filter(v => movColFiltroEd.sel.has(v.valor)).length;
+  cb.checked = n === vis.length;
+  cb.indeterminate = n > 0 && n < vis.length;
+}
+
+function movColFiltroToggle(i, on) {
+  const v = movColFiltroEd.valores[i].valor;
+  if (on) movColFiltroEd.sel.add(v); else movColFiltroEd.sel.delete(v);
+  movColFiltroSyncTodo();
+}
+
+// Como en Excel: con una búsqueda escrita, "Seleccionar todo" actúa sólo sobre lo que se ve.
+function movColFiltroTodo(on) {
+  for (const v of movColFiltroVisibles()) { if (on) movColFiltroEd.sel.add(v.valor); else movColFiltroEd.sel.delete(v.valor); }
+  document.getElementById("mcf-lista").innerHTML = movColFiltroListaHtml();
+  movColFiltroSyncTodo();
+}
+
+function movColFiltroBuscar(q) {
+  movColFiltroEd.q = q;
+  document.getElementById("mcf-lista").innerHTML = movColFiltroListaHtml();
+  movColFiltroSyncTodo();
+}
+
+function movColFiltroOrdenar(dir) {
+  const st = detTablaGetState("movlist");
+  st.sortCol = movColFiltroEd.col; st.sortDir = dir;
+  movColFiltroAplicar();
+}
+
+function movColFiltroAplicar() {
+  const { col, valores, sel } = movColFiltroEd;
+  if (!sel.size) { toast("Elegí al menos un valor, o tocá \"Quitar filtro\"", "err"); return; }
+  // Todo tildado = sin filtro. Guardarlo como Set completo escondería los valores que aparezcan
+  // después (un movimiento nuevo con otro rubro no se vería hasta limpiar el filtro).
+  if (sel.size === valores.length) delete movColFiltros[col];
+  else movColFiltros[col] = new Set(sel);
+  document.getElementById("modal-root").innerHTML = "";
+  renderMovList();
+}
+
+function movColFiltroQuitar() {
+  delete movColFiltros[movColFiltroEd.col];
+  document.getElementById("modal-root").innerHTML = "";
+  renderMovList();
+}
+
+function movColFiltroQuitarCol(col) {
+  delete movColFiltros[col];
+  renderMovList();
+}
+
+// Movimientos del mes seleccionado con todos los filtros de listFiltros y de columna aplicados
+// (usado tanto por renderMovList como por exportExcelFiltrado, para no duplicar la lógica).
+// `exceptoCol` deja afuera el filtro de esa columna (ver movColFiltrosPasa). `sinTexto` deja afuera
+// el "Filtrar…" de la tabla: la tabla lo aplica ella misma sobre sus filas, y si se las pasara ya
+// filtradas, borrar letras del campo no haría reaparecer nada.
+function getMovimientosFiltrados(exceptoCol, sinTexto) {
   const jugExpLista = gruposQueContienen(listFiltros.jugadorCT);
+  const conTexto = !sinTexto && movTextoTablaActivo();
   return movimientos
     .filter(m => mesFromRecord(m) === sharedMes)
     .filter(m => !listFiltros.rubro  || normStr(m.rubro).includes(normStr(listFiltros.rubro)))
@@ -3315,17 +3515,60 @@ function getMovimientosFiltrados() {
     .filter(m => {
       const q = normStr(listFiltros.search);
       return !q || normStr(m.concepto).includes(q) || normStr(m.observacion).includes(q);
-    });
+    })
+    .filter(m => movColFiltrosPasa(m, exceptoCol))
+    .filter(m => !conTexto || detTablaPasaTexto("movlist", movItemTabla(m, listFiltros.cuenta)));
 }
 
 function listFiltrosActive() {
   return !!(listFiltros.rubro || listFiltros.cat || listFiltros.cuenta || listFiltros.tipo ||
-    listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.evento || listFiltros.search);
+    listFiltros.adherente || listFiltros.jugadorCT || listFiltros.partido || listFiltros.evento || listFiltros.search ||
+    Object.keys(movColFiltros).length || movTextoTablaActivo());
+}
+
+function movTextoTablaQuitar() {
+  detTablaGetState("movlist").filtro = "";
+  renderMovList();
 }
 
 function renderMovList() {
   const movMes = getMovimientosFiltrados();
+  renderMovKpis(movMes);
 
+  // Orden, aplicado después de filtrar. Por fecha se desempata por orden de carga
+  // (ver cmpMovFecha), así los movimientos del mismo día quedan como se ingresaron.
+  const ordenar = lista => lista.sort((a,b) => {
+    if (movOrden === "fecha_asc")  return  cmpMovFecha(a,b);
+    if (movOrden === "monto_desc") return Math.abs(b.montoFinal) - Math.abs(a.montoFinal);
+    if (movOrden === "monto_asc")  return Math.abs(a.montoFinal) - Math.abs(b.montoFinal);
+    return -cmpMovFecha(a,b); // fecha_desc (default)
+  });
+  ordenar(movMes);
+
+  const el = document.getElementById("mov-list");
+  if (!el) return;
+
+  if (movVista === "tabla") {
+    // La tabla recibe las filas SIN su filtro de texto (lo aplica ella). También decide el vacío con
+    // esa lista: si un texto no encuentra nada, la tabla —y el campo para borrarlo— tiene que seguir.
+    const base = movTextoTablaActivo() ? ordenar(getMovimientosFiltrados(undefined, true)) : movMes;
+    el.innerHTML = base.length
+      ? `<div class="mov-table-breakout">${renderMovTabla(base)}</div>`
+      : `<div class="empty"><div class="ico">📋</div><p>Sin movimientos${listFiltros.search ? " para esa búsqueda" : " en este mes"}</p></div>`;
+    return;
+  }
+
+  if (!movMes.length) {
+    el.innerHTML = `<div class="empty"><div class="ico">📋</div><p>Sin movimientos${listFiltros.search ? " para esa búsqueda" : " en este mes"}</p></div>`;
+    return;
+  }
+  renderMovCards(el, movMes);
+}
+
+/** KPIs, nota de filtros, contador y botón de exportar, sobre los movimientos ya filtrados. Va
+ *  aparte de la lista para que el "Filtrar…" de la tabla los actualice sin volver a dibujar la
+ *  tabla: eso reemplazaría el campo donde se está escribiendo y en el celular cerraría el teclado. */
+function renderMovKpis(movMes) {
   // KPIs sobre el subtotal filtrado (igual al total del mes cuando no hay filtros extra)
   // Nota: las transferencias INTERNAS no suman al total general del club (no
   // entra ni sale plata, sólo cambia de cuenta), pero cuando el usuario filtra
@@ -3365,37 +3608,25 @@ function renderMovList() {
     const notaCuenta = cuentaFiltro
       ? ` · Incluye transferencias internas hacia/desde ${esc(cuentaFiltro)}`
       : "";
+    // Los filtros de columna se nombran uno por uno: en la vista de tarjetas no hay encabezados
+    // donde verlos, y un subtotal filtrado sin decir por qué confunde más de lo que ayuda.
+    const textoTabla = detTablaGetState("movlist").filtro;
+    const chipsCol = Object.keys(movColFiltros).map(col =>
+      `<span class="mcf-chip" title="Quitar este filtro" onclick="movColFiltroQuitarCol('${col}')">${esc(movColLabel(col))}: ${movColFiltros[col].size} ✕</span>`).join("") +
+      (movTextoTablaActivo() ? `<span class="mcf-chip" title="Quitar este filtro" onclick="movTextoTablaQuitar()">Texto: “${esc(textoTabla.trim())}” ✕</span>` : "");
     noteEl.innerHTML = filtersActive
-      ? `Mostrando subtotal filtrado${notaCuenta} · <a href="#" onclick="clearListFilters();return false;" style="color:var(--accent)">Ver mes completo</a>`
+      ? `Mostrando subtotal filtrado${notaCuenta} · <a href="#" onclick="clearListFilters();return false;" style="color:var(--accent)">Ver mes completo</a>` +
+        (chipsCol ? `<div>${chipsCol}</div>` : "")
       : "";
   }
   const exportBtn = document.getElementById("mov-export-btn");
   if (exportBtn) exportBtn.innerHTML = `📥 Exportar ${mesLabel(sharedMes)}${filtersActive ? ' (filtrado)' : ''} a Excel`;
 
-  // Orden, aplicado después de filtrar. Por fecha se desempata por orden de carga
-  // (ver cmpMovFecha), así los movimientos del mismo día quedan como se ingresaron.
-  movMes.sort((a,b) => {
-    if (movOrden === "fecha_asc")  return  cmpMovFecha(a,b);
-    if (movOrden === "monto_desc") return Math.abs(b.montoFinal) - Math.abs(a.montoFinal);
-    if (movOrden === "monto_asc")  return Math.abs(a.montoFinal) - Math.abs(b.montoFinal);
-    return -cmpMovFecha(a,b); // fecha_desc (default)
-  });
-
   const cnt = document.getElementById("mov-count");
   if (cnt) cnt.textContent = movMes.length + " movimiento" + (movMes.length!==1?"s":"");
+}
 
-  const el = document.getElementById("mov-list");
-  if (!el) return;
-  if (!movMes.length) {
-    el.innerHTML = `<div class="empty"><div class="ico">📋</div><p>Sin movimientos${listFiltros.search ? " para esa búsqueda" : " en este mes"}</p></div>`;
-    return;
-  }
-
-  if (movVista === "tabla") {
-    el.innerHTML = `<div class="mov-table-breakout">${renderMovTabla(movMes)}</div>`;
-    return;
-  }
-
+function renderMovCards(el, movMes) {
   el.innerHTML = movMes.map(m => {
     const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : m.tipo==="AJUSTE" ? "adj" : "int";
     const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
@@ -3431,10 +3662,15 @@ function setListFilter(key, val) {
 }
 function clearListFilters() {
   listFiltros = { rubro: "", cat:"", cuenta:"", tipo:"", adherente:"", jugadorCT:"", partido:"", evento:"", search:"" };
+  movColFiltros = {};
+  detTablaGetState("movlist").filtro = "";
   renderMovimientos();
 }
 function changeMes(delta) {
   sharedMes = delta < 0 ? prevMes(sharedMes) : nextMes(sharedMes);
+  // Las fechas elegidas son del mes que se dejó: arrastrarlas dejaría el mes nuevo vacío. Rubro,
+  // cuenta, etc. sí se conservan — "ver MACRO mes por mes" es un uso normal.
+  delete movColFiltros.fecha;
   if (currentTab === "movimientos") renderMovimientos();
   else if (currentTab === "resumen") {
     catResExpandido.clear();
@@ -6649,6 +6885,8 @@ function dtColToggleVisible(key, colKey) {
   if (bar) bar.innerHTML = dtColBarInner(key);
   const el = document.getElementById(`dt-inner-${key}`);
   if (el) el.innerHTML = detTablaRenderInner(key);
+  // El texto busca sólo en columnas visibles: ocultar una puede cambiar qué filas quedan.
+  if (key === "movlist") renderMovKpis(getMovimientosFiltrados());
 }
 
 function dtColBarInner(key) {
@@ -6666,6 +6904,19 @@ function detTablaSetFiltro(key, val) {
   detTablaGetState(key).filtro = val;
   const el = document.getElementById(`dt-inner-${key}`);
   if (el) el.innerHTML = detTablaRenderInner(key);
+  // En Movimientos el texto también recorta los KPIs. Se repintan sólo ellos (no renderMovList):
+  // redibujar la tabla reemplazaría este mismo campo mientras se escribe.
+  if (key === "movlist") renderMovKpis(getMovimientosFiltrados());
+}
+
+/** ¿La fila pasa el filtro de texto de la tabla? Busca en las columnas visibles, salvo el monto y
+ *  las de botones. Separada de detTablaRenderInner para que getMovimientosFiltrados use la misma regla. */
+function detTablaPasaTexto(key, it) {
+  const q = normStr(detTablaGetState(key).filtro);
+  if (!q) return true;
+  const hidden = detTablaGetHidden(key);
+  const cols = (detTablaCols[key] || DT_COLS).filter(c => (c.pinned || !hidden.has(c.key)) && c.key !== "monto" && !c.render);
+  return normStr(cols.map(c => it[dtFieldFor(c)]).join(" ")).includes(q);
 }
 
 function detTablaSort(key, col) {
@@ -6689,10 +6940,7 @@ function detTablaRenderInner(key) {
   const cols = allCols.filter(c => c.pinned || !hidden.has(c.key));
   const widths = detTablaColWidths[key];
   const tableCls = "jug-detalle-table" + (widths ? " dt-fixed" : "");
-  const q = normStr(st.filtro);
-  let filtrados = !q ? items : items.filter(it =>
-    normStr(cols.filter(c => c.key !== "monto" && !c.render).map(c => it[dtFieldFor(c)]).join(" ")).includes(q)
-  );
+  let filtrados = items.filter(it => detTablaPasaTexto(key, it));
   if (st.sortCol) {
     const dir = st.sortDir;
     filtrados = [...filtrados].sort((a,b) => {
@@ -6718,10 +6966,12 @@ function detTablaRenderInner(key) {
     // se acaba de volver a mostrar y todavía no tiene un ancho guardado propio.
     const wStyle = widths ? ` style="width:${widths[c.key]||120}px"` : "";
     const resizer = `<span class="dt-resizer" onmousedown="dtColResizeStart(event,'${key}','${c.key}')" onclick="event.stopPropagation()"></span>`;
-    if (!c.sortable) return `<th data-col="${c.key}"${wStyle}>${c.label}${resizer}</th>`;
+    // headExtra: controles propios de una tabla en el encabezado (ej. el ▾ de filtro de Movimientos).
+    const extra = c.headExtra ? c.headExtra() : "";
+    if (!c.sortable) return `<th data-col="${c.key}"${wStyle}>${c.label}${extra}${resizer}</th>`;
     const active = st.sortCol === c.key;
     const arrow = active ? `<span class="dt-arrow">${st.sortDir===1?"▲":"▼"}</span>` : "";
-    return `<th class="dt-sortable" data-col="${c.key}"${wStyle} onclick="detTablaSort('${key}','${c.key}')">${c.label}${arrow}${resizer}</th>`;
+    return `<th class="dt-sortable" data-col="${c.key}"${wStyle} onclick="detTablaSort('${key}','${c.key}')">${c.label}${arrow}${extra}${resizer}</th>`;
   }).join("");
   if (!filtrados.length) {
     return `<table class="${tableCls}"><thead><tr>${thead}</tr></thead></table><p class="dt-empty">Sin resultados${st.filtro?" para ese filtro":""}</p>`;

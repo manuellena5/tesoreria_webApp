@@ -1308,7 +1308,13 @@ function normFecha(f) {
   if (isNaN(d.getTime())) return today();
   return d.getUTCFullYear() + "-" + String(d.getUTCMonth()+1).padStart(2,"0") + "-" + String(d.getUTCDate()).padStart(2,"0");
 }
-function getScriptUrl() { return localStorage.getItem("clubfm_url") || ""; }
+// La URL del Apps Script queda fija en el código: no es un secreto —lo que protege los datos es la
+// clave, que el backend valida en cada pedido— y así no se pierde al borrar la caché del navegador.
+// Config todavía permite pisarla (por si algún día se redeploya con otra URL).
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzkCF8gLlGM9ViEsthwERMQ0GN5eWF4rxomHclQ6a1PS_tRF_64t3rDRmKMHox5LREr/exec";
+function getScriptUrl() { return localStorage.getItem("clubfm_url") || SCRIPT_URL; }
+// La clave se guarda en este dispositivo después de la primera vez. Si se borra la caché, se pide de nuevo.
+function getClave() { return localStorage.getItem("clubfm_clave") || ""; }
 function buildDefaultF() {
   return { id: uid(), tipo: "INGRESO", fecha: today(),
     codRubro:"", rubro:"", categoria:"", concepto:"", monto:"",
@@ -1359,14 +1365,70 @@ function hideOverlay() {
 // HTTP / STORAGE
 // ══════════════════════════════════════════════════════════════
 
-async function post(url, data) {
+// Cada pedido lleva la clave. Se llama `pin` y no `clave` porque saveConfig ya usa `clave` para otra cosa.
+async function post(url, data, pin) {
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(data),
+    body: JSON.stringify({ ...data, pin: pin !== undefined ? pin : getClave() }),
     redirect: "follow"
   });
-  return resp.json();
+  const r = await resp.json();
+  // Clave rechazada en cualquier pedido: se olvida la guardada y se vuelve a la pantalla de clave.
+  // Se lanza error para que el que llamó no siga como si hubiera datos.
+  if (r && r.authError && pin === undefined) {
+    if (!r.bloqueado) localStorage.removeItem("clubfm_clave");
+    pedirClave(r.error);
+    throw new Error(r.error || "Clave inválida");
+  }
+  return r;
+}
+
+// ── Pantalla de clave ────────────────────────────────────────
+// Tapa toda la app. No se cierra tocando afuera: sin clave no hay nada que mostrar.
+function pedirClave(msg) {
+  hideOverlay();
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" id="clave-overlay" style="z-index:9999">
+      <div class="modal-card" style="max-width:360px">
+        <div class="modal-title" style="text-align:center">🔒 Tesorería</div>
+        <p class="note" style="text-align:center;margin:0 0 10px">Ingresá la clave para entrar.</p>
+        <input class="inp" id="clave-input" type="password" inputmode="numeric" autocomplete="current-password"
+               style="text-align:center;font-size:20px;letter-spacing:.3em"
+               onkeydown="if(event.key==='Enter') enviarClave()">
+        <p class="note" id="clave-error" style="color:var(--red);text-align:center;min-height:1.2em;margin:8px 0 0">${esc(msg || "")}</p>
+        <button class="btn-main" id="btn-clave" style="width:100%;margin-top:8px" onclick="enviarClave()">Entrar</button>
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById("clave-input")?.focus(), 50);
+}
+
+async function enviarClave() {
+  const inp = document.getElementById("clave-input");
+  const err = document.getElementById("clave-error");
+  const btn = document.getElementById("btn-clave");
+  const pin = (inp?.value || "").trim();
+  if (!pin) { err.textContent = "Ingresá la clave"; return; }
+  btn.disabled = true; btn.textContent = "Verificando…"; err.textContent = "";
+  try {
+    const r = await post(getScriptUrl(), { action: "auth" }, pin);
+    if (!r.ok) throw new Error(r.error || "Clave incorrecta");
+    localStorage.setItem("clubfm_clave", pin);
+    document.getElementById("modal-root").innerHTML = "";
+    showOverlay("Cargando…");
+    initApp();
+  } catch (e) {
+    err.textContent = navigator.onLine ? e.message : "Sin conexión — la clave se valida contra el servidor";
+    btn.disabled = false; btn.textContent = "Entrar";
+    if (inp) { inp.value = ""; inp.focus(); }
+  }
+}
+
+/** Olvida la clave en este dispositivo y vuelve a pedirla. La copia local de los datos NO se borra:
+ *  puede haber movimientos cargados offline esperando sincronizar. */
+function olvidarClave() {
+  localStorage.removeItem("clubfm_clave");
+  location.reload();
 }
 
 const Storage = {
@@ -1793,6 +1855,8 @@ window.addEventListener("offline", renderOfflineBanner);
 // ══════════════════════════════════════════════════════════════
 
 async function initApp() {
+  // Sin clave no se muestra nada, ni siquiera la copia local de la última sesión.
+  if (!getClave()) { pedirClave(); return; }
   const url = getScriptUrl();
   if (!url) {
     hideOverlay();
@@ -10809,6 +10873,8 @@ function renderConfig() {
         <button class="btn-secondary" style="flex:1" onclick="saveUrl()">💾 Guardar URL</button>
         <button class="btn-secondary" style="flex:1" onclick="testConnection()">🔌 Probar</button>
       </div>
+      <div class="cfg-note" style="margin-top:8px">La URL ya viene fija en la app; este campo es sólo para cambiarla. Dejalo vacío y guardá para volver a la de fábrica.</div>
+      <button class="btn-secondary" style="width:100%;margin-top:10px" onclick="olvidarClave()">🔒 Olvidar la clave en este dispositivo</button>
     </div>
 
     <!-- Cuentas -->
@@ -11217,7 +11283,7 @@ function runAudit() {
 
 function saveUrl() {
   const val = (document.getElementById("url-input")?.value || "").trim();
-  if (!val) { toast("Ingresá una URL válida", "err"); return; }
+  if (!val || val === SCRIPT_URL) { localStorage.removeItem("clubfm_url"); toast("Se usa la URL de fábrica ✓", "ok"); return; }
   localStorage.setItem("clubfm_url", val);
   toast("URL guardada ✓", "ok");
 }

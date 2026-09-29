@@ -239,7 +239,50 @@ const RUBROS_MAP = {
 // ENTRY POINTS
 // ════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════
+// SEGURIDAD — clave de acceso
+// ════════════════════════════════════════════════════════════
+//
+// La URL del Web App no es un secreto (queda en el código de la app, que es público), así que lo que
+// protege los datos es esta clave. Vive en Propiedades del script → CLAVE_APP, nunca en el código.
+//
+// Sin CLAVE_APP configurada se rechaza TODO: el default seguro es cerrado, no abierto.
+//
+// Freno a la fuerza bruta: Apps Script no expone la IP de quien llama, así que el contador es
+// global. Tras AUTH_MAX_FALLOS intentos fallidos se rechaza todo —incluida la clave correcta—
+// durante AUTH_BLOQUEO_SEG. Así, probar claves a ciegas da ~40 intentos por hora. El costo es que
+// un ataque en curso también te deja afuera un rato; si pasa, es la señal para cambiar la clave.
+//
+// Se chequea ANTES de tomar el lock: un atacante no tiene que poder hacer esperar a la app real.
+var AUTH_MAX_FALLOS  = 10;
+var AUTH_BLOQUEO_SEG = 15 * 60;
+
+/** null si la clave es válida; si no, la respuesta de error para devolver. */
+function verificarClave_(data) {
+  const esperada = String(PropertiesService.getScriptProperties().getProperty("CLAVE_APP") || "").trim();
+  if (!esperada) return { ok: false, authError: true, error: "Falta configurar la propiedad CLAVE_APP en el Apps Script." };
+  const cache  = CacheService.getScriptCache();
+  const fallos = Number(cache.get("auth_fallos") || 0);
+  if (fallos >= AUTH_MAX_FALLOS) {
+    return { ok: false, authError: true, bloqueado: true, error: "Demasiados intentos fallidos. Esperá 15 minutos y probá de nuevo." };
+  }
+  if (String((data && data.pin) || "").trim() === esperada) return null;
+  cache.put("auth_fallos", String(fallos + 1), AUTH_BLOQUEO_SEG);
+  return { ok: false, authError: true, error: "Clave incorrecta" };
+}
+
 function doPost(e) {
+  let data;
+  try {
+    data = JSON.parse(e.postData.contents);
+  } catch (err) {
+    return jsonResponse({ ok: false, error: "Pedido inválido" });
+  }
+  const rechazo = verificarClave_(data);
+  if (rechazo) return jsonResponse(rechazo);
+  delete data.pin;                                   // que no viaje a ningún handler ni a la planilla
+  if (data.action === "auth") return jsonResponse({ ok: true });   // sólo validar la clave
+
   // Serializa todas las acciones sobre la hoja: sin este lock, dos requests
   // concurrentes (dos borrados casi simultáneos, o la sincronización offline
   // corriendo en paralelo con una acción en vivo) pueden leer los mismos
@@ -255,7 +298,6 @@ function doPost(e) {
     return jsonResponse({ ok: false, error: "El servidor está ocupado, probá de nuevo en unos segundos." });
   }
   try {
-    const data   = JSON.parse(e.postData.contents);
     const result = handleAction(data);
     return jsonResponse(result);
   } catch (err) {

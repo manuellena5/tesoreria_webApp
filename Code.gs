@@ -271,6 +271,14 @@ function verificarClave_(data) {
   return { ok: false, authError: true, error: "Clave incorrecta" };
 }
 
+/** "Gol x2" → "Gol x2 - Guadalupe" en el ItemsDetalle. Duplicado de pjDescConPartido (index.html). */
+function descConPartido_(desc, partidoInfo) {
+  const rival = partidoInfo ? String(partidoInfo.rival || "").trim() : "";
+  const norm = s => String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (!rival || norm(desc).indexOf(norm(rival)) >= 0) return desc;
+  return desc + " - " + rival;
+}
+
 function doPost(e) {
   let data;
   try {
@@ -1936,14 +1944,14 @@ function handleAction(data) {
           if (!f.esPartido) {
             // partidoId también en los premios: así Resumen > Por Partido los imputa al partido en
             // que se ganaron en vez de prorratearlos entre los partidos del movimiento.
-            items.push({ desc: f.etiqueta || "Ajuste", monto: f.montoFinal, partidoId: f.partidoId });
+            items.push({ desc: descConPartido_(f.etiqueta || "Ajuste", partidoById[f.partidoId]), monto: f.montoFinal, partidoId: f.partidoId });
             continue;
           }
           const partidoInfo = f.partidoId ? partidoById[f.partidoId] : null;
           const desc = partidoInfo ? (partidoInfo.numeroFecha + " vs " + partidoInfo.rival) : "Pago partido";
           if (f.ajuste !== 0 && f.montoBase !== 0 && f.montoBase + f.ajuste === f.montoFinal) {
             items.push({ desc, monto: f.montoBase, partidoId: f.partidoId });
-            items.push({ desc: (f.motivoAjuste || "").trim() || "Ajuste", monto: f.ajuste, partidoId: f.partidoId });
+            items.push({ desc: descConPartido_((f.motivoAjuste || "").trim() || "Ajuste", partidoInfo), monto: f.ajuste, partidoId: f.partidoId });
           } else {
             items.push({ desc: f.motivoAjuste ? desc + " — " + f.motivoAjuste : desc,
                          monto: f.montoFinal, partidoId: f.partidoId });

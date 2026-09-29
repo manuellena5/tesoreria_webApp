@@ -8996,6 +8996,20 @@ function pjDescPartido(p) {
 }
 
 /**
+ * "Gol x2" → "Gol x2 - Guadalupe": el premio (o el ajuste) dice de qué partido es. Con varios
+ * partidos en una liquidación, "Gol" a secas no le dice al jugador cuál le están pagando.
+ * No se toca la etiqueta guardada —el editor de premios la usa para reconocer cada premio—, sólo
+ * lo que sale en el comprobante. Si ya nombra al rival (una etiqueta escrita a mano) no se repite.
+ * Duplicado a propósito con descConPartido_ (Code.gs), igual que pjItemsDeFila.
+ */
+function pjDescConPartido(desc, partidoId) {
+  const par = partidoId ? partidos.find(x => x.id === partidoId) : null;
+  const rival = par ? String(par.rival || "").trim() : "";
+  if (!rival || normStr(desc).includes(normStr(rival))) return desc;
+  return desc + " - " + rival;
+}
+
+/**
  * Ítems del comprobante que le corresponden a una fila de Pagos Jugadores.
  *
  * Devuelve DOS ítems cuando la fila es un pago de partido con ajuste: el descuento (o el plus)
@@ -9012,7 +9026,7 @@ function pjDescPartido(p) {
  */
 function pjItemsDeFila(p) {
   const montoFinal = Number(p.montoFinal || 0);
-  if (pjTipoFila(p) !== "partido") return [{ desc: p.etiqueta || "Ajuste", monto: montoFinal }];
+  if (pjTipoFila(p) !== "partido") return [{ desc: pjDescConPartido(p.etiqueta || "Ajuste", p.partidoId), monto: montoFinal }];
 
   const montoBase = Number(p.montoBase || 0);
   const ajuste    = Number(p.ajuste || 0);
@@ -9020,7 +9034,7 @@ function pjItemsDeFila(p) {
   if (ajuste !== 0 && montoBase !== 0 && montoBase + ajuste === montoFinal) {
     return [
       { desc, monto: montoBase },
-      { desc: (p.motivoAjuste || "").trim() || "Ajuste", monto: ajuste }
+      { desc: pjDescConPartido((p.motivoAjuste || "").trim() || "Ajuste", (p.partidosIncluidos || [])[0] || p.partidoId), monto: ajuste }
     ];
   }
   // Ítem único: el motivo va pegado a la descripción, como venía saliendo desde siempre.
@@ -11964,7 +11978,7 @@ function movToComprobante(mov) {
   // Movimientos con desglose (ej. pago de jugador que sumó partido + premios/ajustes)
   // precargan un ítem por concepto en vez de uno solo con el total.
   const items = (mov.itemsDetalle && mov.itemsDetalle.length)
-    ? mov.itemsDetalle.map(it => ({ desc: it.desc||"Concepto", monto: Number(it.monto||0) }))
+    ? mov.itemsDetalle.map(it => ({ desc: pjDescConPartido(it.desc||"Concepto", it.partidoId), monto: Number(it.monto||0) }))
     : [{ desc: mov.concepto || mov.rubro || "Concepto", monto }];
   return {
     movId:    mov.id,

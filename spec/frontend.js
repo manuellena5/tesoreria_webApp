@@ -485,20 +485,20 @@ function filaPartido(extra) {
 sembrar(); // deja app.partidos con p1 = "Fecha 3 vs Colon"
 igual("con ajuste devuelve dos ítems",
       app.pjItemsDeFila(filaPartido()),
-      [{ desc: "Fecha 3 vs Colon", monto: 10000 }, { desc: "Adelanto", monto: -2000 }]);
+      [{ desc: "Fecha 3 vs Colon", monto: 10000 }, { desc: "Adelanto - Colon", monto: -2000 }]);
 igual("la descripción del partido NO lleva el motivo pegado",
       app.pjItemsDeFila(filaPartido())[0].desc, "Fecha 3 vs Colon");
 igual("la suma de los ítems es el montoFinal",
       app.pjItemsDeFila(filaPartido()).reduce((s,it) => s + it.monto, 0), 8000);
 
 igual("motivo vacío → \"Ajuste\"",
-      app.pjItemsDeFila(filaPartido({ motivoAjuste: "" }))[1].desc, "Ajuste");
+      app.pjItemsDeFila(filaPartido({ motivoAjuste: "" }))[1].desc, "Ajuste - Colon");
 igual("motivo en blanco también → \"Ajuste\"",
-      app.pjItemsDeFila(filaPartido({ motivoAjuste: "   " }))[1].desc, "Ajuste");
+      app.pjItemsDeFila(filaPartido({ motivoAjuste: "   " }))[1].desc, "Ajuste - Colon");
 
 igual("ajuste positivo sale positivo",
       app.pjItemsDeFila(filaPartido({ ajuste: 1500, montoFinal: 11500, motivoAjuste: "Plus" })),
-      [{ desc: "Fecha 3 vs Colon", monto: 10000 }, { desc: "Plus", monto: 1500 }]);
+      [{ desc: "Fecha 3 vs Colon", monto: 10000 }, { desc: "Plus - Colon", monto: 1500 }]);
 
 igual("sin ajuste: un solo ítem por el total",
       app.pjItemsDeFila(filaPartido({ ajuste: 0, montoFinal: 10000, motivoAjuste: "" })),
@@ -524,7 +524,13 @@ igual("partido que ya no existe: descripción genérica",
 igual("un premio sigue dando un ítem con su etiqueta",
       app.pjItemsDeFila({ jugadorId:"j1", partidosIncluidos: [], montoBase: 3000, ajuste: 0,
                           motivoAjuste: "", montoFinal: 3000, etiqueta: "Gol", tipo: "premio", partidoId: "p1" }),
-      [{ desc: "Gol", monto: 3000 }]);
+      [{ desc: "Gol - Colon", monto: 3000 }]);
+igual("premio x2 con el partido",
+      app.pjItemsDeFila({ id: "x2", jugadorId: "j1", partidosIncluidos: [], montoBase: 0, ajuste: 0,
+                          motivoAjuste: "", montoFinal: 6000, etiqueta: "Gol x2", tipo: "premio", partidoId: "p1" }),
+      [{ desc: "Gol x2 - Colon", monto: 6000 }]);
+igual("si la etiqueta ya nombra al rival no se repite", app.pjDescConPartido("Gol a Colón", "p1"), "Gol a Colón");
+igual("premio sin partido queda como está", app.pjDescConPartido("Valla invicta", ""), "Valla invicta");
 igual("un descuento del mes sigue dando un ítem negativo",
       app.pjItemsDeFila({ jugadorId:"j2", partidosIncluidos: [], montoBase: -8000, ajuste: 0,
                           motivoAjuste: "", montoFinal: -8000, etiqueta: "Multa", tipo: "descuento", partidoId: "" }),

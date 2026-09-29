@@ -109,7 +109,7 @@ const r2 = confirmar([idPremio]);    // después se cobra el premio aparte
 check("confirmar el premio después funciona", r2.ok, r2.error);
 const movPremio = movRows().find(m => Number(m[7]) === 3000);
 igual("el ítem del premio se imputa a su partido", items(movPremio)[0].partidoId, "p1");
-igual("con la etiqueta como descripción", items(movPremio)[0].desc, "Gol");
+igual("con la etiqueta y el partido como descripción", items(movPremio)[0].desc, "Gol - RIVAL FC");
 check("la Observación trae el desglose del premio",
       movPremio[15].indexOf("Gol") >= 0 && movPremio[15].indexOf("$3.000") >= 0, movPremio[15]);
 const movPart = movRows().find(m => Number(m[7]) === 10000);
@@ -130,7 +130,8 @@ igual("con los tres ítems", items(mov).length, 3);
 igual("la suma de los ítems cierra con el total",
       items(mov).reduce((s,it) => s + Number(it.monto||0), 0), Number(mov[7]));
 igual("total = partido + premios", Number(mov[7]), 14500);
-igual("el premio del partido se imputa a p1", items(mov).find(it => it.desc === "Gol").partidoId, "p1");
+igual("el premio del partido se imputa a p1", items(mov).find(it => it.desc === "Gol - RIVAL FC").partidoId, "p1");
+igual("el premio del partido dice de qué partido es (comprobante)", items(mov).some(it => it.desc === "Gol - RIVAL FC"), true);
 igual("el premio sin partido queda sin imputar (se prorratea en el resumen)",
       items(mov).find(it => it.desc === "Valla invicta").partidoId, "");
 check("el concepto avisa que hay premios", mov[6].indexOf("premios") >= 0, mov[6]);
@@ -282,9 +283,9 @@ igual("ItemsDetalle trae DOS ítems", items(movAj).length, 2);
 igual("el primero es el partido, por el monto base",
       { desc: items(movAj)[0].desc, monto: items(movAj)[0].monto },
       { desc: "Fecha 3 vs RIVAL FC", monto: 10000 });
-igual("el segundo es el ajuste, con el motivo tal cual y el signo tal cual",
+igual("el segundo es el ajuste, con el motivo (y el partido) y el signo tal cual",
       { desc: items(movAj)[1].desc, monto: items(movAj)[1].monto },
-      { desc: "Adelanto", monto: -2000 });
+      { desc: "Adelanto - RIVAL FC", monto: -2000 });
 igual("los dos se imputan al mismo partido",
       items(movAj).map(it => it.partidoId), ["p1", "p1"]);
 igual("la suma de los ítems cierra con el neto",
@@ -333,7 +334,7 @@ const idPr6 = altaPremio(3000, "Gol", "p1");
 confirmar([idAj2, idPr6]);
 igual("un solo movimiento", movRows().length, 1);
 igual("con tres ítems: partido, ajuste y premio",
-      items(movRows()[0]).map(it => it.desc), ["Fecha 3 vs RIVAL FC", "Adelanto", "Gol"]);
+      items(movRows()[0]).map(it => it.desc), ["Fecha 3 vs RIVAL FC", "Adelanto - RIVAL FC", "Gol - RIVAL FC"]);
 igual("la suma cierra con el total",
       items(movRows()[0]).reduce((s,it) => s + Number(it.monto||0), 0), Number(movRows()[0][7]));
 igual("que es 10000 - 2000 + 3000", Number(movRows()[0][7]), 11000);

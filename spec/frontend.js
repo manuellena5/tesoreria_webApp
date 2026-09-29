@@ -1726,6 +1726,19 @@ igual("y se lo reporta aparte",
       app.pjLoteSinAlias(conUnoSinAlias).map(e => e.nombre), ["SIN ALIAS"]);
 igual("sin faltantes la lista viene vacía", app.pjLoteSinAlias(enviadosMP), []);
 
+// ── Prompt "Transferir lo siguiente" (botón de la tabla, desde los tildados) ──
+igual("el prompt de transferencias sale con el formato pedido",
+      app.pjMensajeTransferenciasMP(enviadosMP),
+      "Transferir lo siguiente\n" +
+      "1. alias: federico.bernaus — monto: $170.000\n" +
+      "2. alias: maticarranza04 — monto: $110.000\n" +
+      "3. alias: jonatandv7 — monto: $300.000");
+igual("los sin alias van al final, marcados",
+      app.pjMensajeTransferenciasMP([conUnoSinAlias[3], ...enviadosMP]).split("\n").pop(),
+      "4. alias: ⚠️ SIN ALIAS (SIN ALIAS) — monto: $50.000");
+check("un total en cero no entra",
+      !app.pjMensajeTransferenciasMP([...enviadosMP, { nombre: "X", alias: "x.mp", monto: 0 }]).includes("x.mp"));
+
 // Los montos se formatean como plata argentina, sin decimales.
 igual("un monto con centavos se redondea al peso",
       app.pjLoteMensajeMP([{ alias: "x.y", monto: 170000.4 }], "10/09/2026"),

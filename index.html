@@ -10567,6 +10567,7 @@ function renderTransferencias() {
     <button class="btn-export" style="margin-bottom:10px" onclick="pjLoteIniciar()">📤 ${pjLote && pjLote.i < pjLote.items.length
       ? `Retomar envío de comprobantes (${pjLote.i + 1} de ${pjLote.items.length})`
       : `Enviar comprobantes de los tildados`}</button>
+    <button class="btn-export" style="margin-bottom:10px" onclick="pjTransfMPAbrir()">🤖 Generar prompt para transferencias MP</button>
     <p class="note">El flujo es: exportás el listado, hacés las transferencias en el homebanking, y después liquidás de a un jugador con el extracto a la vista. El envío de comprobantes no registra nada — es sólo el aviso al jugador.</p>
   `;
 }
@@ -12182,6 +12183,64 @@ function pjLoteMPCopiar() {
   } else {
     fallback();
   }
+}
+
+// ── Prompt para transferir desde el chat de Mercado Pago ──────────────────────────────────────
+// A diferencia del mensaje que sale al terminar el envío de comprobantes (que programa con fecha y
+// sólo incluye a los enviados), éste sale directo de los TILDADOS de la tabla, para transferir ya.
+// Los que no tienen alias van al final con una marca bien visible: así se ven, se completan a mano
+// en el cuadro y no se pierden en silencio. Se toman los mismos jugadores que el CSV, pero sólo
+// con total positivo — un total en cero o negativo no es una transferencia.
+function pjMensajeTransferenciasMP(items) {
+  const lista = (items || []).filter(e => Number(e.monto || 0) > 0);
+  const conAlias = lista.filter(e => pjAliasParaMP(e.alias));
+  const sinAlias = lista.filter(e => !pjAliasParaMP(e.alias));
+  const lineas = conAlias.map(e => "alias: " + pjAliasParaMP(e.alias) + " — monto: " + fmt(e.monto))
+    .concat(sinAlias.map(e => "alias: ⚠️ SIN ALIAS (" + e.nombre + ") — monto: " + fmt(e.monto)))
+    .map((l, i) => (i + 1) + ". " + l);
+  return "Transferir lo siguiente\n" + lineas.join("\n");
+}
+
+/** Jugadores tildados de la tabla de transferencias, con el total que muestra cada fila. */
+function pjTransfTildados() {
+  return [...document.querySelectorAll("#pj-transf-table tbody tr[data-jug]")]
+    .filter(tr => tr.dataset.incluido !== "0" && Number(tr.dataset.total || 0) > 0)
+    .map(tr => {
+      const cfg = configJugadores.find(c => c.idJugador === tr.dataset.jug);
+      return {
+        jugadorId: tr.dataset.jug,
+        nombre: cfg ? cfg.nombre : tr.dataset.jug,
+        alias:  cfg ? String(cfg.alias || "") : "",
+        monto:  Number(tr.dataset.total || 0)
+      };
+    });
+}
+
+function pjTransfMPAbrir() {
+  const items = pjTransfTildados();
+  if (!items.length) { toast("No hay jugadores tildados con monto a transferir", "err"); return; }
+  const sinAlias = items.filter(e => !pjAliasParaMP(e.alias));
+  const total = items.reduce((a, e) => a + e.monto, 0);
+  const aviso = sinAlias.length ? `
+    <p class="note" style="border-left:3px solid var(--warn);padding-left:8px;margin:0 0 8px">
+      ${sinAlias.length === 1 ? "Este jugador no tiene" : "Estos jugadores no tienen"} alias cargado y
+      ${sinAlias.length === 1 ? "quedó" : "quedaron"} al final de la lista: <b>${esc(sinAlias.map(e => e.nombre).join(", "))}</b>.
+      Completá el alias en el cuadro antes de pegarlo (o borrá la línea), y cargáselo en Entidades → Cobros.</p>` : "";
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()" style="max-width:620px">
+        <div class="modal-handle"></div>
+        <div class="modal-title">Prompt para transferencias MP</div>
+        <p class="note" style="margin:0 0 8px">${items.length} transferencia${items.length !== 1 ? "s" : ""} · total ${fmt(total)}. Copialo y pegalo en el chat de Mercado Pago.</p>
+        ${aviso}
+        <textarea class="inp" id="pj-transf-mp-texto" rows="${Math.min(16, items.length + 2)}"
+                  style="font-family:var(--mono);font-size:12px;resize:vertical">${esc(pjMensajeTransferenciasMP(items))}</textarea>
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cerrar</button>
+          <button class="btn-main" style="flex:1" onclick="copiarAlPortapapeles(document.getElementById('pj-transf-mp-texto').value, 'Prompt copiado ✓')">📋 Copiar</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function pjLoteResumen() {

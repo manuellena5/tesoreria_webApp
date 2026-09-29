@@ -1893,6 +1893,39 @@ app.reintegroFiltro = "e"; app.reintegroOrdenCol = "abonado"; app.reintegroOrden
 igual("filtro + orden juntos", reintOrden(), ["GOMEZ Ana", "PEREZ Juan", "Álvarez Bea"]);
 app.reintegroFiltro = ""; app.reintegroOrdenCol = "";
 
+// ══════════════════════════════════════════════════════════════
+seccion("47 · Reintegros: período (3 meses / historial) y datos del PDF");
+
+igual("hace 3 meses desde el 29/09", app.reintegroDesde3m("2026-09-29"), "2026-06-29");
+igual("cruza el año", app.reintegroDesde3m("2026-02-15"), "2025-11-15");
+check("un gasto de hace 2 meses entra en 3m",  app.reintegroEnPeriodo("2026-08-01", "3m", "2026-09-29"));
+check("uno de hace 4 meses no",               !app.reintegroEnPeriodo("2026-05-20", "3m", "2026-09-29"));
+check("el historial trae todo",                app.reintegroEnPeriodo("2019-01-01", ""));
+check("por año sigue andando",                 app.reintegroEnPeriodo("2025-03-01", "2025") && !app.reintegroEnPeriodo("2026-03-01", "2025"));
+
+app.reintegroFiltro = ""; app.reintegroAnio = "";
+app.movimientos = [
+  { id:"a1", tipo:"EGRESO", fecha:"2026-03-12", codRubro:"21", jugadorCT:"PEREZ", egreso:25000, seguroReintegro:1, concepto:"Consulta", vinculos:[] },
+  { id:"a2", tipo:"EGRESO", fecha:"2026-05-02", codRubro:"21", jugadorCT:"PEREZ", egreso:90000, seguroReintegro:1, concepto:"Resonancia", vinculos:[] },
+  { id:"a3", tipo:"EGRESO", fecha:"2026-05-03", codRubro:"21", jugadorCT:"PEREZ", egreso:6200,  seguroReintegro:0, concepto:"Venda", vinculos:[] },
+  { id:"ai", tipo:"INGRESO", fecha:"2026-04-01", codRubro:"21", jugadorCT:"PEREZ", ingreso:25000, concepto:"Reintegro", vinculos:[{ egresoId:"a1", monto:25000 }] },
+  { id:"b1", tipo:"EGRESO", fecha:"2026-05-10", codRubro:"21", jugadorCT:"OK", egreso:1000, seguroReintegro:1, concepto:"x", vinculos:[] },
+  { id:"bi", tipo:"INGRESO", fecha:"2026-05-11", codRubro:"21", jugadorCT:"OK", ingreso:1000, concepto:"r", vinculos:[{ egresoId:"b1", monto:1000 }] }
+];
+const pdf = app.reintPdfDatos(app.filasReintegros(), app.buildVinculosIndex().porEgreso);
+igual("sólo los jugadores con pendiente", pdf.jugadores.map(j => j.jugador), ["PEREZ"]);
+igual("una fila por gasto, sin las filas de ingreso", pdf.jugadores[0].filas.map(f => f.movimiento), ["Consulta", "Resonancia", "Venda"]);
+igual("se resalta sólo el que tiene Reintegrado = $0 y seguro", pdf.jugadores[0].filas.map(f => f.pendiente), [false, true, false]);
+igual("el gasto sin seguro no aplica", pdf.jugadores[0].filas[2].conSeguro, false);
+igual("total pendiente", pdf.totalPendiente, 90000);
+igual("gastos sin reintegrar", pdf.gastosSinReintegrar, 1);
+igual("totales de la sección", [pdf.jugadores[0].totMonto, pdf.jugadores[0].totReintegrado], [121200, 25000]);
+
+// Con "últimos 3 meses" (al 29/09) el gasto de marzo y el de mayo quedan afuera: sin pendiente, no hay PDF.
+const rows3m = app.calcReintegrosPorJugador("3m").filter(r => r.pendiente > 0);
+check("en 3 meses no queda nada de mayo para atrás", rows3m.every(r => r.movs.filter(m => m.tipo === "EGRESO").every(m => m.fecha >= app.reintegroDesde3m())));
+app.reintegroAnio = "3m";
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

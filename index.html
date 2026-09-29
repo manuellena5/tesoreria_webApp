@@ -1040,7 +1040,8 @@ let reportesState = {
   catExpandido: new Set(),
   rubroExpandido: new Set(),
 };
-let reintegroAnio     = String(new Date().getFullYear());
+// Período de la pantalla de reintegros: "3m" (últimos 3 meses), "" (historial) o un año "YYYY".
+let reintegroAnio     = "3m";
 let reintegroExpandido = new Set();
 let reintegroVista     = getDefaultVista("reintegros_vista");
 let reintegroFiltro    = "";
@@ -4931,6 +4932,28 @@ const TOL = 1; // tolerancia de redondeo en pesos
 // anio: string "YYYY" para filtrar los EGRESOS mostrados, o "" para todos los años.
 // Los vínculos se calculan siempre contra el historial completo (buildVinculosIndex),
 // porque un reintegro puede llegar meses después y en otro año que el gasto original.
+// Fecha "YYYY-MM-DD" de hace 3 meses (mismo día). Si ese día no existe (31/05 → 31/02) el Date
+// lo corre al mes siguiente, que para un corte de "últimos 3 meses" da igual.
+function reintegroDesde3m(hoy) {
+  const d = hoy ? new Date(hoy + "T00:00:00") : new Date();
+  d.setMonth(d.getMonth() - 3);
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+
+/** ¿El gasto de esta fecha entra en el período? "" = historial, "3m" = últimos 3 meses, "YYYY" = año. */
+function reintegroEnPeriodo(fecha, periodo, hoy) {
+  if (!periodo) return true;
+  const f = String(fecha || "");
+  if (periodo === "3m") return f >= reintegroDesde3m(hoy);
+  return f.slice(0, 4) === periodo;
+}
+
+function reintegroPeriodoLabel(periodo) {
+  if (!periodo) return "Historial completo";
+  if (periodo === "3m") return "Últimos 3 meses (desde " + fmtFechaDMY(reintegroDesde3m()) + ")";
+  return "Año " + periodo;
+}
+
 function calcReintegrosPorJugador(anio) {
   const { porEgreso, porIngreso } = buildVinculosIndex();
   const movs21 = movimientos.filter(m => m.codRubro === "21" && (m.tipo === "EGRESO" || m.tipo === "INGRESO"));
@@ -4940,7 +4963,7 @@ function calcReintegrosPorJugador(anio) {
     return map[key];
   };
   for (const m of movs21) {
-    if (m.tipo === "EGRESO" && (!anio || m.fecha.slice(0,4) === anio)) {
+    if (m.tipo === "EGRESO" && reintegroEnPeriodo(m.fecha, anio)) {
       const key = m.jugadorCT || "Sin jugador";
       const b = getBucket(key);
       b.abonado += m.egreso;
@@ -5035,11 +5058,12 @@ function filasReintegros() {
 function renderReintegrosMedicos() {
   const movs21All = movimientos.filter(m => m.codRubro === "21" && (m.tipo === "EGRESO" || m.tipo === "INGRESO"));
   const anios = [...new Set(movs21All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
-  if (reintegroAnio !== "" && !anios.includes(reintegroAnio)) {
-    reintegroAnio = anios[0] || String(new Date().getFullYear());
+  if (reintegroAnio !== "" && reintegroAnio !== "3m" && !anios.includes(reintegroAnio)) {
+    reintegroAnio = "3m";
   }
 
-  const anioOptions = `<option value="" ${reintegroAnio===""?"selected":""}>Todos los años</option>` +
+  const anioOptions = `<option value="3m" ${reintegroAnio==="3m"?"selected":""}>Últimos 3 meses</option>` +
+    `<option value="" ${reintegroAnio===""?"selected":""}>Historial</option>` +
     anios.map(a => `<option value="${a}" ${reintegroAnio===a?"selected":""}>${a}</option>`).join("");
 
   const viewToggle = `
@@ -5051,10 +5075,11 @@ function renderReintegrosMedicos() {
   return `
     <div class="reint-section">
       <button class="btn-secondary" style="margin-bottom:8px" onclick="openVincularReintegros('')">🔗 Vincular reintegros con sus egresos</button>
-      <button class="btn-export" style="margin-bottom:12px" onclick="exportarPendientesReintegro()">📥 Exportar pendientes de reintegro</button>
+      <button class="btn-export" style="margin-bottom:8px" id="btn-reint-pdf" onclick="exportarPdfReintegros()">📄 PDF de pendientes — ${esc(reintegroAnio === "3m" ? "últimos 3 meses" : reintegroAnio ? "año " + reintegroAnio : "historial")}</button>
+      <button class="btn-export" style="margin-bottom:12px" onclick="exportarPendientesReintegro()">📥 Exportar pendientes de reintegro (Excel)</button>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
-          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Año:</label>
+          <label style="font-size:11px;color:var(--text3);white-space:nowrap">Período:</label>
           <select class="inp" style="flex:1" onchange="setReintegroAnio(this.value)">${anioOptions}</select>
         </div>
         ${viewToggle}
@@ -11464,6 +11489,167 @@ function exportarPendientesReintegro() {
   XLSX.utils.book_append_sheet(wb, ws, "Pendientes reintegro");
   XLSX.writeFile(wb, "reintegros_pendientes_" + today() + ".xlsx");
   toast("Excel exportado ✓", "ok");
+}
+
+// ── PDF de pendientes de reintegro ──────────────────────────────
+// Pensado para leerse en el celular: una sección por jugador con sus gastos médicos del período
+// elegido en pantalla (y del buscador, si hay algo escrito), resaltando los que el seguro todavía
+// no devolvió (Reintegrado = $0). Sólo entran los jugadores que tienen algo pendiente en ese
+// período. Se genera como imagen dentro del PDF —html2canvas + jsPDF, cargados recién al usarse—
+// porque así sale idéntico en cualquier visor.
+const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+let _jspdfPromise = null;
+function ensureJsPDF() {
+  if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
+  if (_jspdfPromise) return _jspdfPromise;
+  _jspdfPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = JSPDF_URL;
+    s.onload  = () => resolve(window.jspdf.jsPDF);
+    s.onerror = () => { _jspdfPromise = null; reject(new Error("No se pudo cargar el generador de PDF (sin conexión)")); };
+    document.head.appendChild(s);
+  });
+  return _jspdfPromise;
+}
+
+/** Datos del PDF, separados del armado visual para poder verificarlos sin navegador. */
+function reintPdfDatos(rows, porEgreso) {
+  const jugadores = [];
+  let totalPendiente = 0, gastosSinReintegrar = 0;
+  for (const r of rows || []) {
+    if (!(r.pendiente > 0)) continue;
+    const filas = (r.movs || [])
+      .filter(m => m.tipo === "EGRESO")
+      .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)))
+      .map(m => {
+        const monto = Number(m.egreso || 0);
+        const conSeguro = !!m.seguroReintegro;
+        const reintegrado = conSeguro ? (porEgreso[m.id] || 0) : 0;
+        const pendiente = conSeguro && reintegrado <= TOL;
+        if (pendiente) gastosSinReintegrar++;
+        return { fecha: m.fecha, movimiento: m.concepto || m.rubro || "", monto, abonado: monto,
+                 reintegrado, conSeguro, pendiente };
+      });
+    totalPendiente += r.pendiente;
+    jugadores.push({
+      jugador: r.jugador, pendiente: r.pendiente, filas,
+      totMonto: filas.reduce((s, f) => s + f.monto, 0),
+      totAbonado: filas.reduce((s, f) => s + f.abonado, 0),
+      totReintegrado: filas.reduce((s, f) => s + f.reintegrado, 0)
+    });
+  }
+  return { jugadores, totalPendiente, gastosSinReintegrar };
+}
+
+function reintPdfHTML(d, periodoLabel) {
+  const fd = f => { const s = String(f || ""); return s.length >= 10 ? s.slice(8,10) + "/" + s.slice(5,7) + "/" + s.slice(2,4) : s; };
+  const th = `<tr><th style="width:88px">Fecha</th><th>Movimiento</th><th class="r" style="width:105px">Monto</th><th class="r" style="width:105px">Abonado</th><th class="r" style="width:118px">Reintegrado</th></tr>`;
+  const secciones = d.jugadores.map(j => `
+    <div class="jug"><div class="jh"><span class="n">${esc(j.jugador)}</span><span class="p">Pendiente <b>${fmt(j.pendiente)}</b></span></div>
+    <table><thead>${th}</thead><tbody>
+      ${j.filas.map(f => `<tr class="${f.pendiente ? "pend" : !f.conSeguro ? "na" : ""}">
+        <td class="f">${fd(f.fecha)}</td>
+        <td>${esc(f.movimiento)}${f.pendiente ? `<span class="tag">PENDIENTE</span>` : ""}${!f.conSeguro ? " (sin seguro)" : ""}</td>
+        <td class="r">${fmt(f.monto)}</td><td class="r">${fmt(f.abonado)}</td>
+        <td class="r ${f.pendiente ? "zero" : ""}">${f.conSeguro ? fmt(f.reintegrado) : "no aplica"}</td></tr>`).join("")}
+      <tr class="tot"><td></td><td>Total</td><td class="r">${fmt(j.totMonto)}</td><td class="r">${fmt(j.totAbonado)}</td><td class="r">${fmt(j.totReintegrado)}</td></tr>
+    </tbody></table></div>`).join("");
+  return `
+  <style>
+    #reint-pdf *{box-sizing:border-box} #reint-pdf{width:794px;padding:34px 34px 28px;background:#fff;color:#1a1a1a;font-family:"Segoe UI",Roboto,Arial,sans-serif}
+    #reint-pdf .hdr{display:flex;align-items:center;gap:16px;border-bottom:3px solid #0d3b66;padding-bottom:14px}
+    #reint-pdf .hdr img{width:64px;height:64px;object-fit:contain;flex:0 0 64px} #reint-pdf .hdr > div{flex:1;text-align:left}
+    #reint-pdf h1{margin:0;font-size:24px;color:#0d3b66}
+    #reint-pdf .sub{font-size:14px;color:#555;margin-top:3px}
+    #reint-pdf .kpis{display:flex;gap:10px;margin:16px 0 8px}
+    #reint-pdf .kpi{flex:1;border:1px solid #d9dee5;border-radius:8px;padding:10px 12px}
+    #reint-pdf .kpi .l{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:.04em}
+    #reint-pdf .kpi .v{font-size:22px;font-weight:700;margin-top:2px}
+    #reint-pdf .kpi.red .v{color:#b3261e}
+    #reint-pdf .ley{font-size:13px;color:#444;margin:6px 0 16px;display:flex;align-items:center;gap:8px}
+    #reint-pdf .sw{width:16px;height:16px;background:#fde8e6;border-left:4px solid #d93025;display:inline-block}
+    #reint-pdf .jug{margin-bottom:16px}
+    #reint-pdf .jh{display:flex;justify-content:space-between;align-items:baseline;background:#0d3b66;color:#fff;padding:8px 12px;border-radius:6px 6px 0 0}
+    #reint-pdf .jh .n{font-size:17px;font-weight:700} #reint-pdf .jh .p{font-size:14px} #reint-pdf .jh .p b{font-size:16px}
+    #reint-pdf table{width:100%;border-collapse:collapse;font-size:15px;table-layout:fixed}
+    #reint-pdf th{background:#eef2f7;color:#333;font-size:12px;text-transform:uppercase;letter-spacing:.03em;text-align:left;padding:7px 8px;border-bottom:1px solid #cfd6df}
+    #reint-pdf td{padding:9px 8px;border-bottom:1px solid #e6e9ee;vertical-align:top;word-wrap:break-word}
+    #reint-pdf .r{text-align:right;white-space:nowrap} #reint-pdf .f{white-space:nowrap;color:#444}
+    #reint-pdf tr.pend td{background:#fde8e6;font-weight:600} #reint-pdf tr.pend td:first-child{border-left:4px solid #d93025}
+    #reint-pdf .tag{display:inline-block;font-size:11px;font-weight:700;color:#fff;background:#d93025;border-radius:3px;padding:1px 5px;margin-left:6px}
+    #reint-pdf tr.na td{color:#888} #reint-pdf .zero{color:#b3261e}
+    #reint-pdf tr.tot td{font-weight:700;background:#f7f8fa;border-bottom:2px solid #cfd6df}
+    #reint-pdf .foot{margin-top:18px;font-size:12px;color:#777;border-top:1px solid #ddd;padding-top:8px}
+  </style>
+  <div id="reint-pdf">
+    <div class="hdr"><img src="escudo.png"><div><h1>Reintegros médicos pendientes</h1>
+      <div class="sub">Club Deportivo Mitre · Fútbol Mayor · ${esc(periodoLabel)} · al ${fmtFechaDMY(today())}</div></div></div>
+    <div class="kpis">
+      <div class="kpi"><div class="l">Jugadores con pendiente</div><div class="v">${d.jugadores.length}</div></div>
+      <div class="kpi red"><div class="l">Total pendiente</div><div class="v">${fmt(d.totalPendiente)}</div></div>
+      <div class="kpi"><div class="l">Gastos sin reintegrar</div><div class="v">${d.gastosSinReintegrar}</div></div>
+    </div>
+    <div class="ley"><span class="sw"></span> Resaltado: gasto con reintegro del seguro que todavía no se cobró (Reintegrado = $0)</div>
+    ${secciones}
+    <div class="foot">Generado desde Tesorería Fútbol Mayor</div>
+  </div>`;
+}
+
+async function exportarPdfReintegros() {
+  const btnId = "btn-reint-pdf";
+  const btn = document.getElementById(btnId);
+  if (btn && btn.disabled) return;
+  const d = reintPdfDatos(filasReintegros(), buildVinculosIndex().porEgreso);
+  if (!d.jugadores.length) { toast("No hay reintegros pendientes en este período", "ok"); return; }
+  const txtOrig = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Generando PDF…"; }
+  const cont = document.createElement("div");
+  cont.style.cssText = "position:fixed;left:-10000px;top:0;width:794px;background:#fff";
+  cont.innerHTML = reintPdfHTML(d, reintegroPeriodoLabel(reintegroAnio));
+  document.body.appendChild(cont);
+  try {
+    const [h2c, JsPDF] = await Promise.all([ensureHtml2Canvas(), ensureJsPDF()]);
+    const img = cont.querySelector("img");
+    if (img && !img.complete) await new Promise(res => { img.onload = img.onerror = res; });
+    const canvas = await h2c(cont.querySelector("#reint-pdf"), { scale: 2, backgroundColor: "#ffffff", logging: false, width: 794, windowWidth: 794 });
+    // Una sola página larga: en el celular se lee scrolleando, sin filas cortadas entre páginas.
+    // Sólo si supera el máximo de alto que admite un PDF se parte en varias.
+    const anchoMm = 210, mmPorPx = anchoMm / canvas.width, maxAltoMm = 5000;
+    const altoTotalMm = canvas.height * mmPorPx;
+    const paginas = Math.ceil(altoTotalMm / maxAltoMm);
+    let pdf = null;
+    for (let i = 0; i < paginas; i++) {
+      const y0 = Math.round(i * maxAltoMm / mmPorPx);
+      const hPx = Math.min(canvas.height - y0, Math.round(maxAltoMm / mmPorPx));
+      const trozo = document.createElement("canvas");
+      trozo.width = canvas.width; trozo.height = hPx;
+      const ctx = trozo.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, trozo.width, hPx);
+      ctx.drawImage(canvas, 0, y0, canvas.width, hPx, 0, 0, canvas.width, hPx);
+      const hMm = hPx * mmPorPx;
+      if (!pdf) pdf = new JsPDF({ unit: "mm", format: [anchoMm, hMm], orientation: "portrait" });
+      else pdf.addPage([anchoMm, hMm], "portrait");
+      pdf.addImage(trozo.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, anchoMm, hMm);
+    }
+    const nombre = "reintegros_pendientes_" + (reintegroAnio === "3m" ? "3meses" : reintegroAnio || "historial") + "_" + today() + ".pdf";
+    const blob = pdf.output("blob");
+    const file = new File([blob], nombre, { type: "application/pdf" });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] }) && window.matchMedia("(max-width:599px)").matches) {
+      try { await navigator.share({ files: [file], title: "Reintegros pendientes" }); }
+      catch (e) { if (e && e.name !== "AbortError") throw e; }
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = nombre; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    toast("PDF generado ✓", "ok");
+  } catch (e) {
+    toast("No se pudo generar el PDF: " + (e.message || e), "err");
+  } finally {
+    cont.remove();
+    if (btn) { btn.disabled = false; btn.textContent = txtOrig; }
+  }
 }
 
 // ── Excel Import ──────────────────────────────────────────────

@@ -2056,6 +2056,68 @@ app.clearListFilters();
 app.renderMovimientos = renderMovPrev;
 igual("'Ver mes completo' borra también el texto", app.detTablaGetState("movlist").filtro, "");
 
+// ══════════════════════════════════════════════════════════════
+seccion("51 · Filtro Excel: componente compartido");
+const vals3 = [{ valor: "a" }, { valor: "b" }, { valor: "c" }];
+igual("todo tildado = sin filtro (null)", app.filtroExcelResultado(vals3, new Set(["a", "b", "c"])), null);
+igual("una parte = Set con esos", [...app.filtroExcelResultado(vals3, new Set(["a", "c"]))], ["a", "c"]);
+igual("valoresDistintos cuenta y pone (Vacías) al final",
+      app.valoresDistintos([{ x: "b" }, { x: "" }, { x: "a" }, { x: "b" }], it => it.x).map(v => v.etiqueta + ":" + v.cantidad),
+      ["a:1", "b:2", "(Vacías):1"]);
+
+seccion("52 · Resumen > Reportes: Categorías y Rubros");
+app.movimientos = [
+  { id: "r1", tipo: "EGRESO",  fecha: "2026-05-02", mes: "202605", categoria: "Gastos cancha", codRubro: "8",  rubro: "ARBITRAJE", egreso: 40000, ingreso: 0, cuenta: "CAJA", concepto: "Terna" },
+  { id: "r2", tipo: "EGRESO",  fecha: "2026-05-03", mes: "202605", categoria: "Gastos cancha", codRubro: "9",  rubro: "SEGURIDAD", egreso: 20000, ingreso: 0, cuenta: "CAJA", concepto: "Policía" },
+  { id: "r3", tipo: "EGRESO",  fecha: "2026-05-04", mes: "202605", categoria: "Gastos Medicos", codRubro: "21", rubro: "GASTOS MEDICOS", egreso: 30000, ingreso: 0, cuenta: "MACRO", concepto: "RX" },
+  { id: "r4", tipo: "INGRESO", fecha: "2026-05-05", mes: "202605", categoria: "Ingresos de cancha", codRubro: "1", rubro: "ENTRADAS", egreso: 0, ingreso: 150000, cuenta: "CAJA", concepto: "Entradas" }
+];
+app.reportesState = { anio: "2026", meses: ["2026-05"], cuentas: [], filtroCat: null, filtroRubro: null,
+                      jugadorCT: "", adherente: "", search: "", catExpandido: new Set(), rubroExpandido: new Set() };
+const repIds = () => app.getMovimientosReportes().map(m => m.id);
+igual("sin filtros, todo", repIds(), ["r1", "r2", "r3", "r4"]);
+igual("categorías disponibles con su cantidad", app.repFiltroValores("cat").map(v => v.etiqueta + ":" + v.cantidad),
+      ["Gastos cancha:2", "Gastos Medicos:1", "Ingresos de cancha:1"]);
+app.reportesState.filtroCat = new Set(["Gastos cancha", "Gastos Medicos"]);
+igual("varias categorías a la vez (antes era una sola)", repIds(), ["r1", "r2", "r3"]);
+igual("los rubros ofrecidos son sólo los de esas categorías", app.repFiltroValores("rubro").map(v => v.etiqueta),
+      ["ARBITRAJE", "GASTOS MEDICOS", "SEGURIDAD"]);
+app.reportesState.filtroRubro = new Set(["8", "21"]);
+igual("rubro por código, combinado con categoría", repIds(), ["r1", "r3"]);
+igual("el botón resume 'n de total'", app.repFiltroResumen("rubro"), "2 de 3");
+const cuerpoRep = app.renderReportesBody();
+check("el TOTAL de la tabla suma sólo lo filtrado", cuerpoRep.includes(app.fmt(70000)) && !cuerpoRep.includes(app.fmt(150000)));
+app.reportesState.filtroCat = new Set(["Gastos cancha"]);
+igual("un rubro tildado de otra categoría no se cuenta en el resumen", app.repFiltroResumen("rubro"), "1 de 2");
+app.reportesState.filtroCat = null; app.reportesState.filtroRubro = null;
+igual("sin filtros vuelve todo", repIds().length, 4);
+
+seccion("53 · Reintegros: filtro de Jugadores y Estado");
+app.reintegroFiltro = ""; app.reintegroAnio = ""; app.reintegroOrdenCol = ""; app.reintegroColFiltros = {};
+app.movimientos = [
+  { id:"a1", tipo:"EGRESO", fecha:"2026-03-12", codRubro:"21", jugadorCT:"PEREZ", egreso:25000, seguroReintegro:1, concepto:"Consulta", vinculos:[] },
+  { id:"a2", tipo:"EGRESO", fecha:"2026-05-02", codRubro:"21", jugadorCT:"GOMEZ", egreso:90000, seguroReintegro:1, concepto:"Resonancia", vinculos:[] },
+  { id:"b1", tipo:"EGRESO", fecha:"2026-05-10", codRubro:"21", jugadorCT:"LOPEZ", egreso:1000, seguroReintegro:1, concepto:"x", vinculos:[] },
+  { id:"bi", tipo:"INGRESO", fecha:"2026-05-11", codRubro:"21", jugadorCT:"LOPEZ", ingreso:1000, concepto:"r", vinculos:[{ egresoId:"b1", monto:1000 }] }
+];
+const jugs = () => app.filasReintegros().map(r => r.jugador).sort();
+igual("sin filtros, los tres", jugs(), ["GOMEZ", "LOPEZ", "PEREZ"]);
+igual("jugadores disponibles", app.reintFiltroValores("jugador").map(v => v.valor), ["GOMEZ", "LOPEZ", "PEREZ"]);
+igual("estados ordenados por urgencia", app.reintFiltroValores("estado").map(v => v.etiqueta + ":" + v.cantidad), ["🔴 Pendiente:2", "✅ OK:1"]);
+app.reintegroColFiltros = { jugador: new Set(["PEREZ", "LOPEZ"]) };
+igual("filtrar varios jugadores", jugs(), ["LOPEZ", "PEREZ"]);
+app.reintegroColFiltros.estado = new Set(["SIN"]);
+igual("combinado con estado", jugs(), ["PEREZ"]);
+igual("los estados ofrecidos salen de los jugadores elegidos", app.reintFiltroValores("estado").map(v => v.valor), ["SIN", "OK"]);
+const tablaR = app.renderReintegrosTabla(app.filasReintegros());
+check("los TOTALES de la tabla suman sólo lo filtrado", tablaR.includes(app.fmt(25000)) && !tablaR.includes(app.fmt(90000)));
+check("el PDF sale de lo filtrado", app.reintPdfDatos(app.filasReintegros(), app.buildVinculosIndex().porEgreso).jugadores.map(j => j.jugador).join() === "PEREZ");
+check("y el botón lo avisa", app.reintPdfLabel().includes("(filtrado)"));
+app.reintegroColFiltros = { jugador: new Set(["NADIE"]) };
+const vacioReint = app.renderReintegrosBody();
+check("si no queda nada, la barra de filtros sigue para poder deshacerlo", vacioReint.includes("Jugadores:") && vacioReint.includes("Sin jugadores para estos filtros"));
+app.reintegroColFiltros = {};
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

@@ -2118,6 +2118,112 @@ const vacioReint = app.renderReintegrosBody();
 check("si no queda nada, la barra de filtros sigue para poder deshacerlo", vacioReint.includes("Jugadores:") && vacioReint.includes("Sin jugadores para estos filtros"));
 app.reintegroColFiltros = {};
 
+seccion("54 · Granos: cobro por precio y monto, liquidación pedida y ajuste por comisión");
+// El caso tal cual se usa: se piden liquidar 200 qq de soja, van entrando pagos y cada uno se carga
+// con el precio de la liquidación y el monto recibido. Al final sobra lo que se llevó la comisión.
+const filaG = (o) => Object.assign({ nota:"", movimientoId:"", precioTn:0, pedidoId:"" }, o);
+app.preciosGranos = { Soja: 480000, Trigo: 293600 };
+app.cuentas = ["MACRO"]; app.metodos = ["TRANSFERENCIA"];
+app.movimientos = [
+  { id:"mv1", tipo:"INGRESO", fecha:"2026-10-01", mes:"202610", ingreso:1000000, montoFinal:1000000, observacion:"",
+    concepto:"Venta Soja - 2.083,33 kg - $1.000.000 - (precio $480.000)" },
+  { id:"mv2", tipo:"INGRESO", fecha:"2026-10-05", mes:"202610", ingreso:2000000, montoFinal:2000000, observacion:"",
+    concepto:"Venta Soja - 4.000 kg - $2.000.000 - (precio $500.000)" },
+  { id:"mvViejo", tipo:"INGRESO", fecha:"2026-08-10", mes:"202608", ingreso:1500000, montoFinal:1500000, observacion:"",
+    concepto:"Venta Trigo - 5.010 kg - $1.500.000 - (precio $299.401)" },
+];
+app.reservas = [
+  filaG({ id:"c1", fecha:"2026-06-30", grano:"Soja",  tipo:"COSECHA", kg:36020, nota:"Stock inicial" }),
+  filaG({ id:"c2", fecha:"2026-06-30", grano:"Trigo", tipo:"COSECHA", kg:43860, nota:"Stock inicial" }),
+  filaG({ id:"v0", fecha:"2026-08-10", grano:"Trigo", tipo:"VENTA",   kg:5010, movimientoId:"mvViejo" }),
+  filaG({ id:"p1", fecha:"2026-09-28", grano:"Soja",  tipo:"PEDIDO",  kg:20000 }),
+  filaG({ id:"v1", fecha:"2026-10-01", grano:"Soja",  tipo:"VENTA",   kg:2083.33, movimientoId:"mv1", precioTn:480000, pedidoId:"p1" }),
+  filaG({ id:"v2", fecha:"2026-10-05", grano:"Soja",  tipo:"VENTA",   kg:4000,    movimientoId:"mv2", precioTn:500000, pedidoId:"p1" }),
+];
+igual("los kilos salen de monto / precio por tonelada", app.kgDeVenta(1000000, 480000), 2083.33);
+igual("2 millones a $500.000 la tonelada son 40 qq", app.fmtQq(app.kgDeVenta(2000000, 500000)), "40");
+igual("sin precio no hay kilos (no divide por cero)", app.kgDeVenta(1000000, 0), 0);
+igual("ni con monto vacío", app.kgDeVenta("", 480000), 0);
+igual("pedir la liquidación NO descuenta stock; los cobros sí", app.calcStockGranos().Soja, 29936.67);
+igual("el trigo sigue como antes", app.calcStockGranos().Trigo, 38850);
+let ped = app.pedidosGranos()[0];
+igual("lo cobrado de la liquidación", [ped.cobros, ped.cobradoKg, ped.montoCobrado], [2, 6083.33, 3000000]);
+igual("lo que falta cobrar", ped.pendienteKg, 13916.67);
+check("y sigue abierta", ped.abierto === true);
+igual("una venta vieja sin precio guardado lo deduce de monto y kilos",
+      Math.round(app.precioDeVenta(app.reservas[2])), 299401);
+igual("una nueva usa el precio que se tipeó", app.precioDeVenta(app.reservas[4]), 480000);
+
+let htmlG = app.renderGranos();
+check("la pantalla muestra la liquidación en curso", htmlG.includes("Liquidaciones en curso") && htmlG.includes("200 qq pedidos"));
+check("con lo que falta en quintales", htmlG.includes("faltan 139,17 qq"));
+check("el stock avisa lo pedido sin cobrar", htmlG.includes("Pedido a liquidar, sin cobrar"));
+check("cada fila del historial se puede editar", app.reservas.every(r => htmlG.includes(`editarReserva('${r.id}')`)));
+check("el cobro muestra kilos, quintales, monto y precio",
+      htmlG.includes("2.083,33 kg") && htmlG.includes("20,83 qq") && htmlG.includes("$1.000.000") && htmlG.includes("(precio $480.000)"));
+check("el formulario de venta pide precio y monto, no kilos",
+      htmlG.includes('id="venta-precio"') && htmlG.includes('id="venta-monto"') && !htmlG.includes('id="venta-kg"'));
+check("y ya apunta a la liquidación abierta", /<option value="p1" selected>/.test(htmlG));
+check("no avisa de servidor viejo cuando las filas traen la liquidación", !htmlG.includes("Falta actualizar el servidor"));
+
+igual("texto del cálculo mientras se tipea",
+      app.ventaCalcTexto(480000, 1000000, "").replace(/<[^>]+>/g, ""),
+      "Se descuentan 2.083,33 kg · 20,83 qq ($48.000 por quintal)");
+check("contra una liquidación dice cuánto queda", app.ventaCalcTexto(500000, 1000000, "p1").includes("Quedan 119,17 qq por cobrar"));
+check("y avisa si el cobro supera lo pedido", app.ventaCalcTexto(100000, 2000000, "p1").includes("Supera lo pedido en 60,83 qq"));
+check("al editar, los kilos propios no se cuentan dos veces",
+      app.ventaCalcTexto(500000, 0, "p1", 4000, 4000).includes("Quedan 139,17 qq"));
+
+// Precio, monto y kilos van atados: el monto es la plata que entró, así que manda.
+igual("cambiar el precio recalcula los kilos", app.ventaRecalcular("precio", { precio:500000, monto:1000000, kg:2083.33 }).kg, 2000);
+igual("cambiar el monto también", app.ventaRecalcular("monto", { precio:480000, monto:960000, kg:2083.33 }).kg, 2000);
+igual("cambiar los kilos acomoda el precio, no el monto",
+      app.ventaRecalcular("kg", { precio:480000, monto:1000000, kg:2000 }), { precio:500000, monto:1000000, kg:2000 });
+
+// Editar el cobro reescribe el ingreso que generó.
+const v1 = app.reservas[4];
+const movEd = app.movDeVentaEditado(app.movimientos[0], v1, Object.assign({}, v1, { fecha:"2026-11-02", kg:2000, precioTn:500000, nota:"ok" }), 1000000);
+igual("la descripción automática se rearma con los kilos y el precio nuevos", movEd.concepto,
+      "Venta Soja - 2.000 kg - $1.000.000 - (precio $500.000)");
+igual("la fecha y el mes del ingreso acompañan", [movEd.fecha, movEd.mes], ["2026-11-02", "202611"]);
+igual("y la nota viaja a la observación si era la misma", movEd.observacion, "ok");
+const movManual = Object.assign({}, app.movimientos[0], { concepto:"Pago Cooperativa soja", observacion:"ver liquidación 123" });
+const movEd2 = app.movDeVentaEditado(movManual, v1, Object.assign({}, v1, { kg:2000, precioTn:500000, nota:"ok" }), 1100000);
+igual("una descripción escrita a mano se respeta", movEd2.concepto, "Pago Cooperativa soja");
+igual("igual que una observación propia", movEd2.observacion, "ver liquidación 123");
+igual("pero el monto sí se actualiza", [movEd2.ingreso, movEd2.montoFinal], [1100000, 1100000]);
+
+// Stock: ningún alta ni edición puede dejarlo en negativo.
+igual("un cobro por más kilos de los que hay se frena",
+      app.errorStockTrasCambio(null, filaG({ grano:"Soja", tipo:"VENTA", kg:30000 })), "No alcanza el stock de Soja: faltarían 63,33 kg");
+igual("uno que entra justo pasa", app.errorStockTrasCambio(null, filaG({ grano:"Soja", tipo:"VENTA", kg:29936.67 })), "");
+igual("achicar una cosecha por debajo de lo ya vendido se frena",
+      app.errorStockTrasCambio(app.reservas[0], Object.assign({}, app.reservas[0], { kg:6000 })), "No alcanza el stock de Soja: faltarían 83,33 kg");
+igual("corregirla hacia arriba pasa", app.errorStockTrasCambio(app.reservas[0], Object.assign({}, app.reservas[0], { kg:36500 })), "");
+igual("editar un pedido nunca toca el stock", app.errorStockTrasCambio(app.reservas[3], Object.assign({}, app.reservas[3], { kg:999999 })), "");
+
+// Cierre: lo que sobra es la comisión. Se descuenta como ajuste, sin movimiento de plata.
+const nMovs = app.movimientos.length;
+app.reservas.push(filaG({ id:"a1", fecha:"2026-10-20", grano:"Soja", tipo:"AJUSTE", kg:ped.pendienteKg, nota:app.NOTA_AJUSTE_COMISION, pedidoId:"p1" }));
+ped = app.pedidosGranos()[0];
+igual("tras el ajuste no queda nada pendiente", ped.pendienteKg, 0);
+check("la liquidación queda cerrada", ped.abierto === false);
+igual("el stock bajó los 200 qq completos: cobros + ajuste", app.calcStockGranos().Soja, 16020);
+igual("y no se generó ningún movimiento", app.movimientos.length, nMovs);
+htmlG = app.renderGranos();
+check("ya no aparece entre las liquidaciones en curso", !htmlG.includes("Liquidaciones en curso"));
+check("en el historial figura como cerrada", htmlG.includes("200 qq pedidos") && htmlG.includes("cerrada"));
+check("y el ajuste con su motivo", htmlG.includes("Ajuste por comisión") && htmlG.includes("13.916,67 kg"));
+check("la pantalla no muestra ningún identificador interno",
+      !/>[^<]*\b(p1|v1|a1|mv1)\b[^<]*</.test(htmlG));
+igual("sin liquidación abierta, el cobro queda como venta suelta",
+      app.ventaPedidoOptionsHtml("Soja").replace(/<[^>]+>/g, ""), "Sin liquidación pedida");
+
+// Servidor sin actualizar: las filas llegan sin el dato de la liquidación.
+app.reservas = [{ id:"c1", fecha:"2026-06-30", grano:"Soja", tipo:"COSECHA", kg:36020, nota:"", movimientoId:"" }];
+check("se avisa en la pantalla en vez de fallar en silencio", app.renderGranos().includes("Falta actualizar el servidor"));
+app.reservas = []; app.movimientos = [];
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

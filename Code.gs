@@ -168,7 +168,11 @@ const JUG_COLS = ["ID","Nombre","Activo"];
 const GRP_COLS = ["ID","Nombre","Miembros","Activo"];
 const CFG_COLS = ["Clave","Valor"];
 const RES_SHEET = "Reservas";
-const RES_COLS  = ["ID","Fecha","Grano","Tipo","Kg","Nota","MovimientoID","timestamp"];
+// Tipo: COSECHA (+kg) · VENTA (−kg, con su movimiento de ingreso y el precio por tonelada) ·
+// AJUSTE (−kg sin movimiento: la comisión) · PEDIDO (liquidación pedida: no mueve el stock, es la
+// referencia a la que apuntan los cobros y el ajuste por PedidoID).
+// PrecioTn y PedidoID van al final para no correr las columnas de las planillas ya creadas.
+const RES_COLS  = ["ID","Fecha","Grano","Tipo","Kg","Nota","MovimientoID","timestamp","PrecioTn","PedidoID"];
 const MIG_SHEET = "Migracion_Log";
 const MIG_COLS  = ["timestamp","BatchId","MovId","Campo","ValorOriginal","ValorNuevo"];
 
@@ -2247,6 +2251,8 @@ function handleAction(data) {
         kg:           Number(r[4] || 0),
         nota:         String(r[5] || ""),
         movimientoId: String(r[6] || ""),
+        precioTn:     Number(r[8] || 0),
+        pedidoId:     String(r[9] || ""),
       }));
       return { ok: true, reservas };
     }
@@ -2257,9 +2263,27 @@ function handleAction(data) {
       const id = r.id || uid_gs();
       sh.appendRow([
         id, r.fecha || "", r.grano || "", r.tipo || "", Number(r.kg || 0),
-        r.nota || "", r.movimientoId || "", nowTsLocal()
+        r.nota || "", r.movimientoId || "", nowTsLocal(),
+        Number(r.precioTn || 0) || "", r.pedidoId || ""
       ]);
       return { ok: true, id };
+    }
+
+    // Edición de una fila del historial. Sólo pisa lo editable: el Tipo, el MovimientoID y el
+    // timestamp de alta no cambian (el ingreso de una venta se edita aparte, con updateMov).
+    case "updateReserva": {
+      const sh  = getOrCreateSheet(RES_SHEET, RES_COLS);
+      const r   = data.reserva || {};
+      const all = sh.getDataRange().getValues();
+      for (let i = 1; i < all.length; i++) {
+        if (String(all[i][0]) === String(r.id)) {
+          sh.getRange(i + 1, 2, 1, 2).setValues([[r.fecha || "", r.grano || ""]]);
+          sh.getRange(i + 1, 5, 1, 2).setValues([[Number(r.kg || 0), r.nota || ""]]);
+          sh.getRange(i + 1, 9, 1, 2).setValues([[Number(r.precioTn || 0) || "", r.pedidoId || ""]]);
+          return { ok: true };
+        }
+      }
+      return { ok: false, error: "No se encontró el registro a editar" };
     }
 
     case "deleteReserva": {
@@ -2267,6 +2291,11 @@ function handleAction(data) {
       const all = sh.getDataRange().getValues();
       for (let i = 1; i < all.length; i++) {
         if (String(all[i][0]) === String(data.id)) {
+          // Al borrar una liquidación pedida, sus cobros y ajustes quedan sueltos: se les limpia el
+          // PedidoID (antes de borrar la fila, que corre los índices) para que no apunten a nada.
+          for (let j = 1; j < all.length; j++) {
+            if (j !== i && String(all[j][9] || "") === String(data.id)) sh.getRange(j + 1, 10).setValue("");
+          }
           sh.deleteRow(i + 1);
           return { ok: true };
         }

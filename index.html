@@ -1500,6 +1500,7 @@ const Storage = {
   async deleteEvento(id)     { return this._post({ action:"deleteEvento", id          }); },
   async listReservas()       { return this._post({ action:"listReservas"              }); },
   async saveReserva(r)       { return this._post({ action:"saveReserva",  reserva:r   }); },
+  async updateReserva(r)     { return this._post({ action:"updateReserva", reserva:r }); },
   async deleteReserva(id)    { return this._post({ action:"deleteReserva", id         }); },
   async seedGranos()         { return this._post({ action:"seedGranos"                }); },
   async previewMigracion()   { return this._post({ action:"previewMigracion"          }); },
@@ -8459,14 +8460,65 @@ async function deleteEvento(id) {
 }
 
 // ── Reserva de Granos ────────────────────────────────────────────
-// kg en stock por grano = Σ COSECHA - Σ VENTA (mismo patrón que calcSaldosCuentas).
+// Cada fila de `reservas` es de un tipo:
+//   COSECHA  suma kilos al stock.
+//   VENTA    resta kilos. Es un COBRO: tiene su movimiento de ingreso (movimientoId) y el precio por
+//            tonelada al que se liquidó (precioTn). Los kilos salen de monto / precio.
+//   AJUSTE   resta kilos sin generar movimiento: lo que se lleva la comisión al cerrar una liquidación.
+//   PEDIDO   "pedí liquidar 200 qq". NO mueve el stock: es la referencia contra la que se imputan los
+//            cobros y el ajuste (pedidoId) para saber cuánto falta cobrar.
+const KG_POR_QQ = 100;
+const NOTA_AJUSTE_COMISION = "Ajuste por comisión";
+const GRANO_TIPOS = {
+  COSECHA: { icono: "🌾", nombre: "Cosecha" },
+  VENTA:   { icono: "💰", nombre: "Venta" },
+  AJUSTE:  { icono: "⚖️", nombre: "Ajuste" },
+  PEDIDO:  { icono: "📋", nombre: "Liquidación pedida" },
+};
+
+// Los kilos se guardan con 2 decimales: una venta sale de dividir monto por precio y casi nunca da
+// redondo, y sin redondear el stock arrastra colas del tipo 0,0000001 que no dejan cerrar en cero.
+function redondeoKg(n) { return Math.round((+n || 0) * 100) / 100; }
+function fmtQq(kg) { return fmtKg((+kg || 0) / KG_POR_QQ); }
+
+/** Kilos que representa un cobro: monto recibido / precio por tonelada. */
+function kgDeVenta(monto, precioTn) {
+  monto = +monto; precioTn = +precioTn;
+  if (!(monto > 0) || !(precioTn > 0)) return 0;
+  return redondeoKg(monto / precioTn * 1000);
+}
+
+// En una venta el monto vive en el movimiento de ingreso que se generó, no en la reserva.
+function movDeVenta(r) {
+  return r.movimientoId ? (movimientos.find(m => m.id === r.movimientoId) || null) : null;
+}
+function montoDeVenta(r) {
+  const mov = movDeVenta(r);
+  return mov ? Number(mov.ingreso || mov.montoFinal || 0) : 0;
+}
+// Las ventas viejas no tienen el precio guardado: se deduce de monto y kilos, como se mostró siempre.
+function precioDeVenta(r) {
+  if (+r.precioTn > 0) return +r.precioTn;
+  const monto = montoDeVenta(r);
+  return (monto && r.kg) ? monto / (r.kg / 1000) : 0;
+}
+function conceptoVentaGrano(grano, kg, monto, precioTn) {
+  return `Venta ${grano} - ${fmtKg(kg)} kg - ${fmt(monto)} - (precio ${fmt(precioTn)})`;
+}
+
+/** Kilos que una fila suma (+) o resta (−) del stock. Un pedido no lo mueve. */
+function efectoStock(r) {
+  if (!r) return 0;
+  if (r.tipo === "COSECHA") return +r.kg || 0;
+  if (r.tipo === "VENTA" || r.tipo === "AJUSTE") return -(+r.kg || 0);
+  return 0;
+}
+
+// kg en stock por grano = Σ COSECHA − Σ VENTA − Σ AJUSTE (mismo patrón que calcSaldosCuentas).
 function calcStockGranos() {
   const stock = {};
-  for (const r of reservas) {
-    if (!stock[r.grano]) stock[r.grano] = 0;
-    if (r.tipo === "COSECHA") stock[r.grano] += r.kg;
-    else if (r.tipo === "VENTA") stock[r.grano] -= r.kg;
-  }
+  for (const r of reservas) stock[r.grano] = (stock[r.grano] || 0) + efectoStock(r);
+  for (const g in stock) stock[g] = redondeoKg(stock[g]);
   return stock;
 }
 
@@ -8479,77 +8531,223 @@ function valorTotalGranos() {
   return total;
 }
 
+function granosConocidos() {
+  return [...new Set([...Object.keys(calcStockGranos()), ...Object.keys(preciosGranos)])].filter(Boolean).sort();
+}
+
+/** Liquidaciones pedidas con lo que ya se cobró y lo que falta. `abierto` = todavía queda algo por
+ *  cobrar o ajustar; no hay un estado guardado, sale siempre de las cuentas. */
+function pedidosGranos() {
+  return reservas.filter(r => r.tipo === "PEDIDO").map(p => {
+    const hijos  = reservas.filter(r => r.pedidoId === p.id);
+    const cobros = hijos.filter(r => r.tipo === "VENTA");
+    const cobradoKg   = redondeoKg(cobros.reduce((s, r) => s + (+r.kg || 0), 0));
+    const ajusteKg    = redondeoKg(hijos.filter(r => r.tipo === "AJUSTE").reduce((s, r) => s + (+r.kg || 0), 0));
+    const pendienteKg = redondeoKg(p.kg - cobradoKg - ajusteKg);
+    return { ...p, cobros: cobros.length, cobradoKg, ajusteKg, pendienteKg,
+             montoCobrado: cobros.reduce((s, r) => s + montoDeVenta(r), 0),
+             abierto: pendienteKg > 0.005 };
+  }).sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+
+/** Mensaje de error si un alta o una edición dejaría el stock en negativo; "" si está bien.
+ *  `viejo` es la fila antes del cambio (null en un alta) y `nuevo` cómo quedaría.
+ *  Si el stock ya venía en negativo y el cambio no lo empeora, no se frena: hay que poder corregir. */
+function errorStockTrasCambio(viejo, nuevo) {
+  const grano = (nuevo || viejo).grano;
+  const stock = calcStockGranos()[grano] || 0;
+  const queda = redondeoKg(stock - efectoStock(viejo) + efectoStock(nuevo));
+  if (queda >= -0.005 || queda >= stock) return "";
+  return `No alcanza el stock de ${grano}: faltarían ${fmtKg(-queda)} kg`;
+}
+
+// El backend viejo no devuelve la liquidación de cada fila. Sin eso los cobros no quedan atados a su
+// pedido y editar el historial falla: se avisa en la pantalla en vez de dejar que se pierda en silencio.
+function granosServidorViejo() {
+  return reservas.length > 0 && !reservas.some(r => "pedidoId" in r);
+}
+
+function granoOptionsHtml(granos, sel) {
+  return granos.map(g => `<option value="${esc(g)}" ${g === sel ? "selected" : ""}>${esc(g)}</option>`).join("");
+}
+
+/** Opciones del selector "a qué liquidación corresponde este cobro" para un grano. Por defecto queda
+ *  elegida la más vieja que siga abierta, que es la que se está cobrando. */
+function ventaPedidoOptionsHtml(grano, selId) {
+  const lista = pedidosGranos().filter(p => p.grano === grano && (p.abierto || p.id === selId));
+  const sel = selId !== undefined ? selId : (lista[0] ? lista[0].id : "");
+  return lista.map(p =>
+      `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>Liquidación ${p.fecha.slice(8,10)}/${p.fecha.slice(5,7)} · faltan ${fmtQq(p.pendienteKg)} qq</option>`
+    ).join("") +
+    `<option value="" ${sel === "" ? "selected" : ""}>${lista.length ? "Venta suelta, sin liquidación pedida" : "Sin liquidación pedida"}</option>`;
+}
+
+/** Texto que acompaña al precio y al monto mientras se tipean: kilos y quintales que se descuentan
+ *  y, si el cobro va contra una liquidación, cuánto queda por cobrar. `kgPropios` son los kilos que
+ *  esta misma venta ya tenía imputados (al editar), para no contarlos dos veces. */
+function ventaCalcTexto(precio, monto, pedidoId, kgPropios, kgFijos) {
+  const kg = kgFijos !== undefined ? redondeoKg(kgFijos) : kgDeVenta(monto, precio);
+  if (!(kg > 0)) return "Con el precio y el monto se calculan los kilos vendidos.";
+  let t = `Se descuentan <b style="color:var(--text)">${fmtKg(kg)} kg</b> · <b style="color:var(--text)">${fmtQq(kg)} qq</b>`;
+  if (precio > 0) t += ` <span style="color:var(--text3)">(${fmt(precio / 10)} por quintal)</span>`;
+  const p = pedidoId ? pedidosGranos().find(x => x.id === pedidoId) : null;
+  if (p) {
+    const queda = redondeoKg(p.pendienteKg + (+kgPropios || 0) - kg);
+    t += "<br>" + (queda >= 0
+      ? `Quedan ${fmtQq(queda)} qq por cobrar de la liquidación`
+      : `Supera lo pedido en ${fmtQq(-queda)} qq`);
+  }
+  return t;
+}
+
 function renderGranos() {
-  const stock = calcStockGranos();
-  const granos = [...new Set([...Object.keys(stock), ...Object.keys(preciosGranos)])].sort();
+  const stock    = calcStockGranos();
+  const granos   = granosConocidos();
+  const pedidos  = pedidosGranos();
+  const abiertos = pedidos.filter(p => p.abierto);
+  const pedPorId = {};
+  for (const p of pedidos) pedPorId[p.id] = p;
 
   const stockHtml = granos.map(g => {
     const kg = stock[g] || 0;
     const precio = preciosGranos[g] || 0;
     const valor = (kg / 1000) * precio;
+    const enLiq = redondeoKg(abiertos.filter(p => p.grano === g).reduce((s, p) => s + p.pendienteKg, 0));
     return `
     <div class="entity-item" style="flex-direction:column;align-items:stretch;gap:6px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span class="entity-name">${esc(g)}</span>
-        <span class="cuenta-saldo pos">${fmtKg(kg)} kg</span>
+        <span class="cuenta-saldo ${kg < 0 ? "neg" : "pos"}">${fmtKg(kg)} kg</span>
       </div>
+      <div style="font-size:12px;color:var(--text3);text-align:right;margin-top:-4px">${fmtQq(kg)} qq</div>
       <div style="display:flex;gap:8px;align-items:center">
         <label style="font-size:12px;color:var(--text2);white-space:nowrap">$/tonelada</label>
         <input class="inp" type="number" min="0" step="any" value="${precio}"
                onchange="updatePrecioGrano('${esc(g)}', this.value)" style="flex:1">
       </div>
       <div style="font-size:13px;color:var(--text2)">Valor estimado: <b style="color:var(--text)">${fmt(valor)}</b></div>
+      ${enLiq > 0 ? `<div style="font-size:13px;color:var(--text2)">Pedido a liquidar, sin cobrar: <b style="color:var(--text)">${fmtQq(enLiq)} qq</b></div>` : ""}
     </div>`;
   }).join("");
 
-  const sorted = [...reservas].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  const pedidosHtml = abiertos.map(p => {
+    const pctCobrado = p.kg ? Math.max(0, Math.min(100, (p.cobradoKg + p.ajusteKg) / p.kg * 100)) : 0;
+    const pctFalta   = p.kg ? p.pendienteKg / p.kg * 100 : 0;
+    return `
+    <div class="entity-item" id="ped-${p.id}" style="flex-direction:column;align-items:stretch;gap:7px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span class="entity-name">${esc(p.grano)} — ${fmtQq(p.kg)} qq pedidos</span>
+        <span class="cuenta-saldo" style="font-size:13px;white-space:nowrap">faltan ${fmtQq(p.pendienteKg)} qq</span>
+      </div>
+      <div style="height:6px;background:var(--bg4);border-radius:3px;overflow:hidden">
+        <div style="height:100%;width:${pctCobrado.toFixed(1)}%;background:var(--accent)"></div>
+      </div>
+      <div style="font-size:12px;color:var(--text2)">
+        Cobrado: <b style="color:var(--text)">${fmtQq(p.cobradoKg)} qq</b> · ${fmt(p.montoCobrado)} en ${p.cobros} cobro${p.cobros !== 1 ? "s" : ""}<br>
+        Falta: ${fmtKg(p.pendienteKg)} kg, el ${fmtKg(pctFalta)}% de lo pedido
+      </div>
+      <div style="font-size:11px;color:var(--text3)">Pedida el ${fechaCorta(p.fecha)}${p.nota ? " · " + esc(p.nota) : ""}</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-sm accent" style="flex:1" onclick="ventaElegirPedido('${p.id}')">+ Cargar cobro</button>
+        <button class="btn-sm" style="flex:1" id="pedcerrar-${p.id}" onclick="confirmCerrarPedido('${p.id}')">Cerrar con ajuste</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  // Más nuevo arriba; entre filas del mismo día, la que se cargó última.
+  const sorted = reservas.map((r, i) => ({ r, i }))
+    .sort((a, b) => b.r.fecha.localeCompare(a.r.fecha) || b.i - a.i).map(x => x.r);
   const histHtml = sorted.map(r => {
-    // En una venta el monto vive en el movimiento que se generó: se busca por movimientoId para
-    // mostrar la misma línea que quedó como concepto del movimiento.
-    const mov   = r.movimientoId ? movimientos.find(m => m.id === r.movimientoId) : null;
-    const monto = mov ? Number(mov.ingreso || mov.montoFinal || 0) : 0;
-    const cola  = (r.tipo === "VENTA" && monto)
-      ? ` — ${fmt(monto)} <span style="color:var(--text3)">(precio ${fmt(monto / (r.kg/1000))})</span>` : "";
+    const t = GRANO_TIPOS[r.tipo] || { icono: "•", nombre: r.tipo };
+    let titulo, estado = "";
+    if (r.tipo === "PEDIDO") {
+      const p = pedPorId[r.id];
+      titulo = `${esc(r.grano)} — ${fmtQq(r.kg)} qq pedidos`;
+      estado = p && p.abierto ? ` · faltan ${fmtQq(p.pendienteKg)} qq` : " · cerrada";
+    } else {
+      titulo = `${esc(r.grano)} — ${fmtKg(r.kg)} kg <span style="color:var(--text3)">· ${fmtQq(r.kg)} qq</span>`;
+      // El monto se busca en el movimiento que generó la venta, para mostrar la misma línea que
+      // quedó como concepto de ese movimiento.
+      const monto = r.tipo === "VENTA" ? montoDeVenta(r) : 0;
+      if (monto) titulo += ` — ${fmt(monto)} <span style="color:var(--text3)">(precio ${fmt(precioDeVenta(r))})</span>`;
+      if (r.pedidoId && pedPorId[r.pedidoId]) estado = ` · liquidación del ${fechaCorta(pedPorId[r.pedidoId].fecha)}`;
+    }
     return `
     <div class="entity-item" id="res-${r.id}">
-      <div>
-        <span class="entity-name">${r.tipo === "COSECHA" ? "🌾" : "💰"} ${esc(r.grano)} — ${fmtKg(r.kg)} kg${cola}</span>
-        <div style="font-size:11px;color:var(--text3)">${r.fecha} · ${esc(r.tipo)}${r.nota ? " · "+esc(r.nota) : ""}</div>
+      <div style="flex:1;min-width:0">
+        <span class="entity-name">${t.icono} ${titulo}</span>
+        <div style="font-size:11px;color:var(--text3)">${r.fecha} · ${esc(t.nombre)}${estado}${r.nota ? " · "+esc(r.nota) : ""}</div>
       </div>
+      <button class="btn-sm" id="resedit-${r.id}" onclick="editarReserva('${r.id}')">✎</button>
       <button class="btn-sm danger" id="resdel-${r.id}" onclick="confirmDeleteReserva('${r.id}')">✕</button>
     </div>`;
   }).join("");
 
+  // El cobro arranca apuntando a la liquidación abierta más vieja, que es la que se está cobrando.
+  const granoVenta = abiertos[0] ? abiertos[0].grano : (granos[0] || "");
+  const cosechaOpts = `
+        <option value="Soja">Soja</option>
+        <option value="Trigo">Trigo</option>
+        <option value="">Otro…</option>`;
+
   return `
+    ${granosServidorViejo() ? `<p class="note" style="color:var(--red);margin-bottom:10px">⚠️ Falta actualizar el servidor (Code.gs) para poder editar el historial y cargar liquidaciones.</p>` : ""}
     <div class="cfg-title" style="margin-bottom:8px">📦 Stock de granos</div>
     ${stockHtml || '<p class="note">Sin stock registrado</p>'}
 
+    ${abiertos.length ? `
+    <div class="cfg-title" style="margin:18px 0 8px">📋 Liquidaciones en curso</div>
+    ${pedidosHtml}` : ""}
+
+    <div class="cfg-title" id="venta-titulo" style="margin:18px 0 8px">💰 Registrar cobro de venta</div>
+    <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
+      <select class="inp" id="venta-grano" onchange="ventaSyncPedidos()">
+        ${granoOptionsHtml(granos, granoVenta)}
+      </select>
+      <select class="inp" id="venta-pedido" onchange="ventaCalcular()">${ventaPedidoOptionsHtml(granoVenta)}</select>
+      <input class="inp" id="venta-fecha" type="date" value="${today()}">
+      <input class="inp" id="venta-precio" type="number" min="0" step="any" inputmode="decimal" placeholder="Precio de la liquidación ($ por tonelada)" oninput="ventaCalcular()">
+      <input class="inp" id="venta-monto" type="number" min="0" step="any" inputmode="decimal" placeholder="Monto recibido ($)" oninput="ventaCalcular()">
+      <div class="note" id="venta-calc">${ventaCalcTexto(0, 0, "")}</div>
+      <select class="inp" id="venta-cuenta">${cuentas.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
+      <select class="inp" id="venta-metodo">${metodos.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>
+      <input class="inp" id="venta-nota" type="text" placeholder="Nota (opcional)">
+      <button class="btn-sm accent" id="btn-registrar-venta-grano" onclick="addVentaGrano()">+ Registrar cobro y generar ingreso</button>
+    </div>
+
+    <div class="cfg-title" style="margin:18px 0 8px">📋 Anotar liquidación pedida</div>
+    <p class="note" style="margin:-4px 0 8px">Cuántos quintales pediste liquidar. El stock no cambia hasta que cargues los cobros.</p>
+    <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
+      <select class="inp" id="pedido-grano">
+        ${granoOptionsHtml(granos, granos[0] || "")}
+      </select>
+      <input class="inp" id="pedido-fecha" type="date" value="${today()}">
+      <input class="inp" id="pedido-qq" type="number" min="0" step="any" inputmode="decimal" placeholder="Quintales a liquidar (ej. 200)">
+      <input class="inp" id="pedido-nota" type="text" placeholder="Nota (opcional)">
+      <button class="btn-sm accent" id="btn-agregar-pedido" onclick="addPedidoGrano()">+ Anotar liquidación</button>
+    </div>
+
+    <div class="cfg-title" style="margin:18px 0 8px">⚖️ Ajuste de kilos</div>
+    <p class="note" style="margin:-4px 0 8px">Descuenta kilos del stock sin generar un movimiento. Sirve para lo que se lleva la comisión.</p>
+    <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
+      <select class="inp" id="ajuste-grano">
+        ${granoOptionsHtml(granos, granos[0] || "")}
+      </select>
+      <input class="inp" id="ajuste-fecha" type="date" value="${today()}">
+      <input class="inp" id="ajuste-kg" type="number" min="0" step="any" inputmode="decimal" placeholder="Kg a descontar">
+      <input class="inp" id="ajuste-nota" type="text" value="${esc(NOTA_AJUSTE_COMISION)}" placeholder="Motivo">
+      <button class="btn-sm accent" id="btn-agregar-ajuste" onclick="addAjusteGrano()">+ Registrar ajuste</button>
+    </div>
+
     <div class="cfg-title" style="margin:18px 0 8px">＋ Registrar cosecha</div>
     <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
-      <select class="inp" id="cosecha-grano">
-        <option value="Soja">Soja</option>
-        <option value="Trigo">Trigo</option>
-        <option value="">Otro…</option>
+      <select class="inp" id="cosecha-grano">${cosechaOpts}
       </select>
       <input class="inp" id="cosecha-grano-otro" type="text" placeholder="Nombre del grano (si elegiste 'Otro')">
       <input class="inp" id="cosecha-fecha" type="date" value="${today()}">
       <input class="inp" id="cosecha-kg" type="number" min="0" step="any" placeholder="Kg ingresados">
       <input class="inp" id="cosecha-nota" type="text" placeholder="Nota (opcional)">
       <button class="btn-sm accent" id="btn-agregar-cosecha" onclick="addCosecha()">+ Agregar cosecha</button>
-    </div>
-
-    <div class="cfg-title" style="margin:18px 0 8px">💰 Registrar venta</div>
-    <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
-      <select class="inp" id="venta-grano">
-        ${granos.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join("")}
-      </select>
-      <input class="inp" id="venta-fecha" type="date" value="${today()}">
-      <input class="inp" id="venta-kg" type="number" min="0" step="any" placeholder="Kg vendidos">
-      <input class="inp" id="venta-monto" type="number" min="0" step="any" placeholder="Monto del ingreso ($)">
-      <select class="inp" id="venta-cuenta">${cuentas.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
-      <select class="inp" id="venta-metodo">${metodos.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>
-      <input class="inp" id="venta-nota" type="text" placeholder="Nota (opcional)">
-      <button class="btn-sm accent" id="btn-registrar-venta-grano" onclick="addVentaGrano()">+ Registrar venta y generar ingreso</button>
     </div>
 
     <div class="cfg-title" style="margin:18px 0 8px">Historial</div>
@@ -8566,6 +8764,17 @@ async function updatePrecioGrano(grano, valor) {
   renderEntidades();
 }
 
+/** Guarda una fila nueva de granos en el servidor y la suma a la lista local. */
+async function guardarReservaNueva(campos) {
+  const fila = { movimientoId: "", precioTn: 0, pedidoId: "", nota: "", ...campos };
+  const r = await Storage.saveReserva(fila);
+  if (!r.ok) throw new Error(r.error || "Error");
+  fila.id = r.id;
+  reservas.push(fila);
+  saveSnapshotToCache();
+  return fila;
+}
+
 async function addCosecha() {
   const btnId = "btn-agregar-cosecha";
   if (document.getElementById(btnId)?.disabled) return; // evita doble envío
@@ -8579,46 +8788,110 @@ async function addCosecha() {
   if (!isFinite(kg) || kg <= 0) { toast("Ingresá los kg ingresados (número positivo)", "err"); return; }
   setBtnState(btnId, "saving");
   try {
-    const r = await Storage.saveReserva({ fecha, grano, tipo: "COSECHA", kg, nota });
-    if (!r.ok) throw new Error(r.error || "Error");
-    reservas.push({ id: r.id, fecha, grano, tipo: "COSECHA", kg, nota, movimientoId: "" });
+    await guardarReservaNueva({ fecha, grano, tipo: "COSECHA", kg, nota });
     toast("Cosecha registrada ✓", "ok");
     renderEntidades();
     setBtnState(btnId, "saved");
   } catch(e) { handleSaveError(btnId, e); }
 }
 
+async function addPedidoGrano() {
+  const btnId = "btn-agregar-pedido";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
+  const grano = document.getElementById("pedido-grano")?.value || "";
+  const fecha = document.getElementById("pedido-fecha")?.value || today();
+  const qq    = parseFloat(document.getElementById("pedido-qq")?.value || "0");
+  const nota  = document.getElementById("pedido-nota")?.value || "";
+  if (!grano)                   { toast("Seleccioná el grano", "err"); return; }
+  if (!isFinite(qq) || qq <= 0) { toast("Ingresá los quintales a liquidar (número positivo)", "err"); return; }
+  setBtnState(btnId, "saving");
+  try {
+    await guardarReservaNueva({ fecha, grano, tipo: "PEDIDO", kg: redondeoKg(qq * KG_POR_QQ), nota });
+    toast("Liquidación anotada ✓", "ok");
+    renderEntidades();
+    setBtnState(btnId, "saved");
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+async function addAjusteGrano() {
+  const btnId = "btn-agregar-ajuste";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
+  const grano = document.getElementById("ajuste-grano")?.value || "";
+  const fecha = document.getElementById("ajuste-fecha")?.value || today();
+  const kg    = redondeoKg(parseFloat(document.getElementById("ajuste-kg")?.value || "0"));
+  const nota  = (document.getElementById("ajuste-nota")?.value || "").trim() || NOTA_AJUSTE_COMISION;
+  if (!grano)                   { toast("Seleccioná el grano", "err"); return; }
+  if (!isFinite(kg) || kg <= 0) { toast("Ingresá los kg a descontar (número positivo)", "err"); return; }
+  const fila = { fecha, grano, tipo: "AJUSTE", kg, nota };
+  const errStock = errorStockTrasCambio(null, fila);
+  if (errStock) { toast(errStock, "err"); return; }
+  setBtnState(btnId, "saving");
+  try {
+    await guardarReservaNueva(fila);
+    toast("Ajuste registrado ✓", "ok");
+    renderEntidades();
+    setBtnState(btnId, "saved");
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+// ── Cobro de venta: el formulario ────────────────────────────
+/** Al cambiar el grano, el selector de liquidación muestra las de ese grano. */
+function ventaSyncPedidos() {
+  const sel = document.getElementById("venta-pedido");
+  if (sel) sel.innerHTML = ventaPedidoOptionsHtml(document.getElementById("venta-grano")?.value || "");
+  ventaCalcular();
+}
+
+function ventaCalcular() {
+  const el = document.getElementById("venta-calc");
+  if (!el) return;
+  el.innerHTML = ventaCalcTexto(
+    parseFloat(document.getElementById("venta-precio")?.value || "0"),
+    parseFloat(document.getElementById("venta-monto")?.value || "0"),
+    document.getElementById("venta-pedido")?.value || "");
+}
+
+/** "+ Cargar cobro" de una liquidación: deja el formulario apuntando a ella y lo trae a la vista. */
+function ventaElegirPedido(id) {
+  const p = reservas.find(r => r.id === id);
+  const selGrano = document.getElementById("venta-grano");
+  const selPed   = document.getElementById("venta-pedido");
+  if (!p || !selGrano || !selPed) return;
+  selGrano.value = p.grano;
+  selPed.innerHTML = ventaPedidoOptionsHtml(p.grano, id);
+  ventaCalcular();
+  document.getElementById("venta-titulo")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById("venta-precio")?.focus({ preventScroll: true });
+}
+
 async function addVentaGrano() {
   const btnId = "btn-registrar-venta-grano";
   if (document.getElementById(btnId)?.disabled) return; // evita doble envío
-  const grano  = document.getElementById("venta-grano")?.value || "";
-  const fecha  = document.getElementById("venta-fecha")?.value || today();
-  const kg     = parseFloat(document.getElementById("venta-kg")?.value || "0");
-  const monto  = parseFloat(document.getElementById("venta-monto")?.value || "0");
-  const cuenta = document.getElementById("venta-cuenta")?.value || cuentas[0] || "";
-  const modo   = document.getElementById("venta-metodo")?.value || metodos[0] || "";
-  const nota   = document.getElementById("venta-nota")?.value || "";
-  if (!grano)                      { toast("Seleccioná el grano", "err"); return; }
-  if (!isFinite(kg) || kg <= 0)    { toast("Ingresá los kg vendidos (número positivo)", "err"); return; }
-  if (!isFinite(monto) || monto<=0){ toast("Ingresá el monto del ingreso (número positivo)", "err"); return; }
-  const stock = calcStockGranos();
-  if (kg > (stock[grano] || 0)) {
-    toast(`No hay suficiente stock de ${grano} (disponible: ${fmtKg(stock[grano]||0)} kg)`, "err");
-    return;
-  }
+  const grano    = document.getElementById("venta-grano")?.value || "";
+  const pedidoId = document.getElementById("venta-pedido")?.value || "";
+  const fecha    = document.getElementById("venta-fecha")?.value || today();
+  const precioTn = parseFloat(document.getElementById("venta-precio")?.value || "0");
+  const monto    = parseFloat(document.getElementById("venta-monto")?.value || "0");
+  const cuenta   = document.getElementById("venta-cuenta")?.value || cuentas[0] || "";
+  const modo     = document.getElementById("venta-metodo")?.value || metodos[0] || "";
+  const nota     = document.getElementById("venta-nota")?.value || "";
+  if (!grano)                            { toast("Seleccioná el grano", "err"); return; }
+  if (!isFinite(precioTn) || precioTn<=0){ toast("Ingresá el precio de la liquidación (por tonelada)", "err"); return; }
+  if (!isFinite(monto) || monto<=0)      { toast("Ingresá el monto recibido (número positivo)", "err"); return; }
+  // Los kilos ya no se tipean: salen del monto recibido y del precio al que se liquidó.
+  const kg = kgDeVenta(monto, precioTn);
+  if (!(kg > 0)) { toast("Con ese precio y ese monto no da ni un kilo: revisá los números", "err"); return; }
+  const fila = { fecha, grano, tipo: "VENTA", kg, nota, precioTn, pedidoId };
+  const errStock = errorStockTrasCambio(null, fila);
+  if (errStock) { toast(errStock, "err"); return; }
   setBtnState(btnId, "saving");
   showOverlay("Guardando…");
   try {
     const mes = fecha.slice(0,7).replace("-","");
-    // Precio implícito de ESTA venta, en $/tonelada (la unidad del precio que se carga en pantalla).
-    // Sale de los dos números que se acaban de tipear, así que la descripción siempre cierra sola:
-    // kg × precio/1000 = monto. Usar el precio configurado en su lugar daría una línea que no
-    // multiplica bien cuando la venta se cerró a otro valor.
-    const precioTn = monto / (kg / 1000);
     const movPayload = {
       id: uid(), mes, fecha,
       codRubro: "34", rubro: "CEREAL - INGRESOS Y GASTOS", categoria: "Otros | Internos",
-      concepto: `Venta ${grano} - ${fmtKg(kg)} kg - ${fmt(monto)} - (precio ${fmt(precioTn)})`,
+      concepto: conceptoVentaGrano(grano, kg, monto, precioTn),
       egreso: 0, ingreso: monto, montoFinal: monto,
       cuenta, cuentaDestino: "", modoPago: modo,
       jugadorCT: "", adherente: "",
@@ -8631,14 +8904,193 @@ async function addVentaGrano() {
     movPayload.id = rMov.id || movPayload.id;
     movimientos.push(movPayload);
 
-    const rRes = await Storage.saveReserva({ fecha, grano, tipo: "VENTA", kg, nota, movimientoId: rMov.id });
-    if (!rRes.ok) throw new Error(rRes.error || "Error al descontar el stock");
-    reservas.push({ id: rRes.id, fecha, grano, tipo: "VENTA", kg, nota, movimientoId: rMov.id });
+    await guardarReservaNueva({ ...fila, movimientoId: movPayload.id });
 
     updateBadge();
-    toast("Venta registrada e ingreso generado ✓", "ok");
+    toast("Cobro registrado e ingreso generado ✓", "ok");
     renderEntidades();
     setBtnState(btnId, "saved");
+  } catch(e) {
+    handleSaveError(btnId, e);
+  } finally {
+    hideOverlay();
+  }
+}
+
+// ── Cerrar una liquidación con ajuste ────────────────────────
+// Lo que queda sin cobrar al final es lo que se llevó la comisión: se descuenta del stock como
+// AJUSTE atado al pedido, sin movimiento de plata. Dos toques, como el borrado.
+function confirmCerrarPedido(id) {
+  const btn = document.getElementById("pedcerrar-" + id);
+  const p = pedidosGranos().find(x => x.id === id);
+  if (!btn || !p) return;
+  if (btn.dataset.confirm) { cerrarPedidoConAjuste(id); }
+  else {
+    btn.dataset.confirm = "1"; btn.textContent = `¿Descontar ${fmtQq(p.pendienteKg)} qq?`;
+    setTimeout(() => { if (btn && !btn.disabled) { btn.dataset.confirm = ""; btn.textContent = "Cerrar con ajuste"; }}, 4000);
+  }
+}
+
+async function cerrarPedidoConAjuste(id) {
+  const btnId = "pedcerrar-" + id;
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
+  const p = pedidosGranos().find(x => x.id === id);
+  if (!p || !p.abierto) return;
+  const fila = { fecha: today(), grano: p.grano, tipo: "AJUSTE", kg: p.pendienteKg, nota: NOTA_AJUSTE_COMISION, pedidoId: p.id };
+  const errStock = errorStockTrasCambio(null, fila);
+  if (errStock) { toast(errStock, "err"); return; }
+  setBtnState(btnId, "saving");
+  try {
+    await guardarReservaNueva(fila);
+    toast("Liquidación cerrada ✓", "ok");
+    renderEntidades();
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
+// ── Editar una fila del historial ────────────────────────────
+let reservaEd = null;   // { id, pedidoId, kg } de la fila abierta en el modal, como estaba al abrirlo
+
+function editarReserva(id) {
+  const r = reservas.find(x => x.id === id);
+  if (!r) return;
+  const t = GRANO_TIPOS[r.tipo] || { icono: "•", nombre: r.tipo };
+  reservaEd = { id, pedidoId: r.pedidoId || "", kg: r.kg };
+  const lbl = txt => `<label style="font-size:12px;color:var(--text2);display:block;margin:10px 0 4px">${txt}</label>`;
+  const num = (idCampo, valor, extra) =>
+    `<input class="inp" id="${idCampo}" type="number" min="0" step="any" inputmode="decimal" value="${valor}" ${extra || ""}>`;
+
+  let campos = lbl("Fecha") + `<input class="inp" id="re-fecha" type="date" value="${esc(r.fecha)}">`;
+  if (r.tipo === "VENTA") {
+    // Sin el movimiento de ingreso no hay monto que editar: quedan sólo los kilos.
+    if (movDeVenta(r)) {
+      campos += lbl("Precio de la liquidación ($ por tonelada)") + num("re-precio", redondeoKg(precioDeVenta(r)), `oninput="reservaEdCalc('precio')"`)
+              + lbl("Monto recibido ($)") + num("re-monto", montoDeVenta(r), `oninput="reservaEdCalc('monto')"`);
+    }
+    campos += lbl("Kilos vendidos") + num("re-kg", r.kg, `oninput="reservaEdCalc('kg')"`)
+            + `<div class="note" id="re-calc" style="margin-top:6px"></div>`
+            + lbl("Liquidación") + `<select class="inp" id="re-pedido" onchange="reservaEdCalc('')">${ventaPedidoOptionsHtml(r.grano, r.pedidoId || "")}</select>`;
+  } else if (r.tipo === "PEDIDO") {
+    campos += lbl("Quintales pedidos") + num("re-qq", redondeoKg(r.kg / KG_POR_QQ));
+  } else {
+    campos += lbl(r.tipo === "AJUSTE" ? "Kilos descontados" : "Kilos ingresados") + num("re-kg", r.kg, `oninput="reservaEdCalc('kg')"`)
+            + `<div class="note" id="re-calc" style="margin-top:6px"></div>`;
+  }
+  campos += lbl("Nota") + `<input class="inp" id="re-nota" type="text" value="${esc(r.nota || "")}" placeholder="Nota (opcional)">`;
+
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${t.icono} Editar ${esc(t.nombre.toLowerCase())} de ${esc(r.grano)}</div>
+        ${campos}
+        <div class="modal-footer">
+          <button class="btn-secondary" style="flex:1" onclick="document.getElementById('modal-root').innerHTML=''">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-reserva" onclick="guardarEdicionReserva()">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+  reservaEdCalc("");
+}
+
+/** Precio, monto y kilos de una venta van atados (kilos = monto / precio). El monto es la plata que
+ *  entró, así que al tocar los kilos lo que se acomoda es el precio. Pura, para poder probarla. */
+function ventaRecalcular(origen, v) {
+  const out = { precio: +v.precio || 0, monto: +v.monto || 0, kg: +v.kg || 0 };
+  if (origen === "kg") { if (out.kg > 0 && out.monto > 0) out.precio = redondeoKg(out.monto / (out.kg / 1000)); }
+  else if (origen === "precio" || origen === "monto") out.kg = kgDeVenta(out.monto, out.precio);
+  return out;
+}
+
+function reservaEdCalc(origen) {
+  const el = id => document.getElementById(id);
+  const calc = el("re-calc");
+  if (!calc || !reservaEd) return;
+  const kgEl = el("re-kg"), precioEl = el("re-precio"), montoEl = el("re-monto");
+  if (precioEl && montoEl) {
+    const v = ventaRecalcular(origen, { precio: precioEl.value, monto: montoEl.value, kg: kgEl.value });
+    if (origen === "kg") precioEl.value = v.precio || "";
+    else if (origen) kgEl.value = v.kg || "";
+  }
+  const kg = parseFloat(kgEl?.value || "0");
+  if (el("re-pedido") || precioEl) {
+    // Los kilos que esta venta ya tenía imputados sólo se devuelven si sigue en la misma liquidación.
+    const ped = el("re-pedido")?.value || "";
+    const kgPropios = ped && ped === reservaEd.pedidoId ? reservaEd.kg : 0;
+    calc.innerHTML = kg > 0
+      ? ventaCalcTexto(parseFloat(precioEl?.value || "0"), 0, ped, kgPropios, kg)
+      : "Ingresá los kilos vendidos.";
+  } else {
+    calc.textContent = kg > 0 ? `${fmtQq(kg)} qq` : "";
+  }
+}
+
+/** El movimiento de ingreso de una venta, como queda después de editarla. La descripción se rearma
+ *  sólo si sigue siendo la automática: si se la reescribió a mano en Movimientos, se respeta. */
+function movDeVentaEditado(mov, rViejo, rNuevo, monto) {
+  const out = { ...mov, fecha: rNuevo.fecha, mes: rNuevo.fecha.slice(0,7).replace("-",""),
+                ingreso: monto, montoFinal: monto };
+  if (/^Venta .+ - .+ kg - \$/.test(mov.concepto || "")) {
+    out.concepto = conceptoVentaGrano(rNuevo.grano, rNuevo.kg, monto, rNuevo.precioTn);
+  }
+  if ((mov.observacion || "") === (rViejo.nota || "")) out.observacion = rNuevo.nota;
+  return out;
+}
+
+async function guardarEdicionReserva() {
+  const btnId = "btn-guardar-reserva";
+  if (document.getElementById(btnId)?.disabled) return; // evita doble envío
+  const r = reservaEd ? reservas.find(x => x.id === reservaEd.id) : null;
+  if (!r) return;
+  const val = id => document.getElementById(id)?.value ?? "";
+  const nuevo = { ...r, fecha: val("re-fecha") || r.fecha, nota: val("re-nota").trim() };
+  const mov = r.tipo === "VENTA" ? movDeVenta(r) : null;
+  let monto = 0;
+
+  if (r.tipo === "PEDIDO") {
+    const qq = parseFloat(val("re-qq") || "0");
+    if (!isFinite(qq) || qq <= 0) { toast("Ingresá los quintales pedidos (número positivo)", "err"); return; }
+    nuevo.kg = redondeoKg(qq * KG_POR_QQ);
+  } else {
+    nuevo.kg = redondeoKg(parseFloat(val("re-kg") || "0"));
+    if (!isFinite(nuevo.kg) || nuevo.kg <= 0) { toast("Ingresá los kilos (número positivo)", "err"); return; }
+  }
+  if (r.tipo === "VENTA") {
+    nuevo.pedidoId = val("re-pedido");
+    if (mov) {
+      monto = parseFloat(val("re-monto") || "0");
+      const precio = parseFloat(val("re-precio") || "0");
+      if (!isFinite(monto) || monto <= 0)   { toast("Ingresá el monto recibido (número positivo)", "err"); return; }
+      if (!isFinite(precio) || precio <= 0) { toast("Ingresá el precio de la liquidación (por tonelada)", "err"); return; }
+      nuevo.precioTn = redondeoKg(precio);
+    }
+  }
+  const errStock = errorStockTrasCambio(r, nuevo);
+  if (errStock) { toast(errStock, "err"); return; }
+
+  setBtnState(btnId, "saving");
+  showOverlay("Guardando…");
+  try {
+    // Primero el ingreso y después los kilos: si se corta en el medio, reintentar deja todo igual.
+    if (mov) {
+      const movNuevo = movDeVentaEditado(mov, r, nuevo, monto);
+      if (JSON.stringify(movNuevo) !== JSON.stringify(mov)) {
+        const rMov = await Storage.updateMov(movNuevo);
+        if (!rMov.ok) throw new Error(rMov.error || "Error al actualizar el ingreso");
+        const idx = movimientos.findIndex(m => m.id === mov.id);
+        if (idx >= 0) movimientos[idx] = movNuevo;
+      }
+    }
+    const rRes = await Storage.updateReserva({
+      id: nuevo.id, fecha: nuevo.fecha, grano: nuevo.grano, kg: nuevo.kg, nota: nuevo.nota,
+      precioTn: nuevo.precioTn || 0, pedidoId: nuevo.pedidoId || ""
+    });
+    if (!rRes.ok) throw new Error(rRes.error || "Error al guardar");
+    Object.assign(r, nuevo);
+    saveSnapshotToCache();
+    document.getElementById("modal-root").innerHTML = "";
+    reservaEd = null;
+    toast("Cambios guardados ✓", "ok");
+    renderEntidades();
   } catch(e) {
     handleSaveError(btnId, e);
   } finally {
@@ -8661,6 +9113,8 @@ async function deleteReserva(id) {
     const r = await Storage.deleteReserva(id);
     if (!r.ok) throw new Error(r.error || "Error");
     reservas = reservas.filter(r => r.id !== id);
+    // Si era una liquidación pedida, sus cobros y ajustes quedan sueltos (no se borran).
+    for (const x of reservas) if (x.pedidoId === id) x.pedidoId = "";
     saveSnapshotToCache();
     toast("Registro eliminado", "ok");
     renderEntidades();

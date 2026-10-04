@@ -463,6 +463,21 @@ th .rt-arrow { color:var(--accent); margin-left:2px; }
 
 /* ── Config sections ── */
 .cfg-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); padding:16px; margin-bottom:12px; }
+/* Tarjetas que se pliegan (pantalla de Granos): el encabezado es un botón y el cuerpo se oculta sin
+   sacarlo del DOM, así lo que se estaba tipeando en un formulario no se pierde al plegar otra. */
+.sec-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); margin-bottom:10px; overflow:hidden; }
+.sec-head {
+  width:100%; display:flex; align-items:center; gap:10px; padding:14px;
+  background:none; border:none; color:var(--text); font-family:var(--font);
+  font-size:14px; font-weight:600; text-align:left; cursor:pointer;
+}
+.sec-head .sec-resumen { margin-left:auto; font-size:12px; font-weight:400; color:var(--text3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sec-head .sec-flecha { color:var(--text3); flex-shrink:0; transition:transform .15s; }
+.sec-card.cerrada .sec-flecha { transform:rotate(-90deg); }
+.sec-body { padding:0 14px 14px; }
+.sec-card.cerrada .sec-body { display:none; }
+.sec-body > :last-child { margin-bottom:0; }
+.sec-body .entity-item { background:var(--bg); }
 .cfg-title { font-size:14px; font-weight:600; margin-bottom:10px; }
 .cfg-item { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
 .cfg-item .inp { flex:1; }
@@ -8600,6 +8615,43 @@ function ventaCalcTexto(precio, monto, pedidoId, kgPropios, kgFijos) {
   return t;
 }
 
+// ── Secciones plegables ──────────────────────────────────────
+// Qué tarjetas están abiertas se recuerda en el dispositivo. Por defecto quedan plegadas las que se
+// usan de vez en cuando (pedir una liquidación, ajustar, cargar la cosecha).
+const GRANOS_SEC_DEFAULT = { stock:true, liquidaciones:true, cobro:true, pedido:false, ajuste:false, cosecha:false, historial:true };
+let granosSecAbiertas = leerGranosSec();
+
+function leerGranosSec() {
+  let guardado = {};
+  try { guardado = JSON.parse(localStorage.getItem("clubfm_granos_sec") || "{}") || {}; } catch(e) {}
+  return { ...GRANOS_SEC_DEFAULT, ...guardado };
+}
+
+function granoSecHtml(key, titulo, resumen, cuerpo) {
+  const abierta = !!granosSecAbiertas[key];
+  return `
+    <div class="sec-card${abierta ? "" : " cerrada"}" id="gsec-${key}">
+      <button class="sec-head" type="button" aria-expanded="${abierta}" onclick="granoSecToggle('${key}')">
+        <span>${titulo}</span>
+        <span class="sec-resumen">${resumen || ""}</span>
+        <span class="sec-flecha">▾</span>
+      </button>
+      <div class="sec-body">${cuerpo}</div>
+    </div>`;
+}
+
+/** Pliega o despliega una tarjeta tocando sólo esa tarjeta: no se re-renderiza la pantalla, para no
+ *  borrar lo que haya tipeado en los formularios. `abrir` fuerza el estado (true/false). */
+function granoSecToggle(key, abrir) {
+  const abierta = abrir !== undefined ? !!abrir : !granosSecAbiertas[key];
+  granosSecAbiertas[key] = abierta;
+  try { localStorage.setItem("clubfm_granos_sec", JSON.stringify(granosSecAbiertas)); } catch(e) {}
+  const card = document.getElementById("gsec-" + key);
+  if (!card) return;
+  card.classList.toggle("cerrada", !abierta);
+  card.querySelector(".sec-head")?.setAttribute("aria-expanded", String(abierta));
+}
+
 function renderGranos() {
   const stock    = calcStockGranos();
   const granos   = granosConocidos();
@@ -8690,16 +8742,14 @@ function renderGranos() {
         <option value="Trigo">Trigo</option>
         <option value="">Otro…</option>`;
 
+  const totalStock = valorTotalGranos();
+  const nReg = reservas.length;
   return `
     ${granosServidorViejo() ? `<p class="note" style="color:var(--red);margin-bottom:10px">⚠️ Falta actualizar el servidor (Code.gs) para poder editar el historial y cargar liquidaciones.</p>` : ""}
-    <div class="cfg-title" style="margin-bottom:8px">📦 Stock de granos</div>
-    ${stockHtml || '<p class="note">Sin stock registrado</p>'}
-
-    ${abiertos.length ? `
-    <div class="cfg-title" style="margin:18px 0 8px">📋 Liquidaciones en curso</div>
-    ${pedidosHtml}` : ""}
-
-    <div class="cfg-title" id="venta-titulo" style="margin:18px 0 8px">💰 Registrar cobro de venta</div>
+    ${granoSecHtml("stock", "📦 Stock de granos", totalStock ? fmt(totalStock) : "",
+        stockHtml || '<p class="note">Sin stock registrado</p>')}
+    ${abiertos.length ? granoSecHtml("liquidaciones", "📋 Liquidaciones en curso", abiertos.length + " en curso", pedidosHtml) : ""}
+    ${granoSecHtml("cobro", "💰 Registrar cobro de venta", "", `
     <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
       <select class="inp" id="venta-grano" onchange="ventaSyncPedidos()">
         ${granoOptionsHtml(granos, granoVenta)}
@@ -8713,10 +8763,9 @@ function renderGranos() {
       <select class="inp" id="venta-metodo">${metodos.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>
       <input class="inp" id="venta-nota" type="text" placeholder="Nota (opcional)">
       <button class="btn-sm accent" id="btn-registrar-venta-grano" onclick="addVentaGrano()">+ Registrar cobro y generar ingreso</button>
-    </div>
-
-    <div class="cfg-title" style="margin:18px 0 8px">📋 Anotar liquidación pedida</div>
-    <p class="note" style="margin:-4px 0 8px">Cuántos quintales pediste liquidar. El stock no cambia hasta que cargues los cobros.</p>
+    </div>`)}
+    ${granoSecHtml("pedido", "📋 Anotar liquidación pedida", "", `
+    <p class="note" style="margin:0 0 8px">Cuántos quintales pediste liquidar. El stock no cambia hasta que cargues los cobros.</p>
     <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
       <select class="inp" id="pedido-grano">
         ${granoOptionsHtml(granos, granos[0] || "")}
@@ -8725,10 +8774,9 @@ function renderGranos() {
       <input class="inp" id="pedido-qq" type="number" min="0" step="any" inputmode="decimal" placeholder="Quintales a liquidar (ej. 200)">
       <input class="inp" id="pedido-nota" type="text" placeholder="Nota (opcional)">
       <button class="btn-sm accent" id="btn-agregar-pedido" onclick="addPedidoGrano()">+ Anotar liquidación</button>
-    </div>
-
-    <div class="cfg-title" style="margin:18px 0 8px">⚖️ Ajuste de kilos</div>
-    <p class="note" style="margin:-4px 0 8px">Descuenta kilos del stock sin generar un movimiento. Sirve para lo que se lleva la comisión.</p>
+    </div>`)}
+    ${granoSecHtml("ajuste", "⚖️ Ajuste de kilos", "", `
+    <p class="note" style="margin:0 0 8px">Descuenta kilos del stock sin generar un movimiento. Sirve para lo que se lleva la comisión.</p>
     <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
       <select class="inp" id="ajuste-grano">
         ${granoOptionsHtml(granos, granos[0] || "")}
@@ -8737,9 +8785,8 @@ function renderGranos() {
       <input class="inp" id="ajuste-kg" type="number" min="0" step="any" inputmode="decimal" placeholder="Kg a descontar">
       <input class="inp" id="ajuste-nota" type="text" value="${esc(NOTA_AJUSTE_COMISION)}" placeholder="Motivo">
       <button class="btn-sm accent" id="btn-agregar-ajuste" onclick="addAjusteGrano()">+ Registrar ajuste</button>
-    </div>
-
-    <div class="cfg-title" style="margin:18px 0 8px">＋ Registrar cosecha</div>
+    </div>`)}
+    ${granoSecHtml("cosecha", "🌾 Registrar cosecha", "", `
     <div class="add-row" style="flex-direction:column;align-items:stretch;gap:6px">
       <select class="inp" id="cosecha-grano">${cosechaOpts}
       </select>
@@ -8748,10 +8795,9 @@ function renderGranos() {
       <input class="inp" id="cosecha-kg" type="number" min="0" step="any" placeholder="Kg ingresados">
       <input class="inp" id="cosecha-nota" type="text" placeholder="Nota (opcional)">
       <button class="btn-sm accent" id="btn-agregar-cosecha" onclick="addCosecha()">+ Agregar cosecha</button>
-    </div>
-
-    <div class="cfg-title" style="margin:18px 0 8px">Historial</div>
-    ${histHtml || '<p class="note">Sin movimientos de stock</p>'}
+    </div>`)}
+    ${granoSecHtml("historial", "🕘 Historial", nReg ? nReg + (nReg !== 1 ? " registros" : " registro") : "",
+        histHtml || '<p class="note">Sin movimientos de stock</p>')}
   `;
 }
 
@@ -8860,7 +8906,8 @@ function ventaElegirPedido(id) {
   selGrano.value = p.grano;
   selPed.innerHTML = ventaPedidoOptionsHtml(p.grano, id);
   ventaCalcular();
-  document.getElementById("venta-titulo")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  granoSecToggle("cobro", true);
+  document.getElementById("gsec-cobro")?.scrollIntoView({ behavior: "smooth", block: "start" });
   document.getElementById("venta-precio")?.focus({ preventScroll: true });
 }
 

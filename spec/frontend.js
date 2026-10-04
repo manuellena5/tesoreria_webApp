@@ -2224,6 +2224,44 @@ app.reservas = [{ id:"c1", fecha:"2026-06-30", grano:"Soja", tipo:"COSECHA", kg:
 check("se avisa en la pantalla en vez de fallar en silencio", app.renderGranos().includes("Falta actualizar el servidor"));
 app.reservas = []; app.movimientos = [];
 
+seccion("55 · Granos: tarjetas plegables");
+// Cada sección de la pantalla es una tarjeta que se pliega. Qué queda abierto se recuerda en el
+// dispositivo, y plegar no re-renderiza (no se pierde lo tipeado en los otros formularios).
+const filaS = (o) => Object.assign({ nota:"", movimientoId:"", precioTn:0, pedidoId:"" }, o);
+const tarjetas = (h) => [...h.matchAll(/class="sec-card( cerrada)?" id="gsec-(\w+)"/g)].map(m => m[2] + (m[1] ? ":plegada" : ":abierta"));
+app.localStorage.removeItem("clubfm_granos_sec");
+app.granosSecAbiertas = app.leerGranosSec();
+app.preciosGranos = { Soja: 480000 };
+app.movimientos = [];
+app.reservas = [filaS({ id:"c1", fecha:"2026-06-30", grano:"Soja", tipo:"COSECHA", kg:36020 })];
+igual("sin liquidaciones en curso no hay tarjeta de liquidaciones; el resto, con su estado inicial",
+      tarjetas(app.renderGranos()),
+      ["stock:abierta", "cobro:abierta", "pedido:plegada", "ajuste:plegada", "cosecha:plegada", "historial:abierta"]);
+app.reservas.push(filaS({ id:"p1", fecha:"2026-09-28", grano:"Soja", tipo:"PEDIDO", kg:20000 }));
+let htmlS = app.renderGranos();
+igual("con una liquidación abierta aparece su tarjeta, después del stock", tarjetas(htmlS).slice(0, 3),
+      ["stock:abierta", "liquidaciones:abierta", "cobro:abierta"]);
+check("el encabezado del stock resume el total valuado", /Stock de granos<\/span>\s*<span class="sec-resumen">\$17\.289\.600</.test(htmlS));
+check("el de liquidaciones, cuántas hay en curso", /Liquidaciones en curso<\/span>\s*<span class="sec-resumen">1 en curso</.test(htmlS));
+check("y el del historial, cuántos registros", /Historial<\/span>\s*<span class="sec-resumen">2 registros</.test(htmlS));
+check("una tarjeta plegada conserva su formulario (sólo se oculta)", htmlS.includes('id="pedido-qq"') && htmlS.includes('id="ajuste-kg"') && htmlS.includes('id="cosecha-kg"'));
+app.granoSecToggle("stock");
+app.granoSecToggle("cosecha");
+igual("tocar el encabezado invierte el estado, y sobrevive al re-render",
+      tarjetas(app.renderGranos()).filter(x => /^(stock|cosecha):/.test(x)), ["stock:plegada", "cosecha:abierta"]);
+igual("queda guardado en el dispositivo", JSON.parse(app.localStorage.getItem("clubfm_granos_sec")).stock, false);
+igual("y es lo que se lee al volver a abrir la app", [app.leerGranosSec().stock, app.leerGranosSec().cosecha], [false, true]);
+app.granoSecToggle("cobro", false);
+app.granoSecToggle("cobro", true); app.granoSecToggle("cobro", true);
+igual("se puede forzar abierta (lo usa \"+ Cargar cobro\") sin que un segundo toque la cierre", app.granosSecAbiertas.cobro, true);
+app.localStorage.setItem("clubfm_granos_sec", "{roto");
+igual("un guardado ilegible no rompe la pantalla: vuelve al estado inicial", app.leerGranosSec(), app.GRANOS_SEC_DEFAULT);
+app.localStorage.setItem("clubfm_granos_sec", JSON.stringify({ historial:false }));
+igual("una sección que el guardado no conoce toma su valor inicial", [app.leerGranosSec().historial, app.leerGranosSec().stock, app.leerGranosSec().ajuste], [false, true, false]);
+app.localStorage.removeItem("clubfm_granos_sec");
+app.granosSecAbiertas = app.leerGranosSec();
+app.reservas = []; app.movimientos = [];
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

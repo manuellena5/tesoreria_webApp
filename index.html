@@ -1068,6 +1068,9 @@ let reportesState = {
   // un desplegable de uno solo; con varios se puede ver, p. ej., "gastos de cancha + arbitraje".
   filtroCat: null,
   filtroRubro: null,   // claves de repRubroClave
+  filtroConcepto: null,   // conceptos (repConceptoValor)
+  // A qué nivel se ve la tabla: "catrubro" (categoría → rubro), "cat" o "rubro". Ver REP_NIVELES.
+  nivel: "catrubro",
   jugadorCT: "",
   adherente: "",
   search: "",
@@ -3381,7 +3384,7 @@ function movTextoTablaActivo() {
 // ── Filtro estilo Excel (componente compartido) ──────────────
 // Lista de valores distintos con su cantidad, casillas, buscador, "(Seleccionar todo)" y, si la
 // pantalla lo ofrece, botones de orden. Lo usan Movimientos (por columna), Resumen > Reportes
-// (categorías y rubros) y Reintegros (jugador y estado): cada pantalla arma sus valores y decide qué
+// (categorías, rubros y conceptos) y Reintegros (jugador y estado): cada pantalla arma sus valores y decide qué
 // hacer al aplicar, el comportamiento de la lista es uno solo.
 //
 // Va en un modal (y no en un desplegable pegado al encabezado) porque las tablas scrollean en
@@ -5067,27 +5070,29 @@ function renderPartidoResumen() {
     <div id="partido-res-body">${renderPartidoResumenBody()}</div>`;
 }
 
-// ── Reportes: tabla jerárquica Categoría → Rubro → Movimiento, con filtros
-// combinables (meses multi-selección, cuentas multi-selección, jugador/CT,
-// adherente, búsqueda libre). Estado persistente en reportesState. ──────
+// ── Reportes: tabla Categoría → Rubro → Movimiento (o sólo por Categoría, o sólo por Rubro:
+// ver REP_NIVELES), con filtros combinables (meses y cuentas multi-selección; categorías, rubros
+// y conceptos estilo Excel; jugador/CT, adherente, búsqueda libre). Estado en reportesState. ──────
 
 // Movimientos filtrados por todos los criterios de reportesState (AND entre sí).
 // meses/cuentas vacíos = sin filtro (todos). Solo INGRESO/EGRESO entran en la agregación
 // por categoría/rubro (mismo criterio que la tabla por categoría de Mensual).
 //
-// `excepto` ("cat" | "rubro") saltea ese filtro: los valores que ofrece el filtro de Rubros salen
-// de lo que dejan pasar los demás (incluida Categoría), como en Excel — así, con una categoría
-// elegida, la lista de rubros sólo trae los de esa categoría.
+// `excepto` ("cat" | "rubro" | "concepto") saltea ese filtro: los valores que ofrece el filtro de
+// Rubros salen de lo que dejan pasar los demás (incluida Categoría), como en Excel — así, con una
+// categoría elegida, la lista de rubros sólo trae los de esa categoría.
 function getMovimientosReportes(excepto) {
   const jugExpReportes = gruposQueContienen(reportesState.jugadorCT);
   const fCat = excepto === "cat" ? null : reportesState.filtroCat;
   const fRub = excepto === "rubro" ? null : reportesState.filtroRubro;
+  const fCon = excepto === "concepto" ? null : reportesState.filtroConcepto;
   return movimientos
     .filter(m => m.tipo === "INGRESO" || m.tipo === "EGRESO")
     .filter(m => !reportesState.meses.length  || reportesState.meses.includes(mesFromRecord(m)))
     .filter(m => !reportesState.cuentas.length || reportesState.cuentas.includes(m.cuenta))
     .filter(m => !fCat || fCat.has(repCatValor(m)))
     .filter(m => !fRub || fRub.has(repRubroClave(m)))
+    .filter(m => !fCon || fCon.has(repConceptoValor(m)))
     .filter(m => matchJugadorOGrupo(m.jugadorCT, reportesState.jugadorCT, jugExpReportes))
     .filter(m => !reportesState.adherente || normStr(m.adherente).includes(normStr(reportesState.adherente)))
     .filter(m => {
@@ -5096,24 +5101,45 @@ function getMovimientosReportes(excepto) {
     });
 }
 
-// Categoría y rubro de un movimiento tal como los agrupa buildReportesJerarquia (misma clave).
+// Categoría, rubro y concepto de un movimiento tal como los agrupa/filtra la tabla (misma clave).
 function repCatValor(m)   { return m.categoria || ""; }
 function repRubroClave(m) { return m.codRubro || m.rubro || ""; }
 function repRubroNombre(m) { return m.rubro || RUBROS.find(r => r.cod === m.codRubro)?.nombre || "(sin rubro)"; }
+// Igual que la columna Concepto de Movimientos (movColValor): el texto tal cual, sin espacios de más.
+function repConceptoValor(m) { return (m.concepto || "").trim(); }
 
-/** Opciones del filtro de Categoría o Rubro, sobre lo que dejan pasar los demás filtros. */
+// Filtros estilo Excel de Reportes: en qué campo de reportesState vive cada uno y cómo se rotula.
+const REP_FILTROS = {
+  cat:      { clave: "filtroCat",      titulo: "Filtrar: Categorías", todos: "Todas" },
+  rubro:    { clave: "filtroRubro",    titulo: "Filtrar: Rubros",     todos: "Todos" },
+  concepto: { clave: "filtroConcepto", titulo: "Filtrar: Conceptos",  todos: "Todos" },
+};
+
+// Niveles a los que se puede ver la tabla. "catrubro" es el de siempre (categoría que se abre en
+// rubros); "cat" y "rubro" son de un solo nivel: la fila se abre directo en sus movimientos.
+const REP_NIVELES = [
+  { id: "catrubro", label: "Categoría / Rubro" },
+  { id: "cat",      label: "Categoría" },
+  { id: "rubro",    label: "Rubro" },
+];
+function repNivel() {
+  return REP_NIVELES.some(n => n.id === reportesState.nivel) ? reportesState.nivel : "catrubro";
+}
+
+/** Opciones del filtro de Categoría, Rubro o Concepto, sobre lo que dejan pasar los demás filtros. */
 function repFiltroValores(dim) {
   const movs = getMovimientosReportes(dim);
   if (dim === "cat") return valoresDistintos(movs, repCatValor);
+  if (dim === "concepto") return valoresDistintos(movs, repConceptoValor);
   const nombres = {};
   for (const m of movs) nombres[repRubroClave(m)] = repRubroNombre(m);
   return valoresDistintos(movs, repRubroClave, k => nombres[k], (a, b) => normStr(nombres[a]).localeCompare(normStr(nombres[b])));
 }
 
 function repFiltroAbrir(dim) {
-  const clave = dim === "cat" ? "filtroCat" : "filtroRubro";
+  const { clave, titulo } = REP_FILTROS[dim];
   abrirFiltroExcel({
-    titulo:  dim === "cat" ? "Filtrar: Categorías" : "Filtrar: Rubros",
+    titulo,
     valores: repFiltroValores(dim),
     actual:  reportesState[clave] || undefined,
     onAplicar: sel => { reportesState[clave] = sel; renderResumen(); }
@@ -5122,8 +5148,8 @@ function repFiltroAbrir(dim) {
 
 /** Rótulo del botón de filtro: "Todas" o "3 de 9". */
 function repFiltroResumen(dim) {
-  const sel = dim === "cat" ? reportesState.filtroCat : reportesState.filtroRubro;
-  if (!sel) return dim === "cat" ? "Todas" : "Todos";
+  const sel = reportesState[REP_FILTROS[dim].clave];
+  if (!sel) return REP_FILTROS[dim].todos;
   // Se cuentan sólo los elegidos que siguen disponibles: un rubro de otra categoría que quedó
   // tildado no se ve, así que decir "3 de 5" cuando se ven 2 confundiría.
   const disponibles = repFiltroValores(dim).map(x => x.valor);
@@ -5157,6 +5183,21 @@ function buildReportesJerarquia(movs) {
     .sort((a,b) => b.egr - a.egr);
 }
 
+// Agrupa movimientos ya filtrados en un solo nivel — por categoría ("cat") o por rubro ("rubro") —
+// con las mismas claves y el mismo orden (mayor egreso primero) que buildReportesJerarquia.
+function buildReportesPlano(movs, nivel) {
+  const map = {};
+  for (const m of movs) {
+    const key = nivel === "cat" ? (m.categoria || "(sin categoría)") : (m.codRubro || m.rubro || "(sin rubro)");
+    if (!map[key]) map[key] = { key, nombre: nivel === "cat" ? key : repRubroNombre(m), ing:0, egr:0, count:0, movs:[] };
+    const g = map[key];
+    g.count++;
+    g.movs.push(m);
+    if (m.tipo === "INGRESO") g.ing += m.ingreso; else g.egr += m.egreso;
+  }
+  return Object.values(map).sort((a,b) => b.egr - a.egr);
+}
+
 function renderReportesTab() {
   const anio = reportesState.anio;
   const mesesAnio = Array.from({length:12}, (_,i) => anio + "-" + String(i+1).padStart(2,"0"));
@@ -5169,10 +5210,14 @@ function renderReportesTab() {
   ).join("");
 
   const repFiltroBoton = (dim, label) => {
-    const activo = !!(dim === "cat" ? reportesState.filtroCat : reportesState.filtroRubro);
+    const activo = !!reportesState[REP_FILTROS[dim].clave];
     return `<button class="btn-secondary${activo ? " rep-filt-activo" : ""}" style="flex:1;text-align:left" onclick="repFiltroAbrir('${dim}')">
         ${label}: ${repFiltroResumen(dim)} <span style="float:right">${activo ? "▼" : "▾"}</span></button>`;
   };
+  const nivel = repNivel();
+  const nivelChips = REP_NIVELES.map(n =>
+    `<button class="pill sm ${nivel===n.id?"active":""}" onclick="setReportesNivel('${n.id}')">${n.label}</button>`
+  ).join("");
 
   return `
     <div class="sec-hdr" style="margin-top:16px">
@@ -5193,6 +5238,9 @@ function renderReportesTab() {
     <div class="filter-row" style="gap:8px">
       ${repFiltroBoton("cat", "Categorías")}
       ${repFiltroBoton("rubro", "Rubros")}
+    </div>
+    <div class="filter-row" style="gap:8px">
+      ${repFiltroBoton("concepto", "Conceptos")}
     </div>
 
     <div class="filter-row" style="gap:8px">
@@ -5221,8 +5269,46 @@ function renderReportesTab() {
              oninput="reportesState.search=this.value; document.getElementById('reportes-body').innerHTML=renderReportesBody()">
     </div>
 
+    <div class="filter-row" style="align-items:center">
+      <span class="note" style="white-space:nowrap">Ver por</span>
+      ${nivelChips}
+    </div>
+
     <div id="reportes-body">${renderReportesBody()}</div>
   `;
+}
+
+/** Fila de un grupo de la tabla (categoría o rubro) con sus totales. `sangria` = va debajo de otra. */
+function repFilaGrupoHtml(g, abierto, onclickJs, sangria) {
+  const neto = g.ing - g.egr;
+  return `<tr class="sum-table-row-toggle" onclick="${onclickJs}">
+      <td${sangria ? ' style="padding-left:20px"' : ""}>${abierto?"▾":"▸"} ${esc(g.nombre)} <span class="note" style="font-size:10px">(${g.count})</span></td>
+      <td class="ing">${g.ing?fmt(g.ing):""}</td>
+      <td class="egr">${g.egr?fmt(g.egr):""}</td>
+      <td class="net ${neto>=0?"":"egr"}">${neto>=0?"+":"−"}${fmt(neto)}</td>
+    </tr>`;
+}
+
+/** Movimientos de un grupo abierto, del más nuevo al más viejo (fila a todo el ancho de la tabla). */
+function repMovsDetalleHtml(movs) {
+  const sortedMovs = [...movs].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  return `<tr class="sum-table-detail-row"><td colspan="4" style="padding:0">
+      <table class="sum-table" style="margin:0 0 0 20px;width:calc(100% - 20px)">
+        <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto</th><th>Cuenta</th></tr></thead>
+        <tbody>${sortedMovs.map(m => {
+          const fechaD = m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
+          const montoClass = m.tipo === "INGRESO" ? "ing" : "egr";
+          const montoVal   = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
+          const montoSign  = m.tipo === "INGRESO" ? "+" : "−";
+          return `<tr>
+            <td style="font-size:11px">${esc(fechaD)}</td>
+            <td style="font-size:11px">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</td>
+            <td class="${montoClass}" style="font-size:11px">${montoSign}${fmt(montoVal)}</td>
+            <td style="font-size:11px">${esc(m.cuenta)}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>
+    </td></tr>`;
 }
 
 function renderReportesBody() {
@@ -5231,56 +5317,33 @@ function renderReportesBody() {
     return `<p class="note">Sin movimientos para estos filtros</p>`;
   }
 
-  const jerarquia = buildReportesJerarquia(movs);
+  const nivel = repNivel();
   const totIng = movs.filter(m => m.tipo === "INGRESO").reduce((s,m) => s+m.ingreso, 0);
   const totEgr = movs.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s+m.egreso,  0);
   const totNeto = totIng - totEgr;
 
-  const rows = jerarquia.map(cat => {
-    const catNeto = cat.ing - cat.egr;
-    const catExp  = reportesState.catExpandido.has(cat.cat);
-    let rubroRows = "";
-    if (catExp) {
-      rubroRows = cat.rubros.map(r => {
-        const rKey  = cat.cat + "||" + r.key;
-        const rExp  = reportesState.rubroExpandido.has(rKey);
-        const rNeto = r.ing - r.egr;
-        let movRows = "";
-        if (rExp) {
-          const sortedMovs = [...r.movs].sort((a,b) => b.fecha.localeCompare(a.fecha));
-          movRows = `<tr class="sum-table-detail-row"><td colspan="4" style="padding:0">
-            <table class="sum-table" style="margin:0 0 0 20px;width:calc(100% - 20px)">
-              <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto</th><th>Cuenta</th></tr></thead>
-              <tbody>${sortedMovs.map(m => {
-                const fechaD = m.fecha ? m.fecha.slice(8,10)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
-                const montoClass = m.tipo === "INGRESO" ? "ing" : "egr";
-                const montoVal   = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
-                const montoSign  = m.tipo === "INGRESO" ? "+" : "−";
-                return `<tr>
-                  <td style="font-size:11px">${esc(fechaD)}</td>
-                  <td style="font-size:11px">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</td>
-                  <td class="${montoClass}" style="font-size:11px">${montoSign}${fmt(montoVal)}</td>
-                  <td style="font-size:11px">${esc(m.cuenta)}</td>
-                </tr>`;
-              }).join("")}</tbody>
-            </table>
-          </td></tr>`;
-        }
-        return `<tr class="sum-table-row-toggle" onclick="toggleReportesRubro('${esc(escJs(rKey))}')">
-          <td style="padding-left:20px">${rExp?"▾":"▸"} ${esc(r.nombre)} <span class="note" style="font-size:10px">(${r.count})</span></td>
-          <td class="ing">${r.ing?fmt(r.ing):""}</td>
-          <td class="egr">${r.egr?fmt(r.egr):""}</td>
-          <td class="net ${rNeto>=0?"":"egr"}">${rNeto>=0?"+":"−"}${fmt(rNeto)}</td>
-        </tr>${movRows}`;
+  let rows;
+  if (nivel === "catrubro") {
+    rows = buildReportesJerarquia(movs).map(cat => {
+      const catExp = reportesState.catExpandido.has(cat.cat);
+      const rubroRows = !catExp ? "" : cat.rubros.map(r => {
+        const rKey = cat.cat + "||" + r.key;
+        const rExp = reportesState.rubroExpandido.has(rKey);
+        return repFilaGrupoHtml(r, rExp, `toggleReportesRubro('${esc(escJs(rKey))}')`, true) + (rExp ? repMovsDetalleHtml(r.movs) : "");
       }).join("");
-    }
-    return `<tr class="sum-table-row-toggle" onclick="toggleReportesCat('${esc(escJs(cat.cat))}')">
-      <td>${catExp?"▾":"▸"} ${esc(cat.cat)} <span class="note" style="font-size:10px">(${cat.count})</span></td>
-      <td class="ing">${cat.ing?fmt(cat.ing):""}</td>
-      <td class="egr">${cat.egr?fmt(cat.egr):""}</td>
-      <td class="net ${catNeto>=0?"":"egr"}">${catNeto>=0?"+":"−"}${fmt(catNeto)}</td>
-    </tr>${rubroRows}`;
-  }).join("");
+      return repFilaGrupoHtml({ ...cat, nombre: cat.cat }, catExp, `toggleReportesCat('${esc(escJs(cat.cat))}')`) + rubroRows;
+    }).join("");
+  } else {
+    // Un solo nivel: la fila se abre directo en sus movimientos. Las categorías comparten lo
+    // abierto con la vista de dos niveles; los rubros sueltos usan su propia clave ("||rubro"),
+    // que no choca con las de "categoría||rubro".
+    rows = buildReportesPlano(movs, nivel).map(g => {
+      const rKey = "||" + g.key;
+      const abierto = nivel === "cat" ? reportesState.catExpandido.has(g.key) : reportesState.rubroExpandido.has(rKey);
+      const onclickJs = nivel === "cat" ? `toggleReportesCat('${esc(escJs(g.key))}')` : `toggleReportesRubro('${esc(escJs(rKey))}')`;
+      return repFilaGrupoHtml(g, abierto, onclickJs) + (abierto ? repMovsDetalleHtml(g.movs) : "");
+    }).join("");
+  }
 
   const totRow = `<tr style="font-weight:600">
     <td>TOTAL PERÍODO FILTRADO</td>
@@ -5289,10 +5352,18 @@ function renderReportesBody() {
     <td class="net ${totNeto>=0?"":"egr"}">${totNeto>=0?"+":"−"}${fmt(totNeto)}</td>
   </tr>`;
 
+  const thCat = `Categoría${filtroExcelBtn(!!reportesState.filtroCat, "repFiltroAbrir('cat')", "Filtrar categorías")}`;
+  const thRub = `Rubro${filtroExcelBtn(!!reportesState.filtroRubro, "repFiltroAbrir('rubro')", "Filtrar rubros")}`;
+  const thGrupo = nivel === "cat" ? thCat : nivel === "rubro" ? thRub : `${thCat} / ${thRub}`;
+  // En el celular la primera columna se achica hasta lo que mide su encabezado. Con uno corto
+  // ("Rubro") quedaría más angosta que en la vista de dos niveles y partiría los nombres: se le
+  // da el mismo piso que deja el encabezado "Categoría / Rubro".
+  const thAncho = nivel === "catrubro" ? "" : ' style="min-width:82px"';
+
   return `
     <p class="note" style="margin-bottom:8px">${movs.length} movimiento${movs.length!==1?"s":""}</p>
     <table class="sum-table">
-      <thead><tr><th>Categoría${filtroExcelBtn(!!reportesState.filtroCat, "repFiltroAbrir('cat')", "Filtrar categorías")} / Rubro${filtroExcelBtn(!!reportesState.filtroRubro, "repFiltroAbrir('rubro')", "Filtrar rubros")}</th><th style="text-align:right">Ing.</th><th style="text-align:right">Egr.</th><th style="text-align:right">Neto</th></tr></thead>
+      <thead><tr><th${thAncho}>${thGrupo}</th><th style="text-align:right">Ing.</th><th style="text-align:right">Egr.</th><th style="text-align:right">Neto</th></tr></thead>
       <tbody>${rows}${totRow}</tbody>
     </table>`;
 }
@@ -5325,6 +5396,11 @@ function toggleReportesCuenta(c) {
   renderResumen();
 }
 
+function setReportesNivel(nivel) {
+  reportesState.nivel = nivel;
+  renderResumen();
+}
+
 function toggleReportesCat(cat) {
   if (reportesState.catExpandido.has(cat)) reportesState.catExpandido.delete(cat);
   else reportesState.catExpandido.add(cat);
@@ -5337,34 +5413,50 @@ function toggleReportesRubro(key) {
   renderResumen();
 }
 
-// Exporta exactamente la jerarquía Categoría → Rubro → Movimiento visible en pantalla,
-// ya filtrada por reportesState (meses/cuentas/jugador/adherente/búsqueda).
+/** Filas del Excel de Reportes para el nivel elegido: los mismos grupos que se ven en pantalla,
+ *  cada uno con sus movimientos debajo. Puro, para poder probarlo. → { headers, rows, anchos } */
+function reportesFilasExcel(movs, nivel) {
+  const filaMov = m => [m.fecha, m.concepto || "",
+    m.tipo==="INGRESO" ? m.ingreso : "", m.tipo==="EGRESO" ? m.egreso : "", m.cuenta || ""];
+  const porFecha = lista => [...lista].sort((a,b) => a.fecha.localeCompare(b.fecha));
+  const rows = [];
+  let totIng = 0, totEgr = 0;
+
+  if (nivel === "cat" || nivel === "rubro") {
+    for (const g of buildReportesPlano(movs, nivel)) {
+      rows.push([g.nombre, "", "", g.ing || "", g.egr || "", ""]);
+      for (const m of porFecha(g.movs)) rows.push(["", ...filaMov(m)]);
+      totIng += g.ing; totEgr += g.egr;
+    }
+    rows.push(["TOTAL PERÍODO FILTRADO", "", "", totIng, totEgr, ""]);
+    return { headers: [nivel === "cat" ? "Categoría" : "Rubro","Fecha","Concepto","Ingreso","Egreso","Cuenta"],
+             rows, anchos: [26,10,30,12,12,16] };
+  }
+
+  for (const cat of buildReportesJerarquia(movs)) {
+    rows.push([cat.cat, "", "", "", cat.ing || "", cat.egr || "", ""]);
+    for (const r of cat.rubros) {
+      rows.push(["", r.nombre, "", "", r.ing || "", r.egr || "", ""]);
+      for (const m of porFecha(r.movs)) rows.push(["", "", ...filaMov(m)]);
+    }
+    totIng += cat.ing; totEgr += cat.egr;
+  }
+  rows.push(["TOTAL PERÍODO FILTRADO", "", "", "", totIng, totEgr, ""]);
+  return { headers: ["Categoría","Rubro","Fecha","Concepto","Ingreso","Egreso","Cuenta"],
+           rows, anchos: [26,26,10,30,12,12,16] };
+}
+
+// Exporta exactamente lo que se ve en pantalla: los mismos filtros de reportesState y el mismo
+// nivel (Categoría → Rubro → Movimiento, o sólo categorías, o sólo rubros).
 function exportReportesExcel() {
   if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
   const movs = getMovimientosReportes();
   if (!movs.length) { toast("No hay movimientos para exportar con estos filtros", "err"); return; }
 
-  const jerarquia = buildReportesJerarquia(movs);
-  const headers = ["Categoría","Rubro","Fecha","Concepto","Ingreso","Egreso","Cuenta"];
-  const rows = [];
-  let totIng = 0, totEgr = 0;
-  for (const cat of jerarquia) {
-    rows.push([cat.cat, "", "", "", cat.ing || "", cat.egr || "", ""]);
-    for (const r of cat.rubros) {
-      rows.push(["", r.nombre, "", "", r.ing || "", r.egr || "", ""]);
-      const sorted = [...r.movs].sort((a,b) => a.fecha.localeCompare(b.fecha));
-      for (const m of sorted) {
-        rows.push(["", "", m.fecha, m.concepto || "",
-          m.tipo==="INGRESO" ? m.ingreso : "", m.tipo==="EGRESO" ? m.egreso : "", m.cuenta || ""]);
-      }
-    }
-    totIng += cat.ing; totEgr += cat.egr;
-  }
-  rows.push(["TOTAL PERÍODO FILTRADO", "", "", "", totIng, totEgr, ""]);
-
+  const { headers, rows, anchos } = reportesFilasExcel(movs, repNivel());
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  ws["!cols"] = [26,26,10,30,12,12,16].map(w=>({wch:w}));
+  ws["!cols"] = anchos.map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb, ws, "Reportes");
   XLSX.writeFile(wb, `tesoreria_reportes_${today()}.xlsx`);
   toast("Excel exportado ✓", "ok");

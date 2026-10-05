@@ -2092,6 +2092,68 @@ igual("un rubro tildado de otra categoría no se cuenta en el resumen", app.repF
 app.reportesState.filtroCat = null; app.reportesState.filtroRubro = null;
 igual("sin filtros vuelve todo", repIds().length, 4);
 
+seccion("52b · Resumen > Reportes: filtro de Conceptos y nivel de la tabla");
+app.movimientos.push({ id: "r5", tipo: "EGRESO", fecha: "2026-05-06", mes: "202605", categoria: "Gastos cancha", codRubro: "8", rubro: "ARBITRAJE", egreso: 10000, ingreso: 0, cuenta: "CAJA", concepto: " Terna " });
+igual("conceptos disponibles con su cantidad (sin contar espacios de más)", app.repFiltroValores("concepto").map(v => v.etiqueta + ":" + v.cantidad),
+      ["Entradas:1", "Policía:1", "RX:1", "Terna:2"]);
+igual("sin filtro el botón dice Todos", app.repFiltroResumen("concepto"), "Todos");
+app.reportesState.filtroConcepto = new Set(["Terna", "RX"]);
+igual("varios conceptos a la vez", repIds(), ["r1", "r3", "r5"]);
+igual("el botón resume 'n de total'", app.repFiltroResumen("concepto"), "2 de 4");
+igual("las categorías ofrecidas son sólo las de esos conceptos", app.repFiltroValores("cat").map(v => v.etiqueta), ["Gastos cancha", "Gastos Medicos"]);
+igual("y los rubros también", app.repFiltroValores("rubro").map(v => v.etiqueta), ["ARBITRAJE", "GASTOS MEDICOS"]);
+app.reportesState.filtroCat = new Set(["Gastos cancha"]);
+igual("concepto combinado con categoría", repIds(), ["r1", "r5"]);
+igual("los conceptos ofrecidos son sólo los de esa categoría", app.repFiltroValores("concepto").map(v => v.etiqueta), ["Policía", "Terna"]);
+check("el TOTAL suma sólo los conceptos elegidos", app.renderReportesBody().includes(app.fmt(50000)) && !app.renderReportesBody().includes(app.fmt(20000)));
+app.reportesState.filtroCat = null; app.reportesState.filtroConcepto = null;
+
+const repFilas = () => [...app.renderReportesBody().matchAll(/[▸▾] ([^<]+?) <span/g)].map(x => x[1]);
+const repEncabezado = () => app.renderReportesBody().match(/<thead><tr><th[^>]*>([\s\S]*?)<\/th>/)[1].replace(/<button[\s\S]*?<\/button>/g, "");
+igual("sin nivel elegido la tabla es la de siempre: categorías", [app.repNivel(), repFilas()],
+      ["catrubro", ["Gastos cancha", "Gastos Medicos", "Ingresos de cancha"]]);
+igual("con encabezado Categoría / Rubro", repEncabezado(), "Categoría / Rubro");
+app.reportesState.catExpandido.add("Gastos cancha");
+igual("al abrir una categoría aparecen sus rubros", repFilas(), ["Gastos cancha", "ARBITRAJE", "SEGURIDAD", "Gastos Medicos", "Ingresos de cancha"]);
+check("y no todavía los movimientos", !app.renderReportesBody().includes("Policía"));
+app.reportesState.nivel = "cat";
+igual("sólo Categoría: mismas categorías, sin rubros", repFilas(), ["Gastos cancha", "Gastos Medicos", "Ingresos de cancha"]);
+check("la categoría abierta muestra directo sus movimientos", app.renderReportesBody().includes("Policía") && !app.renderReportesBody().includes("SEGURIDAD"));
+igual("encabezado Categoría", repEncabezado(), "Categoría");
+app.reportesState.nivel = "rubro";
+igual("sólo Rubro: una fila por rubro, de mayor a menor egreso", repFilas(), ["ARBITRAJE", "GASTOS MEDICOS", "SEGURIDAD", "ENTRADAS"]);
+igual("encabezado Rubro", repEncabezado(), "Rubro");
+check("ningún rubro abierto todavía", !app.renderReportesBody().includes("Policía"));
+app.reportesState.rubroExpandido.add("||9");
+check("el rubro abierto muestra sus movimientos", app.renderReportesBody().includes("Policía") && !app.renderReportesBody().includes("Terna"));
+for (const n of ["catrubro", "cat", "rubro"]) {
+  app.reportesState.nivel = n;
+  const h = app.renderReportesBody();
+  check(`nivel ${n}: el TOTAL no cambia`, h.includes(app.fmt(150000)) && h.includes(app.fmt(100000)) && h.includes("5 movimientos"));
+}
+app.reportesState.filtroConcepto = new Set(["Terna"]);
+app.reportesState.nivel = "rubro";
+igual("el filtro de conceptos vale en cualquier nivel", repFilas(), ["ARBITRAJE"]);
+app.reportesState.filtroConcepto = null;
+app.reportesState.nivel = "cualquiera";
+igual("un nivel desconocido cae en Categoría / Rubro", app.repNivel(), "catrubro");
+
+const xlsCR = app.reportesFilasExcel(app.getMovimientosReportes(), "catrubro");
+igual("Excel Categoría / Rubro: columnas de siempre", xlsCR.headers, ["Categoría", "Rubro", "Fecha", "Concepto", "Ingreso", "Egreso", "Cuenta"]);
+igual("categoría, rubro y movimientos por fecha", xlsCR.rows.slice(0, 4),
+      [["Gastos cancha", "", "", "", "", 70000, ""], ["", "ARBITRAJE", "", "", "", 50000, ""],
+       ["", "", "2026-05-02", "Terna", "", 40000, "CAJA"], ["", "", "2026-05-06", " Terna ", "", 10000, "CAJA"]]);
+igual("total al final", xlsCR.rows[xlsCR.rows.length - 1], ["TOTAL PERÍODO FILTRADO", "", "", "", 150000, 100000, ""]);
+const xlsC = app.reportesFilasExcel(app.getMovimientosReportes(), "cat");
+igual("Excel sólo Categoría: sin columna Rubro", xlsC.headers, ["Categoría", "Fecha", "Concepto", "Ingreso", "Egreso", "Cuenta"]);
+igual("la categoría y debajo sus movimientos", xlsC.rows.slice(0, 2), [["Gastos cancha", "", "", "", 70000, ""], ["", "2026-05-02", "Terna", "", 40000, "CAJA"]]);
+igual("3 categorías + 5 movimientos + total", xlsC.rows.length, 9);
+const xlsR = app.reportesFilasExcel(app.getMovimientosReportes(), "rubro");
+igual("Excel sólo Rubro: primera columna Rubro", [xlsR.headers[0], xlsR.rows.filter(r => r[0]).map(r => r[0])],
+      ["Rubro", ["ARBITRAJE", "GASTOS MEDICOS", "SEGURIDAD", "ENTRADAS", "TOTAL PERÍODO FILTRADO"]]);
+igual("mismo total en los tres", [xlsC.rows[8].slice(3, 5), xlsR.rows[xlsR.rows.length - 1].slice(3, 5)], [[150000, 100000], [150000, 100000]]);
+app.reportesState.nivel = "catrubro"; app.reportesState.catExpandido.clear(); app.reportesState.rubroExpandido.clear();
+
 seccion("53 · Reintegros: filtro de Jugadores y Estado");
 app.reintegroFiltro = ""; app.reintegroAnio = ""; app.reintegroOrdenCol = ""; app.reintegroColFiltros = {};
 app.movimientos = [

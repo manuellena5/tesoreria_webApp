@@ -1123,7 +1123,10 @@ app.pagosJugadores.find(p => p.id === "f-desc-j1").estado = "pendiente";
 // Las mismas filas por los dos caminos dan exactamente la misma salida. Por partido acota al
 // partido a la vista (fase 11), así que se lo para en p1, que es de donde son estas filas.
 app.pjPartidoSel = "p1";
-const detalleVistaJ1 = app.pjDetalleFilasHTML(app.pjFilasDeVistaPartido("j1"));
+// En Por partido va sin el nombre del partido: todo lo que lista es del que está a la vista.
+const detalleVistaJ1 = app.pjDetalleFilasHTML(app.pjFilasDeVistaPartido("j1"), "", { sinPartido: true });
+check("Por partido no repite el partido a la vista", !detalleVistaJ1.includes("Colon 08/06"), detalleVistaJ1);
+check("Mensual sí dice de qué partido es cada premio", detalleJ1.includes("Colon 08/06"), detalleJ1);
 const htmlPartido = app.renderPagoPartido();
 const htmlMensual = (app.pjMesSel = "2026-06", app.renderPagoMensual());
 check("Por partido pinta ese detalle", htmlPartido.includes(detalleVistaJ1), detalleVistaJ1.slice(0, 120));
@@ -2323,6 +2326,86 @@ igual("una sección que el guardado no conoce toma su valor inicial", [app.leerG
 app.localStorage.removeItem("clubfm_granos_sec");
 app.granosSecAbiertas = app.leerGranosSec();
 app.reservas = []; app.movimientos = [];
+
+// ══════════════════════════════════════════════════════════════
+// Un premio por partido. El modal viejo tenía un solo selector de partido y una cantidad por tipo
+// de premio: tres asistencias del PF sólo entraban como "x3" contra un mismo partido. Ahora cada
+// una es una fila propia, con su partido, que se edita o se quita sola.
+seccion("Premios · uno por partido, cada uno en su fila");
+sembrar();
+app.partidos.push({ id: "p0", fecha: "2026-06-01", rival: "Piamonte", numeroFecha: "Fecha 2", condicion: "LOCAL" });
+app.configJugadores.push({ idJugador: "j3", nombre: "GON", frecuencia: "mensual",
+                           premios: [{ descripcion: "Asist. partido", monto: 25000 }, { descripcion: "Gol", monto: 3000 }] });
+const altaPF = (id, d, extra) => {
+  const fila = Object.assign(app.pjPremioArmarFila("j3", "GON", Object.assign({ desc: "Asist. partido", monto: 25000, cant: 1, mes: "2026-06" }, d)), { id }, extra || {});
+  app.pagosJugadores.push(fila);
+  return fila;
+};
+const a2 = altaPF("pf-p2", { partidoId: "p2" });
+const a1 = altaPF("pf-p1", { partidoId: "p1" });
+igual("dos asistencias son dos filas, ordenadas por la fecha del partido",
+      app.pjPremiosCargados("j3").map(p => p.id), ["pf-p1", "pf-p2"]);
+igual("cada una con su partido", app.pjPremiosCargados("j3").map(p => p.partidoId), ["p1", "p2"]);
+igual("y con el monto de UNA", app.pjPremiosCargados("j3").map(p => p.montoFinal), [25000, 25000]);
+igual("la fila es de tipo premio, sin partidosIncluidos (no se confunde con el pago del partido)",
+      [a1.tipo, a1.partidosIncluidos.length, a1.estado, a1.etiqueta], ["premio", 0, "pendiente", "Asist. partido"]);
+igual("no le aparecen los premios de otro jugador", app.pjPremiosCargados("j3").some(p => p.jugadorId !== "j3"), false);
+
+// La cantidad queda para lo que se repite dentro de un mismo partido.
+const gol = altaPF("pf-gol", { desc: "Gol", monto: 3000, cant: 2, partidoId: "p1" });
+igual("dos goles en un partido: una fila, x2", [gol.etiqueta, gol.montoFinal], ["Gol x2", 6000]);
+igual("la etiqueta se vuelve a separar en premio y cantidad",
+      app.pjPremioParse("Gol x2", app.pjPremiosCatalogo("j3")), { desc: "Gol", cant: 2 });
+igual("sin cantidad vale por uno", app.pjPremioParse("Asist. partido", app.pjPremiosCatalogo("j3")), { desc: "Asist. partido", cant: 1 });
+igual("un premio que se llama \"Copa x2\" en el catálogo no se parte",
+      app.pjPremioParse("Copa x2", [{ descripcion: "Copa x2", monto: 1 }]), { desc: "Copa x2", cant: 1 });
+
+// Editar: mismo id, y no pierde lo que el modal no maneja.
+const editada = app.pjPremioArmarFila("j3", "GON", { desc: "Asist. partido", monto: 25000, cant: 1, partidoId: "p0", mes: "2026-07" },
+                                      Object.assign({}, a2, { fecha: "2026-06-15" }));
+igual("editar conserva el id y cambia partido y mes", [editada.id, editada.partidoId, editada.mes], ["pf-p2", "p0", "2026-07"]);
+igual("y lo que el modal no toca", editada.fecha, "2026-06-15");
+igual("un alta va sin id: lo pone la planilla",
+      app.pjPremioArmarFila("j3", "GON", { desc: "Gol", monto: 3000, cant: 1, partidoId: "", mes: "" }).id, "");
+
+// La misma asistencia dos veces es el error fácil.
+igual("mismo premio y mismo partido: avisa cuál es", (app.pjPremioRepetido("j3", "Asist. partido", "p1", "") || {}).id, "pf-p1");
+igual("otro partido no es repetido", app.pjPremioRepetido("j3", "Asist. partido", "p0", ""), null);
+igual("otro premio en el mismo partido tampoco", app.pjPremioRepetido("j3", "Valla", "p1", ""), null);
+igual("el que se está editando no choca consigo mismo", app.pjPremioRepetido("j3", "Asist. partido", "p1", "pf-p1"), null);
+igual("sin partido no hay contra qué comparar", app.pjPremioRepetido("j3", "Asist. partido", "", ""), null);
+igual("\"Gol x2\" cuenta como Gol", (app.pjPremioRepetido("j3", "Gol", "p1", "") || {}).id, "pf-gol");
+a1.estado = "pagado";
+igual("uno ya pagado también se detecta", (app.pjPremioRepetido("j3", "Asist. partido", "p1", "") || {}).estado, "pagado");
+igual("y sale de la lista de pendientes", app.pjPremiosCargados("j3").map(p => p.id), ["pf-gol", "pf-p2"]);
+a1.estado = "pendiente";
+
+// Partido propuesto: en Mensual, el último ya jugado que todavía no tiene ese premio.
+app.pagosJugTab = "mensual";
+igual("propone el último partido jugado sin ese premio", app.pjPremioPartidoPropuesto("j3", "Asist. partido"), "p0");
+igual("para otro premio, el más reciente", app.pjPremioPartidoPropuesto("j3", "Valla"), "p2");
+altaPF("pf-p0", { partidoId: "p0" });
+igual("con todos cargados no propone ninguno", app.pjPremioPartidoPropuesto("j3", "Asist. partido"), "");
+app.partidos.push({ id: "pfut", fecha: "2099-01-01", rival: "Futuro", numeroFecha: "Fecha 9" });
+igual("un partido que todavía no se jugó no se propone", app.pjPremioPartidoPropuesto("j3", "Asist. partido"), "");
+app.pagosJugTab = "partido"; app.pjPartidoSel = "p2";
+igual("desde Por partido es el que está a la vista", app.pjPremioPartidoPropuesto("j3", "Asist. partido"), "p2");
+
+// Lo cargado con el modal viejo se sigue viendo, como un premio más (y se puede partir a mano).
+app.pagosJugadores.push({ id: "pf-viejo", jugadorId: "j3", jugadorNombre: "GON", partidosIncluidos: [], montoFinal: 75000,
+                          estado: "pendiente", etiqueta: "Asist. partido x3", mes: "2026-05", tipo: "", partidoId: "" });
+app.pagosJugadores.push({ id: "pf-sueldo", jugadorId: "j3", jugadorNombre: "GON", partidosIncluidos: [], montoFinal: 300000,
+                          estado: "pendiente", etiqueta: "Junio", mes: "2026-06", tipo: "periodico", partidoId: "" });
+check("una fila vieja sin tipo se reconoce por la etiqueta", app.pjPremiosCargados("j3").some(p => p.id === "pf-viejo"));
+igual("y va al final, por no tener partido", app.pjPremiosCargados("j3").slice(-1)[0].id, "pf-viejo");
+check("el sueldo no se cuela en la lista de premios", !app.pjPremiosCargados("j3").some(p => p.id === "pf-sueldo"));
+
+// En Mensual cada premio dice de qué partido es: si no, dos asistencias son dos líneas idénticas.
+const detallePF = app.pjDetalleFilasHTML(app.pjFilasMes("j3", "2026-06"));
+check("el detalle distingue las asistencias por partido",
+      detallePF.includes("Colon 08/06") && detallePF.includes("Union 15/06") && detallePF.includes("Piamonte 01/06"), detallePF);
+igual("una línea por premio", (detallePF.match(/Asist\. partido: /g) || []).length, 3);
+app.pagosJugTab = "partido"; app.pjPartidoSel = null;
 
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);

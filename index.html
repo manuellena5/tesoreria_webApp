@@ -10153,6 +10153,14 @@ function pjPartidoLabel(partidoId) {
   return (p.numeroFecha ? p.numeroFecha + " · " : "") + p.rival;
 }
 
+/** "Piamonte 15/09": el partido de un premio en corto, para el detalle inline. Lleva la fecha
+ *  porque el rival solo no alcanza: contra el mismo equipo se juega ida y vuelta. */
+function pjPartidoCorto(partidoId) {
+  const p = partidos.find(x => x.id === partidoId);
+  if (!p) return "partido borrado";
+  return p.rival + (p.fecha ? " " + p.fecha.slice(8, 10) + "/" + p.fecha.slice(5, 7) : "");
+}
+
 /** MovimientoID del último pago confirmado de un jugador (el más reciente por fecha de pago).
  *  Sirve para poder emitir el comprobante de una transferencia que ya se hizo, cuando en la
  *  tabla no queda nada tildado porque todas sus filas pasaron a "pagado". */
@@ -10407,7 +10415,7 @@ function renderPagoPartido() {
           <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
           <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}',{partidoId:'${pjPartidoSel}'})" title="Cargar descuento">− Descuento</button>
         </div>
-        ${filasOtros.length ? `<div class="pj-acumulado">${pjDetalleFilasHTML(filasOtros)}</div>` : ""}
+        ${filasOtros.length ? `<div class="pj-acumulado">${pjDetalleFilasHTML(filasOtros, "", { sinPartido: true })}</div>` : ""}
       </td>`;
     return `
     <tr class="${rol==='noJugo'?'pj-nojugo':''}" data-jug="${cfg.idJugador}" data-nombre="${esc(cfg.nombre)}"
@@ -10457,7 +10465,7 @@ function renderPagoPartido() {
           <button class="btn-sm" onclick="abrirPremiosModal('${cfg.idJugador}','${esc(cfg.nombre)}')" title="Agregar premios">🏆</button>
           <button class="btn-sm" onclick="abrirDescuentoModal('${cfg.idJugador}','${esc(cfg.nombre)}','${mesPartidoSel}',{partidoId:'${pjPartidoSel}'})" title="Cargar descuento">− Descuento</button>
         </div>
-        ${filasOtros.length ? `<div class="pj-acumulado">${pjDetalleFilasHTML(filasOtros)}</div>` : ""}
+        ${filasOtros.length ? `<div class="pj-acumulado">${pjDetalleFilasHTML(filasOtros, "", { sinPartido: true })}</div>` : ""}
       </td>
       <td class="mono">${fmtSigned(acumulado)}</td>
       <td>${badge}</td>
@@ -10524,12 +10532,20 @@ function pjFilasMes(jugadorId, mes) {
  * La ✕ va SÓLO en los descuentos pendientes: deletePagoJugador rechaza borrar filas confirmadas, y
  * los premios se gestionan desde el 🏆. `opciones.sinQuitar` la saca del todo — en Transferencias
  * el detalle es informativo y cualquier repintado se lleva puestos los premios tildados.
+ *
+ * Cada premio dice además de qué partido es ("Asist. partido: $25.000 Piamonte 15/09"): con un
+ * premio por partido, dos asistencias del mismo mes eran dos líneas idénticas. Con la fecha y no
+ * sólo el rival, que se repite entre ida y vuelta. `opciones.sinPartido` lo saca — en Por partido
+ * todo lo que se lista es del partido a la vista y repetirlo en cada línea es ruido.
  */
 function pjDetalleFilasHTML(filas, vacioLabel, opciones) {
   if (!filas || !filas.length) return `<span class="pj-acumulado">${esc(vacioLabel || "—")}</span>`;
-  const sinQuitar = !!(opciones && opciones.sinQuitar);
+  const sinQuitar  = !!(opciones && opciones.sinQuitar);
+  const sinPartido = !!(opciones && opciones.sinPartido);
   return filas.map(p => {
     const esDesc = pjTipoFila(p) === "descuento";
+    const partido = (!esDesc && !sinPartido && p.partidoId)
+      ? ` <span class="pj-acumulado">${esc(pjPartidoCorto(p.partidoId))}</span>` : "";
     const quitar = (esDesc && p.estado === "pendiente" && !sinQuitar)
       ? ` <button class="btn-sm danger" style="padding:0 5px" title="Quitar descuento" onclick="quitarDescuento('${p.id}')">✕</button>` : "";
     const rubro = p.codRubroContra ? ` <span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>` : "";
@@ -10539,7 +10555,7 @@ function pjDetalleFilasHTML(filas, vacioLabel, opciones) {
       : "";
     // La fecha del hecho, no la del pago: de cuándo viene este cargo. Las filas viejas no la tienen.
     const fecha = p.fecha ? ` <span class="pj-acumulado">${esc(fmtFechaDMY(p.fecha))}</span>` : "";
-    return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${fecha}${rubro}${origen}${quitar}`;
+    return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${partido}${fecha}${rubro}${origen}${quitar}`;
   }).join(" · ");
 }
 
@@ -11559,156 +11575,365 @@ async function guardarMontoNuevo(jugadorId, jugadorNombre) {
   } catch(e) { handleSaveError(btnId, e); }
 }
 
-// ── Aplicar premios a un jugador ──────────────────────────────
-// Cada premio con cantidad > 0 genera/actualiza una fila pendiente propia (sin
-// partido asociado), que se suma al pendiente del jugador y se cobra junto con el
-// resto. Si el jugador ya tenía ese premio cargado (pendiente), se precarga la
-// cantidad para poder modificarla o ponerla en 0 para quitarlo.
+// ── Premios de un jugador ─────────────────────────────────────
+// Cada premio cargado es una fila pendiente propia, atada a SU partido: dos asistencias son dos
+// filas, una por partido, y cada una se edita o se quita por separado. La cantidad queda para lo
+// que se repite dentro de un mismo partido (dos goles → "Gol x2", una sola fila).
+// Antes el modal tenía un único selector de partido para todo y una cantidad por tipo de premio:
+// tres asistencias sólo se podían cargar como "x3" contra un mismo partido.
+// El modal queda abierto después de cada alta: cargar las asistencias de un mes son varias
+// seguidas, y así se ve la lista crecer en vez de entrar y salir una vez por partido.
 
-/** Filas pendientes (sin partido) de un jugador que corresponden a un premio dado,
- *  matcheando por descripción (la etiqueta guardada es "desc" o "desc xN"). */
-function pjPremioExistente(jugadorId, descripcion) {
-  // Matchea por etiqueta sobre cualquier fila pendiente que no sea de un partido: las filas
-  // viejas sin Tipo de un jugador mensual se clasifican como "periodico", y aun así son el
-  // premio que este modal cargó en su momento.
-  return pagosJugadores.filter(p => p.jugadorId === jugadorId && p.estado === "pendiente"
-    && pjTipoFila(p) !== "partido"
-    && (p.etiqueta === descripcion || p.etiqueta.startsWith(descripcion + " x")));
+/** Separa la etiqueta guardada de un premio ("Gol x2") en descripción y cantidad. Una etiqueta
+ *  que coincide entera con un premio del catálogo vale por 1 aunque termine en "x2". */
+function pjPremioParse(etiqueta, catalogo) {
+  const et = String(etiqueta || "");
+  if ((catalogo || []).some(c => c.descripcion === et)) return { desc: et, cant: 1 };
+  const m = /^(.*) x(\d+)$/.exec(et);
+  return m && Number(m[2]) > 0 ? { desc: m[1], cant: Number(m[2]) } : { desc: et, cant: 1 };
 }
 
-function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
+/** Catálogo de premios de un jugador (lo que se carga en Entidades → Cobros). */
+function pjPremiosCatalogo(jugadorId) {
   const cfg = configJugadores.find(c => c.idJugador === jugadorId);
-  const lista = (cfg && cfg.premios) ? cfg.premios : [];
-  if (!lista.length) {
+  return (cfg && cfg.premios) ? cfg.premios : [];
+}
+
+/** ¿La fila es un premio de este jugador? Las que tienen Tipo lo dicen solas. Las cargadas antes
+ *  de que existiera esa columna, en un jugador mensual, se clasifican como "periodico": ésas se
+ *  reconocen por la etiqueta contra el catálogo, que es como las reconocía el modal viejo. */
+function pjEsPremio(p, catalogo) {
+  const tipo = pjTipoFila(p);
+  if (tipo === "premio") return true;
+  if (tipo !== "periodico") return false;
+  return catalogo.some(c => c.descripcion === pjPremioParse(p.etiqueta, catalogo).desc);
+}
+
+/** Premios pendientes de un jugador, uno por fila, ordenados por la fecha de su partido (los que
+ *  no son de ningún partido van al final). Es la lista que muestra el modal de premios. */
+function pjPremiosCargados(jugadorId) {
+  const catalogo = pjPremiosCatalogo(jugadorId);
+  const fechaDe  = p => { const par = partidos.find(x => x.id === p.partidoId); return (par && par.fecha) || "9999"; };
+  return pagosJugadores
+    .filter(p => p.jugadorId === jugadorId && p.estado === "pendiente" && pjEsPremio(p, catalogo))
+    .sort((a, b) => fechaDe(a).localeCompare(fechaDe(b)) || String(a.etiqueta).localeCompare(String(b.etiqueta)));
+}
+
+/** Otra fila del jugador con el mismo premio para el mismo partido (pendiente o ya pagada), sin
+ *  contar la que se está editando. Sin partido no hay contra qué comparar. Sirve para no cargar
+ *  dos veces la misma asistencia. */
+function pjPremioRepetido(jugadorId, desc, partidoId, exceptoId) {
+  if (!partidoId) return null;
+  const catalogo = pjPremiosCatalogo(jugadorId);
+  const iguales = pagosJugadores.filter(p => p.jugadorId === jugadorId && p.id !== exceptoId
+    && p.partidoId === partidoId && pjTipoFila(p) !== "partido" && pjTipoFila(p) !== "descuento"
+    && pjPremioParse(p.etiqueta, catalogo).desc === desc);
+  // El pendiente primero: es el que se puede editar, y el aviso que corresponde es otro.
+  return iguales.find(p => p.estado === "pendiente") || iguales[0] || null;
+}
+
+/** Fila de Pagos Jugadores de un premio. Al editar se parte de la fila que ya estaba, para no
+ *  perder nada de lo que este modal no maneja.
+ *  partidosIncluidos va vacío: el partido de un premio va en su propia columna. Meterlo ahí haría
+ *  que pjFilaPartido lo devuelva como si fuera el pago del partido. */
+function pjPremioArmarFila(jugadorId, jugadorNombre, d, existente) {
+  const total = Number(d.monto || 0) * Number(d.cant || 1);
+  return {
+    ...(existente || {}),
+    id: existente ? existente.id : "",
+    jugadorId, jugadorNombre,
+    partidosIncluidos: [], montoBase: total, ajuste: 0, motivoAjuste: "", montoFinal: total,
+    estado: "pendiente", fechaPago: "", medioPago: "", movimientoId: "",
+    etiqueta: d.desc + (d.cant > 1 ? " x" + d.cant : ""),
+    mes: d.mes || "", tipo: "premio", partidoId: d.partidoId || ""
+  };
+}
+
+/** Partido que se propone al cargar un premio nuevo. Desde "Por partido" es el que está a la
+ *  vista. Desde Mensual, el último partido ya jugado que todavía no tiene ese premio: es el caso
+ *  de la asistencia, que se carga después de cada fecha. Queda editable y se puede dejar vacío. */
+function pjPremioPartidoPropuesto(jugadorId, desc) {
+  if (pagosJugTab === "partido" && pjPartidoSel) return pjPartidoSel;
+  const catalogo = pjPremiosCatalogo(jugadorId);
+  const usados = pagosJugadores
+    .filter(p => p.jugadorId === jugadorId && p.partidoId && pjTipoFila(p) !== "partido"
+              && pjPremioParse(p.etiqueta, catalogo).desc === desc)
+    .map(p => p.partidoId);
+  const hoy = today();
+  const libre = partidos
+    .filter(p => p.fecha && p.fecha <= hoy && !usados.includes(p.id))
+    .sort((a, b) => b.fecha.localeCompare(a.fecha))[0];
+  return libre ? libre.id : "";
+}
+
+// Estado del modal abierto: { jugadorId, jugadorNombre, mes, desc, editId, avisoPagado }.
+let premiosModal = null;
+
+function abrirPremiosModal(jugadorId, jugadorNombre, mesDefault) {
+  if (!pjPremiosCatalogo(jugadorId).length && !pjPremiosCargados(jugadorId).length) {
     toast("Este jugador no tiene premios cargados (Entidades → Cobros → editar el cobro)", "err");
     return;
   }
-  const mesSel = mesDefault || nowMes();
-  // Partido del premio: si el modal se abre desde "Por partido" ya sabemos cuál es, así que se
-  // propone ese. Queda editable y se puede dejar vacío: hay premios que no son de un partido.
-  const yaCargado = lista.map(p => pjPremioExistente(jugadorId, p.descripcion))
-    .reduce((a,b) => a.concat(b), []).find(p => p.partidoId);
-  const partidoSel = yaCargado ? yaCargado.partidoId : (pagosJugTab === "partido" ? pjPartidoSel : "");
-  const opcionesPartido = `<option value="">— Sin partido —</option>` +
-    [...partidos].sort((a,b) => b.fecha.localeCompare(a.fecha)).map(p => {
-      const fd = p.fecha ? p.fecha.slice(8)+"/"+p.fecha.slice(5,7)+"/"+p.fecha.slice(0,4) : "";
-      return `<option value="${p.id}" ${p.id===partidoSel?"selected":""}>${esc(p.rival)} — ${fd}</option>`;
-    }).join("");
-  const filas = lista.map((p, i) => {
-    const existentes = pjPremioExistente(jugadorId, p.descripcion);
-    const existingIds = existentes.map(r => r.id);
-    const existingTotal = existentes.reduce((s,r) => s + Number(r.montoFinal||0), 0);
-    const cantActual = existentes.length ? Math.max(1, Math.round(existingTotal / (Number(p.monto)||1))) : 0;
+  premiosModal = { jugadorId, jugadorNombre, mes: mesDefault || nowMes(), desc: "", editId: "", avisoPagado: "" };
+  premiosModalRender();
+}
+
+/** Premios que ofrece el formulario: el catálogo del jugador. El que se está editando conserva el
+ *  monto con el que se cargó —cambiarle el partido no tiene por qué cambiarle la plata— y aparece
+ *  aunque después lo hayan sacado del catálogo. */
+function premiosModalOpciones() {
+  const st = premiosModal;
+  const catalogo = pjPremiosCatalogo(st.jugadorId);
+  const ops = catalogo.map(c => ({ desc: c.descripcion, monto: Number(c.monto || 0) }));
+  const ed = st.editId ? pagosJugadores.find(p => p.id === st.editId) : null;
+  if (ed) {
+    const pr = pjPremioParse(ed.etiqueta, catalogo);
+    const unit = Math.round(Number(ed.montoFinal || 0) / pr.cant);
+    const i = ops.findIndex(o => o.desc === pr.desc);
+    if (i >= 0) ops[i].monto = unit; else ops.push({ desc: pr.desc, monto: unit });
+  }
+  return ops;
+}
+
+/** Lo que hay en el formulario del modal en este momento. */
+function premiosFormLeer() {
+  const v = id => document.getElementById(id)?.value || "";
+  return { desc: v("premio-desc"), partidoId: v("premio-partido"), mes: v("premio-mes"),
+           cant: Math.floor(Number(v("premio-cant") || 0)) };
+}
+
+/** Pinta el modal. `conservar` son los valores del formulario a mantener cuando se repinta por
+ *  algo que no es el formulario (quitar un premio de la lista mientras se arma otro). */
+function premiosModalRender(conservar) {
+  const st = premiosModal;
+  if (!st) return;
+  const catalogo = pjPremiosCatalogo(st.jugadorId);
+  const cargados = pjPremiosCargados(st.jugadorId);
+  const ed = cargados.find(p => p.id === st.editId) || null;
+  if (!ed) st.editId = "";
+  const ops = premiosModalOpciones();
+
+  // Valores del formulario: los del premio en edición, los que venía armando, o los propuestos.
+  let f;
+  if (conservar) {
+    f = conservar;
+  } else if (ed) {
+    const pr = pjPremioParse(ed.etiqueta, catalogo);
+    f = { desc: pr.desc, cant: pr.cant, partidoId: ed.partidoId || "", mes: ed.mes || "" };
+  } else {
+    const desc = ops.some(o => o.desc === st.desc) ? st.desc : (ops[0] ? ops[0].desc : "");
+    f = { desc, cant: 1, partidoId: pjPremioPartidoPropuesto(st.jugadorId, desc), mes: st.mes };
+  }
+
+  const partidoLargo = id => {
+    if (!id) return "Sin partido";
+    const p = partidos.find(x => x.id === id);
+    return p ? p.rival + (p.fecha ? " — " + fmtFechaDMY(p.fecha) : "") : "Partido borrado";
+  };
+  const linea = (p, pagado) => {
+    const pr = pjPremioParse(p.etiqueta, catalogo);
+    const editando = p.id === st.editId;
     return `
-    <div class="entity-item">
+    <div class="entity-item" style="${editando ? "border-color:var(--accent);" : ""}${pagado ? "opacity:.55;" : ""}">
       <div style="flex:1;min-width:0">
-        <div class="entity-name">${esc(p.descripcion)}</div>
-        <div class="entity-sub mono">${fmt(p.monto)} c/u</div>
+        <div class="entity-name">${esc(pr.desc)}${pr.cant > 1 ? ` <span class="pj-acumulado">x${pr.cant}</span>` : ""}</div>
+        <div class="entity-sub">${esc(partidoLargo(p.partidoId))}${p.mes ? " · Mes: " + esc(mesLabel(p.mes)) : ""}</div>
       </div>
-      <input class="inp premio-cant" data-idx="${i}" data-desc="${esc(p.descripcion)}" data-monto="${p.monto}"
-             data-existing-ids='${JSON.stringify(existingIds)}'
-             type="number" min="0" step="1" value="${cantActual}" style="width:72px;text-align:center" oninput="premiosRecalcTotal()">
+      <span class="mono" style="white-space:nowrap">${fmt(p.montoFinal)}</span>
+      ${pagado
+        ? `<span class="pj-badge pj-badge-pagado">Pagado ✓</span>`
+        : `<button class="btn-sm accent" onclick="premiosEditar('${escJs(p.id)}')" title="Editar">✏️</button>
+           <button class="btn-sm danger" id="premio-del-${esc(p.id)}" onclick="premiosQuitar('${escJs(p.id)}')" title="Quitar">✕</button>`}
     </div>`;
-  }).join("");
+  };
+  // Los ya pagados del mes quedan a la vista, apagados y sin botones: sirven para ver que esa
+  // asistencia ya se cobró y no volver a cargarla.
+  const pagados = pagosJugadores.filter(p => p.jugadorId === st.jugadorId && p.estado === "pagado"
+    && (p.mes || "") === st.mes && pjEsPremio(p, catalogo));
+  const totalPend = cargados.reduce((s, p) => s + Number(p.montoFinal || 0), 0);
+  const lista = (cargados.length || pagados.length)
+    ? cargados.map(p => linea(p, false)).join("") + pagados.map(p => linea(p, true)).join("")
+    : `<p class="note" style="margin:0 0 8px">Todavía no tiene premios cargados.</p>`;
+
+  // Las opciones que el valor actual necesita y la lista no trae (un mes viejo, un partido que
+  // ya no está) se agregan: si no, abrir la edición y guardar lo cambiaría sin que nadie lo pida.
+  let opcionesMes = generarOpcionesMes(f.mes);
+  if (!opcionesMes.includes(`value="${f.mes}" selected`)) {
+    opcionesMes = `<option value="${esc(f.mes)}" selected>${f.mes ? esc(mesLabel(f.mes)) : "Sin mes asignado"}</option>` + opcionesMes;
+  }
+  const opcionesPartido = `<option value="">— Sin partido —</option>` +
+    [...partidos].sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))).map(p =>
+      `<option value="${esc(p.id)}" ${p.id === f.partidoId ? "selected" : ""}>${esc(partidoLargo(p.id))}</option>`).join("") +
+    (f.partidoId && !partidos.some(p => p.id === f.partidoId)
+      ? `<option value="${esc(f.partidoId)}" selected>Partido borrado</option>` : "");
+  const opcionesPremio = ops.map(o =>
+    `<option value="${esc(o.desc)}" ${o.desc === f.desc ? "selected" : ""}>${esc(o.desc)} — ${fmt(o.monto)}</option>`).join("");
+
+  const formulario = !ops.length ? "" : `
+        <div class="field" style="margin-top:16px"><label>${ed ? "Editar premio" : "Agregar premio"}</label></div>
+        <div class="fgrid" style="margin-top:8px">
+          <div class="field">
+            <label>Premio</label>
+            <select class="inp" id="premio-desc" onchange="premiosFormRecalc()">${opcionesPremio}</select>
+          </div>
+          <div class="field">
+            <label>Partido</label>
+            <select class="inp" id="premio-partido">${opcionesPartido}</select>
+          </div>
+          <div style="display:flex;gap:10px">
+            <div class="field" style="flex:1">
+              <label>Cantidad</label>
+              <input class="inp" id="premio-cant" type="number" min="1" step="1" value="${f.cant || 1}" style="text-align:center" oninput="premiosFormRecalc()">
+            </div>
+            <div class="field" style="flex:2">
+              <label>Mes</label>
+              <select class="inp" id="premio-mes">${opcionesMes}</select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-detail-row" style="margin-top:10px">
+          <span class="modal-detail-lbl">Este premio</span>
+          <span class="modal-detail-val mono" id="premio-total">${fmt(0)}</span>
+        </div>`;
+
+  const card = document.querySelector("#modal-root .modal-card");
+  const scroll = card ? card.scrollTop : 0;
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
         <div class="modal-handle"></div>
-        <div class="modal-title">Premios — ${esc(jugadorNombre)}</div>
-        <div class="fgrid">
-          <div class="field">
-            <label>Mes</label>
-            <select class="inp" id="premios-mes">${generarOpcionesMes(mesSel)}</select>
-          </div>
-          <div class="field">
-            <label>Partido</label>
-            <select class="inp" id="premios-partido">${opcionesPartido}</select>
-          </div>
-        </div>
-        ${filas}
-        <p class="note" style="margin:4px 0 0">Poné la cantidad en 0 para quitar un premio ya cargado.</p>
-        <div class="modal-detail-row" style="margin-top:10px">
-          <span class="modal-detail-lbl">Total</span>
-          <span class="modal-detail-val mono" id="premios-total">${fmt(0)}</span>
-        </div>
+        <div class="modal-title">Premios — ${esc(st.jugadorNombre)}</div>
+        <div class="field" style="margin-bottom:8px"><label>Cargados</label></div>
+        ${lista}
+        ${cargados.length ? `
+        <div class="modal-detail-row">
+          <span class="modal-detail-lbl">Total pendiente</span>
+          <span class="modal-detail-val mono">${fmt(totalPend)}</span>
+        </div>` : ""}
+        ${formulario}
         <div class="modal-footer">
-          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" id="btn-aplicar-premios" onclick="guardarPremiosJugador('${jugadorId}','${esc(jugadorNombre)}')">Guardar</button>
+          ${ed
+            ? `<button class="btn-secondary" style="flex:1" onclick="premiosCancelarEdicion()">Cancelar</button>`
+            : `<button class="btn-secondary" style="flex:1" onclick="closeModal()">Cerrar</button>`}
+          ${ops.length ? `<button class="btn-main" style="flex:1" id="btn-guardar-premio" onclick="guardarPremioJugador()">${ed ? "Guardar cambios" : "Agregar premio"}</button>` : ""}
         </div>
       </div>
     </div>`;
-  premiosRecalcTotal();
+  const nueva = document.querySelector("#modal-root .modal-card");
+  if (nueva && scroll) nueva.scrollTop = scroll;
+  premiosFormRecalc();
 }
 
-function premiosRecalcTotal() {
-  const total = [...document.querySelectorAll(".premio-cant")]
-    .reduce((s,i) => s + (Number(i.value||0) * Number(i.dataset.monto||0)), 0);
-  const el = document.getElementById("premios-total");
-  if (el) el.textContent = fmt(total);
+function premiosFormRecalc() {
+  const el = document.getElementById("premio-total");
+  if (!el || !premiosModal) return;
+  const f = premiosFormLeer();
+  const op = premiosModalOpciones().find(o => o.desc === f.desc);
+  el.textContent = fmt((op ? op.monto : 0) * Math.max(0, f.cant));
 }
 
-async function guardarPremiosJugador(jugadorId, jugadorNombre) {
-  const btnId = "btn-aplicar-premios";
-  if (document.getElementById(btnId)?.disabled) return;
-  const mes       = document.getElementById("premios-mes")?.value || "";
-  const partidoId = document.getElementById("premios-partido")?.value || "";
-  // Por cada tipo de premio: cant 0 con filas existentes -> quitarlas; cant > 0 ->
-  // actualiza la primera fila existente (o crea una nueva) y borra duplicados sueltos.
-  const aBorrar = [];
-  const aGuardar = [];
-  [...document.querySelectorAll(".premio-cant")].forEach(inp => {
-    const cant = Number(inp.value || 0);
-    const monto = Number(inp.dataset.monto || 0);
-    const desc  = inp.dataset.desc || "Premio";
-    const existingIds = JSON.parse(inp.dataset.existingIds || "[]");
-    if (cant <= 0) {
-      aBorrar.push(...existingIds);
-      return;
-    }
-    const [keepId, ...dupIds] = existingIds;
-    aBorrar.push(...dupIds);
-    aGuardar.push({
-      id: keepId || "", jugadorId, jugadorNombre,
-      montoFinal: monto * cant,
-      etiqueta:   desc + (cant > 1 ? " x" + cant : ""),
-      mes, partidoId
-    });
-  });
-  if (!aBorrar.length && !aGuardar.length) { toast("Poné al menos una cantidad", "err"); return; }
+function premiosEditar(id) {
+  if (!premiosModal) return;
+  premiosModal.editId = id;
+  premiosModal.avisoPagado = "";
+  premiosModalRender();
+  document.getElementById("premio-partido")?.scrollIntoView({ block: "nearest" });
+}
+
+function premiosCancelarEdicion() {
+  if (!premiosModal) return;
+  premiosModal.editId = "";
+  premiosModalRender();
+}
+
+/** Guarda el premio del formulario: uno nuevo, o los cambios del que se está editando. */
+async function guardarPremioJugador() {
+  const st = premiosModal;
+  const btnId = "btn-guardar-premio";
+  if (!st || document.getElementById(btnId)?.disabled) return;
+  const f  = premiosFormLeer();
+  const op = premiosModalOpciones().find(o => o.desc === f.desc);
+  if (!op) { toast("Elegí un premio", "err"); return; }
+  if (!(f.cant >= 1)) { toast("La cantidad tiene que ser 1 o más", "err"); return; }
+  const existente = st.editId ? pagosJugadores.find(p => p.id === st.editId) : null;
+  if (st.editId && (!existente || existente.estado !== "pendiente")) {
+    toast("Ese premio ya no se puede editar", "err");
+    st.editId = ""; premiosModalRender();
+    return;
+  }
+  // La misma asistencia dos veces es el error más fácil de cometer acá. Si la otra está
+  // pendiente, se edita ésa. Si ya se pagó se avisa una vez y el segundo toque la carga igual:
+  // puede ser un segundo gol que se cargó tarde.
+  const repetido = pjPremioRepetido(st.jugadorId, f.desc, f.partidoId, st.editId);
+  if (repetido && repetido.estado === "pendiente") {
+    toast("Ya tiene ese premio cargado para ese partido. Cambiale la cantidad desde la lista.", "err");
+    return;
+  }
+  const clave = f.desc + "|" + f.partidoId;
+  if (repetido && st.avisoPagado !== clave) {
+    st.avisoPagado = clave;
+    toast("Ese premio ya se le pagó para ese partido. Tocá de nuevo para cargarlo igual.", "err");
+    return;
+  }
+  const pago = pjPremioArmarFila(st.jugadorId, st.jugadorNombre,
+    { desc: f.desc, monto: op.monto, cant: f.cant, partidoId: f.partidoId, mes: f.mes }, existente);
   // El re-render de abajo reconstruye la tabla — nos guardamos lo que el usuario
   // tenía cargado sin grabar (rol, ajuste, motivo) para no hacérselo perder.
   const formPrevio = pjSnapshotFormPartido();
   setBtnState(btnId, "saving");
   try {
-    for (const id of aBorrar) {
-      const r = await Storage.deletePagoJugador(id);
-      if (!r.ok) throw new Error(r.error || "Error");
-      const idx = pagosJugadores.findIndex(p => p.id === id);
-      if (idx >= 0) pagosJugadores.splice(idx, 1);
-    }
-    for (const p of aGuardar) {
-      // partidosIncluidos sigue vacío: el partido de un premio va en su propia columna. Meterlo
-      // acá haría que pjFilaPartido lo devuelva como si fuera el pago del partido.
-      const campos = {
-        jugadorId: p.jugadorId, jugadorNombre: p.jugadorNombre,
-        partidosIncluidos: [], montoBase: p.montoFinal, ajuste: 0, motivoAjuste: "",
-        montoFinal: p.montoFinal, estado: "pendiente", fechaPago: "", medioPago: "",
-        etiqueta: p.etiqueta, movimientoId: "", mes: p.mes,
-        tipo: "premio", partidoId: p.partidoId || ""
-      };
-      const r = await Storage.savePagoJugador({ id: p.id, ...campos });
-      if (!r.ok) throw new Error(r.error || "Error");
-      const fila = { id: r.id, ...campos };
-      const idx = pagosJugadores.findIndex(x => x.id === r.id);
-      if (idx >= 0) pagosJugadores[idx] = fila; else pagosJugadores.push(fila);
-    }
+    const r = await Storage.savePagoJugador(pago);
+    if (!r.ok) throw new Error(r.error || "Error");
+    const fila = { ...pago, id: r.id };
+    const idx = pagosJugadores.findIndex(x => x.id === r.id);
+    if (idx >= 0) pagosJugadores[idx] = fila; else pagosJugadores.push(fila);
     saveSnapshotToCache();
-    setBtnState(btnId, "saved");
-    toast("Premios actualizados ✓", "ok");
-    closeModal();
+    toast(existente ? "Premio actualizado ✓" : "Premio agregado ✓", "ok");
+    Object.assign(st, { editId: "", desc: f.desc, avisoPagado: "" });
+    // El mes elegido queda para el próximo alta; el de un premio editado es de ese premio.
+    if (!existente) st.mes = f.mes;
+    const sigueAbierto = !!document.getElementById(btnId) && premiosModal === st;
     renderPagosJugadores();
     pjRestoreFormPartido(formPrevio);
+    if (sigueAbierto) premiosModalRender();
   } catch(e) { handleSaveError(btnId, e); }
+}
+
+/** Quita un premio pendiente. Dos toques, sin el confirm() del navegador (mismo patrón que los
+ *  adjuntos): en el celular el diálogo nativo tapa el modal. */
+async function premiosQuitar(id) {
+  const btnId = "premio-del-" + id;
+  const btn = document.getElementById(btnId);
+  if (!btn || btn.disabled) return;
+  if (!btn.dataset.confirm) {
+    btn.dataset.confirm = "1";
+    btn.textContent = "¿Quitar?";
+    setTimeout(() => {
+      if (document.getElementById(btnId) === btn && btn.dataset.confirm && !btn.disabled) {
+        delete btn.dataset.confirm; btn.textContent = "✕";
+      }
+    }, 3000);
+    return;
+  }
+  btn.disabled = true; btn.textContent = "…";
+  const st = premiosModal;
+  const formPrevio = pjSnapshotFormPartido();
+  try {
+    const r = await Storage.deletePagoJugador(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    const idx = pagosJugadores.findIndex(p => p.id === id);
+    if (idx >= 0) pagosJugadores.splice(idx, 1);
+    saveSnapshotToCache();
+    toast("Premio quitado ✓", "ok");
+    const sigueAbierto = !!document.getElementById(btnId) && premiosModal === st;
+    // Si se quitó el que se estaba editando, el formulario vuelve a "agregar"; si no, conserva
+    // lo que se venía armando.
+    const conservar = st && st.editId !== id ? premiosFormLeer() : null;
+    if (st && st.editId === id) st.editId = "";
+    renderPagosJugadores();
+    pjRestoreFormPartido(formPrevio);
+    if (sigueAbierto) premiosModalRender(conservar && conservar.desc ? conservar : undefined);
+  } catch(e) { handleDeleteError(btnId, e); }
 }
 
 /**

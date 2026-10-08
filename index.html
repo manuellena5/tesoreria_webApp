@@ -10530,7 +10530,9 @@ function pjFilasMes(jugadorId, mes) {
  * distingue un descuento que además genera un ingreso de uno que sólo netea), el ← del movimiento
  * de origen cuando lo tiene, y la fecha del hecho si está cargada.
  * La ✕ va SÓLO en los descuentos pendientes: deletePagoJugador rechaza borrar filas confirmadas, y
- * los premios se gestionan desde el 🏆. `opciones.sinQuitar` la saca del todo — en Transferencias
+ * los premios se gestionan desde el 🏆. Los montos sueltos pendientes (sueldo, quincena) llevan
+ * un ✏️ que abre "+ Agregar monto" precargado, y desde ahí se editan o se quitan.
+ * `opciones.sinQuitar` saca los dos botones — en Transferencias
  * el detalle es informativo y cualquier repintado se lleva puestos los premios tildados.
  *
  * Cada premio dice además de qué partido es ("Asist. partido: $25.000 Piamonte 15/09"): con un
@@ -10548,6 +10550,8 @@ function pjDetalleFilasHTML(filas, vacioLabel, opciones) {
       ? ` <span class="pj-acumulado">${esc(pjPartidoCorto(p.partidoId))}</span>` : "";
     const quitar = (esDesc && p.estado === "pendiente" && !sinQuitar)
       ? ` <button class="btn-sm danger" style="padding:0 5px" title="Quitar descuento" onclick="quitarDescuento('${p.id}')">✕</button>` : "";
+    const editar = (!sinQuitar && pjMontoEditable(p))
+      ? ` <button class="btn-sm accent" style="padding:0 5px" title="Editar monto" onclick="editarMontoPJ('${escJs(p.id)}')">✏️</button>` : "";
     const rubro = p.codRubroContra ? ` <span class="pj-acumulado">→ ${esc(pjRubroContraLabel(p.codRubroContra))}</span>` : "";
     const origen = p.movimientoOrigenId
       ? ` <button class="btn-sm" style="padding:0 5px" title="Ver el movimiento del adelanto"
@@ -10555,7 +10559,7 @@ function pjDetalleFilasHTML(filas, vacioLabel, opciones) {
       : "";
     // La fecha del hecho, no la del pago: de cuándo viene este cargo. Las filas viejas no la tienen.
     const fecha = p.fecha ? ` <span class="pj-acumulado">${esc(fmtFechaDMY(p.fecha))}</span>` : "";
-    return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${partido}${fecha}${rubro}${origen}${quitar}`;
+    return `<span style="${esDesc?'color:var(--red)':''}">${esc(p.etiqueta || (esDesc?"Descuento":"Monto"))}: ${fmtSigned(p.montoFinal)}${p.estado==='pagado'?' ✓':''}</span>${partido}${fecha}${rubro}${origen}${quitar}${editar}`;
   }).join(" · ");
 }
 
@@ -11514,16 +11518,42 @@ async function pjLiquidar() {
   }
 }
 
-function abrirAgregarMontoModal(jugadorId, jugadorNombre, mesDefault) {
-  const mesSel = mesDefault || nowMes();
+/** ¿Se puede editar esta fila desde el detalle? Sólo los montos sueltos pendientes (sueldo,
+ *  quincena) que se cargan con "+ Agregar monto". Los premios se manejan desde el 🏆 —incluidas
+ *  las filas viejas sin Tipo que se reconocen por la etiqueta— y los descuentos tienen su ✕. */
+function pjMontoEditable(p) {
+  return p.estado === "pendiente" && pjTipoFila(p) === "periodico"
+    && !pjEsPremio(p, pjPremiosCatalogo(p.jugadorId));
+}
+
+/** ✏️ de un monto del detalle: abre el mismo modal de "+ Agregar monto", precargado. */
+function editarMontoPJ(id) {
+  const p = pagosJugadores.find(x => x.id === id);
+  if (!p || !pjMontoEditable(p)) { toast("Ese monto ya no se puede editar", "err"); return; }
+  const cfg = configJugadores.find(c => c.idJugador === p.jugadorId);
+  abrirAgregarMontoModal(p.jugadorId, cfg ? cfg.nombre : (p.jugadorNombre || ""), p.mes || "", id);
+}
+
+/** Alta de un monto suelto, o edición de uno ya cargado (`editId`). Editar cambia monto, mes y
+ *  etiqueta de esa misma fila; quitarla sólo se puede mientras siga pendiente. */
+function abrirAgregarMontoModal(jugadorId, jugadorNombre, mesDefault, editId) {
+  const ed = editId ? pagosJugadores.find(p => p.id === editId) : null;
+  const mesSel = ed ? (ed.mes || "") : (mesDefault || nowMes());
   // Prellena con el monto configurado en Entidades → Cobros (quincenal/mensual) para no tener que retipearlo cada vez.
   const cfg = configJugadores.find(c => c.idJugador === jugadorId);
-  const montoDefault = cfg && cfg.montoTitular ? cfg.montoTitular : "";
+  const montoDefault = ed ? Number(ed.montoFinal || 0) : (cfg && cfg.montoTitular ? cfg.montoTitular : "");
+  // Un mes fuera del rango del selector (un monto viejo, o sin mes) se agrega: si no, guardar
+  // la edición se lo cambiaría sin que nadie lo pida.
+  let opcionesMes = generarOpcionesMes(mesSel);
+  if (!opcionesMes.includes(`value="${mesSel}" selected`)) {
+    opcionesMes = `<option value="${esc(mesSel)}" selected>${mesSel ? esc(mesLabel(mesSel)) : "Sin mes asignado"}</option>` + opcionesMes;
+  }
+  const idArg = ed ? `'${escJs(ed.id)}'` : "''";
   document.getElementById("modal-root").innerHTML = `
     <div class="modal-overlay" onclick="closeModal(event)">
       <div class="modal-card" onclick="event.stopPropagation()">
         <div class="modal-handle"></div>
-        <div class="modal-title">Agregar monto — ${esc(jugadorNombre)}</div>
+        <div class="modal-title">${ed ? "Editar monto" : "Agregar monto"} — ${esc(jugadorNombre)}</div>
         <div class="fgrid">
           <div class="field">
             <label>Monto (negativo para descuento)</label>
@@ -11531,48 +11561,92 @@ function abrirAgregarMontoModal(jugadorId, jugadorNombre, mesDefault) {
           </div>
           <div class="field">
             <label>Mes</label>
-            <select class="inp" id="pj-mes-nuevo">${generarOpcionesMes(mesSel)}</select>
+            <select class="inp" id="pj-mes-nuevo">${opcionesMes}</select>
           </div>
           <div class="field">
             <label>Etiqueta / motivo</label>
-            <input class="inp" id="pj-etiqueta-nueva" type="text" placeholder="1ra quincena julio, premio, descuento…">
+            <input class="inp" id="pj-etiqueta-nueva" type="text" placeholder="1ra quincena julio, premio, descuento…" value="${ed ? esc(ed.etiqueta || "") : ""}">
           </div>
         </div>
         <div class="modal-footer">
+          ${ed ? `<button class="btn-secondary danger" style="flex:1;color:var(--red)" id="btn-quitar-monto" onclick="quitarMontoPJ('${escJs(ed.id)}')">Quitar</button>` : ""}
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-main" style="flex:1" id="btn-agregar-monto" onclick="guardarMontoNuevo('${jugadorId}','${esc(jugadorNombre)}')">Guardar</button>
+          <button class="btn-main" style="flex:1" id="btn-agregar-monto" onclick="guardarMontoNuevo('${jugadorId}','${esc(jugadorNombre)}',${idArg})">${ed ? "Guardar cambios" : "Guardar"}</button>
         </div>
       </div>
     </div>`;
 }
 
-async function guardarMontoNuevo(jugadorId, jugadorNombre) {
+async function guardarMontoNuevo(jugadorId, jugadorNombre, editId) {
   const btnId = "btn-agregar-monto";
   if (document.getElementById(btnId)?.disabled) return;
   const monto    = parseFloat(document.getElementById("pj-monto-nuevo")?.value || "0") || 0;
   const mes      = document.getElementById("pj-mes-nuevo")?.value || "";
   const etiqueta = (document.getElementById("pj-etiqueta-nueva")?.value || "").trim();
   if (!monto) { toast("Ingresá un monto distinto de 0", "err"); return; }
+  const existente = editId ? pagosJugadores.find(p => p.id === editId) : null;
+  if (editId && (!existente || existente.estado !== "pendiente")) {
+    toast("Ese monto ya se pagó: no se puede editar", "err");
+    closeModal(); renderPagosJugadores();
+    return;
+  }
   const formPrevio = pjSnapshotFormPartido();
   setBtnState(btnId, "saving");
   try {
     // Un monto suelto es el sueldo del período (para un descuento con motivo propio está
     // "− Descuento", que además lo tipa como tal y lo puede imputar a un rubro).
-    const pago = {
-      jugadorId, jugadorNombre, partidosIncluidos: [],
-      montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
-      estado: "pendiente", etiqueta, mes, tipo: "periodico", partidoId: ""
-    };
+    // Al editar se parte de la fila que estaba, para no perder lo que este modal no maneja.
+    const pago = existente
+      ? { ...existente, montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto, etiqueta, mes }
+      : { jugadorId, jugadorNombre, partidosIncluidos: [],
+          montoBase: monto, ajuste: 0, motivoAjuste: "", montoFinal: monto,
+          estado: "pendiente", etiqueta, mes, tipo: "periodico", partidoId: "" };
     const r = await Storage.savePagoJugador(pago);
     if (!r.ok) throw new Error(r.error || "Error");
-    pagosJugadores.push({ id:r.id, ...pago, fechaPago:"", medioPago:"" });
+    const fila = existente ? { ...pago, id: r.id } : { id: r.id, ...pago, fechaPago: "", medioPago: "" };
+    const idx = pagosJugadores.findIndex(x => x.id === r.id);
+    if (idx >= 0) pagosJugadores[idx] = fila; else pagosJugadores.push(fila);
     saveSnapshotToCache();
     setBtnState(btnId, "saved");
-    toast("Monto agregado ✓", "ok");
+    toast(existente ? "Monto actualizado ✓" : "Monto agregado ✓", "ok");
     closeModal();
     renderPagosJugadores();
     pjRestoreFormPartido(formPrevio);
   } catch(e) { handleSaveError(btnId, e); }
+}
+
+/** Quita un monto suelto pendiente, desde su modal de edición. Dos toques, sin confirm() del
+ *  navegador (mismo patrón que los adjuntos y los premios). */
+async function quitarMontoPJ(id) {
+  const btnId = "btn-quitar-monto";
+  const btn = document.getElementById(btnId);
+  if (!btn || btn.disabled) return;
+  if (!btn.dataset.confirm) {
+    btn.dataset.confirm = "1";
+    btn.textContent = "¿Quitar?";
+    setTimeout(() => {
+      if (document.getElementById(btnId) === btn && btn.dataset.confirm && !btn.disabled) {
+        delete btn.dataset.confirm; btn.textContent = "Quitar";
+      }
+    }, 3000);
+    return;
+  }
+  btn.disabled = true; btn.textContent = "…";
+  const formPrevio = pjSnapshotFormPartido();
+  try {
+    const r = await Storage.deletePagoJugador(id);
+    if (!r.ok) throw new Error(r.error || "Error");
+    const idx = pagosJugadores.findIndex(p => p.id === id);
+    if (idx >= 0) pagosJugadores.splice(idx, 1);
+    saveSnapshotToCache();
+    toast("Monto quitado ✓", "ok");
+    closeModal();
+    renderPagosJugadores();
+    pjRestoreFormPartido(formPrevio);
+  } catch(e) {
+    btn.disabled = false; btn.textContent = "Quitar"; delete btn.dataset.confirm;
+    toast(isNetworkError(e) ? "Sin conexión — no se pudo quitar, probá de nuevo" : "Error: " + e.message, "err");
+  }
 }
 
 // ── Premios de un jugador ─────────────────────────────────────

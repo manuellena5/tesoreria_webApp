@@ -2407,6 +2407,30 @@ check("el detalle distingue las asistencias por partido",
 igual("una línea por premio", (detallePF.match(/Asist\. partido: /g) || []).length, 3);
 app.pagosJugTab = "partido"; app.pjPartidoSel = null;
 
+// ══════════════════════════════════════════════════════════════
+// Los montos sueltos de un mensual (sueldo, quincena) se editan desde el detalle con ✏️. Antes
+// sólo se podía quitar un descuento: corregir un sueldo mal cargado era ir a la planilla.
+seccion("Mensual · editar un monto ya cargado");
+sembrar();
+app.configJugadores[1].premios = [{ descripcion: "Asist. partido", monto: 25000 }];
+app.pagosJugadores.push(
+  { id: "f-viejo-prem", jugadorId: "j2", jugadorNombre: "GOMEZ", partidosIncluidos: [], montoFinal: 25000,
+    estado: "pendiente", etiqueta: "Asist. partido", mes: "2026-06", tipo: "", partidoId: "" },
+  { id: "f-sueldo-pag", jugadorId: "j2", jugadorNombre: "GOMEZ", partidosIncluidos: [], montoFinal: 80000,
+    estado: "pagado", etiqueta: "Mayo", mes: "2026-06", tipo: "periodico", partidoId: "" });
+const byId = id => app.pagosJugadores.find(p => p.id === id);
+check("el sueldo pendiente se puede editar", app.pjMontoEditable(byId("f-sueldo")));
+check("uno ya pagado no", !app.pjMontoEditable(byId("f-sueldo-pag")));
+check("un descuento no (tiene su ✕)", !app.pjMontoEditable(byId("f-desc")));
+check("un premio no (va por el 🏆)", !app.pjMontoEditable(byId("f-prem1")));
+check("ni un premio viejo sin tipo, reconocido por la etiqueta", !app.pjMontoEditable(byId("f-viejo-prem")));
+check("ni el pago de un partido", !app.pjMontoEditable(byId("f-part")));
+const detMes = app.pjDetalleFilasHTML(app.pjFilasMes("j2", "2026-06"));
+igual("el detalle de Mensual trae un único ✏️, el del sueldo pendiente",
+      detMes.match(/editarMontoPJ\('[^']+'\)/g), ["editarMontoPJ('f-sueldo')"]);
+check("en Transferencias (informativo) no va",
+      !app.pjDetalleFilasHTML(app.pjFilasMes("j2", "2026-06"), "", { sinQuitar: true }).includes("editarMontoPJ"));
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

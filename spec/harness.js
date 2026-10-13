@@ -88,7 +88,7 @@ function movRow(campos) {
     egreso: 7, ingreso: 8, montoFinal: 9, cuenta: 10, cuentaDestino: 11, modoPago: 12,
     jugadorCT: 13, adherente: 14, observacion: 15, comprobante: 16, seguroReintegro: 17,
     tipo: 18, timestamp: 19, partidoId: 20, eventoId: 21,
-    vinculos: 22, itemsDetalle: 23, jugadorId: 24, adherenteId: 25, adjuntos: 26
+    vinculos: 22, itemsDetalle: 23, jugadorId: 24, adherenteId: 25, adjuntos: 26, impDC: 27
   };
   for (const k of Object.keys(campos)) {
     if (ix[k] === undefined) throw new Error("Campo desconocido en movRow: " + k);

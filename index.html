@@ -1022,6 +1022,11 @@ let partidos    = [];
 let eventos     = [];
 let cuentas     = [...DEFAULT_CUENTAS];
 let metodos     = [...DEFAULT_METODOS];
+// Impuesto a los débitos y créditos por cuenta: { cuenta: { alic: % , internosExentos: [cuentas] } }.
+// Ver "IMPUESTO A LOS DÉBITOS Y CRÉDITOS" más abajo.
+const IMPDC_RUBRO   = "9";
+const IMPDC_DEFAULT = { "MP": { alic: 0.6, internosExentos: [] } };
+let impDebCred    = JSON.parse(JSON.stringify(IMPDC_DEFAULT));
 let reservas      = [];
 let preciosGranos = { Soja: 480000, Trigo: 293600 };
 
@@ -1365,6 +1370,8 @@ function buildDefaultF() {
     // entregó al jugador, y `descontarDelSueldo` deja anotado que hay que netearla en la próxima
     // liquidación. No genera ningún movimiento más — ver la fila que crea saveMov en Code.gs.
     descontarDelSueldo: 0, descuentoMes: "",
+    // Impuesto déb/créd: "" = lo decide la regla (ver impDCGravado); "EXENTO"/"GRAVADO" = marcado a mano.
+    impDC: "",
     // Cobro dividido: un mismo cobro que entró partido entre varias cuentas (la recaudación de un
     // partido suele venir en efectivo + Mercado Pago). `reparto` es null salvo que esté activado.
     // Al guardar se emite UN movimiento por fila, no uno solo con dos cuentas: `cuenta` es un campo
@@ -1578,7 +1585,7 @@ function saveSnapshotToCache() {
   const payload = JSON.stringify({
     movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
     configJugadores, rosterPartidos, pagosJugadores,
-    cuentas, metodos, preciosGranos, savedAt: Date.now()
+    cuentas, metodos, preciosGranos, impDebCred, savedAt: Date.now()
   });
   // El snapshot "en vivo" es el que usa el arranque rápido: tiene prioridad sobre las copias
   // diarias. Guardar el estado completo N veces (una en vivo + una por día) no escala — con
@@ -1680,6 +1687,7 @@ function verSnapshotDe(fecha) {
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
+  if (snap.impDebCred) impDebCred = snap.impDebCred;
   viendoSnapshotHistorico = fecha;
   updateBadge();
   renderOfflineBanner();
@@ -2107,6 +2115,7 @@ function loadFromCacheIfAny() {
   if (snap.cuentas && snap.cuentas.length) cuentas = snap.cuentas;
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
+  if (snap.impDebCred) impDebCred = snap.impDebCred;
   updateBadge();
   return true;
 }
@@ -2151,6 +2160,7 @@ function applyCuentasMetodos(config) {
   if (!cuentas.includes("MUTUAL - Plazo Fijo")) cuentas.push("MUTUAL - Plazo Fijo");
   if (config.metodos) metodos = config.metodos.split(",").map(s=>s.trim()).filter(Boolean);
   else metodos = [...DEFAULT_METODOS];
+  impDebCred = impDCParse(config.impDebCred);
 }
 
 function updateBadge() {
@@ -2284,7 +2294,7 @@ function renderNuevo() {
       <div class="field">
         <label>Monto</label>
         <input class="inp ${F.tipo==='INGRESO'?'monto-ing':F.tipo==='EGRESO'?'monto-egr':''}" type="number" id="f-monto" placeholder="0" min="0" step="any" value="${F.monto}"
-               oninput="F.monto=this.value" inputmode="decimal">
+               oninput="F.monto=this.value; refreshImpDC()" inputmode="decimal">
       </div>`}` : `
       <div class="field">
         <label>Saldo real de la cuenta</label>
@@ -2324,17 +2334,17 @@ function renderNuevo() {
       ${isAdj ? `
       <div class="field">
         <label>Cuenta</label>
-        <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value">${cuentaOptions}</select>
+        <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value; refreshImpDC()">${cuentaOptions}</select>
       </div>` : isRep ? "" : `
       <div class="row2">
         <div class="field">
           <label>Cuenta${isInt ? " origen" : ""}</label>
-          <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value; autoSetModoPago()">${cuentaOptions}</select>
+          <select class="inp" id="f-cuenta" onchange="F.cuenta=this.value; autoSetModoPago(); refreshImpDC()">${cuentaOptions}</select>
         </div>
         ${isInt ? `
         <div class="field">
           <label>Cuenta destino</label>
-          <select class="inp" id="f-cuentaDest" onchange="F.cuentaDestino=this.value">${cuentaDestOptions}</select>
+          <select class="inp" id="f-cuentaDest" onchange="F.cuentaDestino=this.value; refreshImpDC()">${cuentaDestOptions}</select>
         </div>` : `
         <div class="field">
           <label>Método de pago</label>
@@ -2347,6 +2357,8 @@ function renderNuevo() {
         <label>Método de pago</label>
         <select class="inp" id="f-metodo" onchange="F.modoPago=this.value">${metodoOptions}</select>
       </div>` : ""}`}
+
+      ${!isAdj ? `<div class="field" id="f-impdc-field" style="${impDCFieldHtml() ? "" : "display:none"}">${impDCFieldHtml()}</div>` : ""}
 
       ${!isAdj ? `
       <div class="field">
@@ -2588,6 +2600,7 @@ function setRepartoCampo(i, campo, valor) {
   if (!F.reparto || !F.reparto[i]) return;
   F.reparto[i][campo] = valor;
   if (campo === "monto") updateRepartoTotal();
+  if (campo === "monto" || campo === "cuenta") refreshImpDC();
 }
 
 function repartoTotal() {
@@ -2770,6 +2783,7 @@ function selectRubroItem(item, input, drop, blurAfter) {
     else adhRow.classList.remove("highlighted");
   }
   syncEntradasPartidoRow();
+  refreshImpDC();   // el rubro 9 (gastos/intereses de cuenta) cambia la regla
 }
 
 function filterRubros(query) {
@@ -2884,6 +2898,7 @@ async function saveMovimiento() {
       partidoId: F.partidoId || "",
       eventoId: F.eventoId || "",
       vinculos: [],
+      impDC: F.impDC || "",
     };
   }
 
@@ -3168,6 +3183,7 @@ function renderMovimientos() {
       </div>
     </div>
     <div id="kpi-filter-note" class="note" style="margin:-8px 0 14px"></div>
+    ${impDCCardHtml()}
 
     <div class="filter-row">
       <button class="pill sm ${listFiltros.rubro===""&&listFiltros.cat===""&&listFiltros.cuenta===""&&listFiltros.tipo===""&&listFiltros.adherente===""&&listFiltros.jugadorCT===""&&listFiltros.partido===""&&listFiltros.evento===""?"active":""}" onclick="clearListFilters()">Todos</button>
@@ -3289,6 +3305,10 @@ const MOV_TABLE_COLS = [
   { key:"fecha",     label:"Fecha",             sortable:true, headExtra: () => movColFiltroBtn("fecha") },
   { key:"concepto",  label:"Concepto",          sortable:true, cls:"jd-concepto", headExtra: () => movColFiltroBtn("concepto") },
   { key:"monto",     label:"Monto",             sortable:true, headExtra: () => movColFiltroBtn("monto") },
+  // Neto del impuesto déb/créd (lo que muestra el extracto). Sólo en movimientos de cuentas que lo cobran.
+  { key:"netoDC",    label:"Neto extracto",     sortable:false,
+    render: it => it.netoDC === null ? "—"
+      : `<span class="${it.netoDC<0?'egr':'ing'}">${it.netoDC<0?"-":"+"}${fmt2(it.netoDC)}</span>` },
   { key:"rubro",     label:"Rubro",             sortable:true, headExtra: () => movColFiltroBtn("rubro") },
   { key:"categoria", label:"Categoría",         sortable:true, headExtra: () => movColFiltroBtn("categoria") },
   { key:"cuenta",    label:"Cuenta",            sortable:true, headExtra: () => movColFiltroBtn("cuenta") },
@@ -3367,6 +3387,7 @@ function movItemTabla(m, cuentaFiltro) {
     // 📎 al final y no al principio: así no altera el orden alfabético de la columna.
     concepto: (m.concepto || "") + ((m.adjuntos||[]).length ? " 📎" : ""),
     monto,
+    netoDC: impDCNetoCuenta(m, cuentaFiltro),
     rubro: m.rubro || "",
     categoria: m.categoria || "",
     cuenta: m.tipo==="INTERNO" ? `${m.cuenta||""} → ${m.cuentaDestino||""}` : (m.cuenta||""),
@@ -3693,7 +3714,8 @@ function renderMovCards(el, movMes) {
           ${m.adherente ? `<span class="tag tag-adh">${esc(m.adherente)}</span>` : ""}
           ${m.partidoId ? `<span class="tag tag-partido">⚽ ${esc(partidoLabel(m.partidoId))}</span>` : ""}
           ${m.tipo==="INTERNO" ? `<span class="tag tag-int">→ ${esc(m.cuentaDestino||"?")}</span>` : ""}
-          ${m.tipo==="AJUSTE" ? `<span class="tag tag-adj">⊙ ajuste</span>` : ""}`;
+          ${m.tipo==="AJUSTE" ? `<span class="tag tag-adj">⊙ ajuste</span>` : ""}
+          ${impDCDetalle(m).map(d => `<span class="tag" title="Neto con imp. déb/créd">${esc(d.cuenta)} neto ${d.sentido==="credito"?"+":"−"}${fmt2(d.neto)}</span>`).join("")}`;
     return `
     <div class="mov-card" onclick="openMovModal('${m.id}')">
       <div class="mov-card-row1">
@@ -3958,6 +3980,7 @@ function openMovModal(id, volverALiquidar) {
     ["Partido",     m.partidoId ? partidoLabel(m.partidoId) : "—"],
     (m.codRubro === "21" && m.tipo === "EGRESO") ? ["Reintegro", m.seguroReintegro ? "SÍ" : "NO"] : null,
     descuentosMov.length ? ["Descontado del sueldo", descuentoTxt] : null,
+    impDCDetalleTxt(m) ? ["Imp. déb/créd", impDCDetalleTxt(m)] : null,
     ["Observación", m.observacion || "—"],
     ["Comprobante", m.comprobante || "—"],
     ["Cargado",     fmtTimestamp(m.timestamp)],
@@ -3980,6 +4003,16 @@ function openMovModal(id, volverALiquidar) {
         </div>
       </div>
     </div>`;
+}
+
+/** Línea del detalle: neto por cuenta, o por qué no paga (sólo si toca una cuenta con impuesto). */
+function impDCDetalleTxt(m) {
+  const det = impDCDetalle(m);
+  if (det.length) return det.map(d => `${d.cuenta}: ${d.sentido==="credito"?"entra":"sale"} ${fmt2(d.neto)} (imp. ${fmt2(d.imp)})`).join(" · ")
+    + (m.impDC === "GRAVADO" ? " · marcado a mano" : "");
+  const toca = [m.cuenta, m.tipo === "INTERNO" ? m.cuentaDestino : ""].some(c => c && impDCAlic(c) > 0);
+  if (!toca || m.tipo === "AJUSTE") return "";
+  return m.impDC === "EXENTO" ? "Exento (marcado a mano)" : "Exento por regla";
 }
 
 function confirmDelete(id) {
@@ -4115,6 +4148,7 @@ function editMovimiento(id) {
   F.saldoReal = "";
   F.partidoId = m.partidoId || "";
   F.eventoId  = m.eventoId || "";
+  F.impDC     = m.impDC || "";
   // La casilla del adelanto no se guarda en el movimiento: el vínculo ES la fila de Pagos
   // Jugadores que le apunta, así que el estado se deriva de ahí (ver PJ_COLS en Code.gs).
   const descuentosMov  = pjDescuentosDeMovimiento(id);
@@ -5549,6 +5583,235 @@ function calcSaldosCuentas(movs) {
     }
   }
   return saldos;
+}
+
+// ══════════════════════════════════════════════════════════════
+// IMPUESTO A LOS DÉBITOS Y CRÉDITOS (Ley 25.413)
+//
+// Algunas cuentas (Mercado Pago) descuentan un % de cada plata que entra y de cada plata que sale.
+// En la app se carga SIEMPRE el monto bruto —lo que se cobró o se pagó—; el neto que figura en el
+// extracto se CALCULA, no se guarda: guardar los dos dejaría el neto desactualizado en cuanto se
+// corrige el bruto. A fin de mes el impuesto total se registra como un único egreso del rubro 9,
+// que es lo que hace cerrar el saldo contra el extracto.
+//
+// Qué paga impuesto, para cada cuenta con alícuota:
+//   · INGRESO / EGRESO sobre esa cuenta → sí.
+//   · INTERNO → cada lado por separado: la cuenta de origen paga como débito, la de destino como
+//     crédito. Salvo que la otra cuenta esté en `internosExentos` (transferencias entre cuentas
+//     propias del mismo titular, que la ley exime).
+//   · Rubro 9 (INTERESES Y GASTOS CUENTA) → no: son los rendimientos y el propio impuesto.
+//   · AJUSTE → nunca (no es plata que se movió).
+// La regla se puede pisar por movimiento (impDC = "EXENTO" | "GRAVADO"), p. ej. el pago de la EPE,
+// que MP no grava.
+// ══════════════════════════════════════════════════════════════
+// IMPDC_RUBRO, IMPDC_DEFAULT e impDebCred se declaran arriba, junto a `cuentas`: la config se
+// aplica (applyCuentasMetodos / snapshot) antes de que el script llegue hasta acá.
+
+function impDCParse(raw) {
+  const def = () => JSON.parse(JSON.stringify(IMPDC_DEFAULT));
+  if (!raw) return def();
+  try {
+    const o = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return o && typeof o === "object" && !Array.isArray(o) ? o : def();
+  } catch (e) { return def(); }
+}
+
+/** Alícuota de la cuenta como fracción (0,6 % → 0.006); 0 si no cobra el impuesto. */
+function impDCAlic(cuenta) {
+  const c = impDebCred[cuenta];
+  const a = c ? parseFloat(String(c.alic).replace(",", ".")) : 0;
+  return a > 0 ? a / 100 : 0;
+}
+
+function impDCCuentasGravadas() { return cuentas.filter(c => impDCAlic(c) > 0); }
+
+/** Lo que dice la regla para `cuenta`, sin mirar la marca manual del movimiento. */
+function impDCExentoPorRegla(m, cuenta) {
+  if (m.tipo === "AJUSTE") return true;
+  if (String(m.codRubro || "") === IMPDC_RUBRO) return true;
+  if (m.tipo === "INTERNO") {
+    const otra = m.cuenta === cuenta ? m.cuentaDestino : m.cuenta;
+    const cfg  = impDebCred[cuenta];
+    if (cfg && (cfg.internosExentos || []).includes(otra)) return true;
+  }
+  return false;
+}
+
+function impDCGravado(m, cuenta) {
+  if (!impDCAlic(cuenta) || m.tipo === "AJUSTE") return false;
+  if (m.impDC === "EXENTO")  return false;
+  if (m.impDC === "GRAVADO") return true;
+  return !impDCExentoPorRegla(m, cuenta);
+}
+
+/** Efecto del impuesto de un movimiento sobre cada cuenta gravada que toca:
+ *  [{cuenta, sentido:"credito"|"debito", bruto, imp, neto}]. `neto` es lo que muestra el extracto:
+ *  en un crédito entra bruto − imp; en un débito sale bruto + imp. */
+function impDCDetalle(m) {
+  const out = [];
+  const lado = (cuenta, bruto, sentido) => {
+    const t = impDCAlic(cuenta);
+    if (!t || !(bruto > 0) || !impDCGravado(m, cuenta)) return;
+    const imp = Math.round(bruto * t * 100) / 100;
+    out.push({ cuenta, sentido, bruto, imp, neto: sentido === "credito" ? bruto - imp : bruto + imp });
+  };
+  if (m.tipo === "INGRESO")      lado(m.cuenta, Math.abs(+m.ingreso || 0), "credito");
+  else if (m.tipo === "EGRESO")  lado(m.cuenta, Math.abs(+m.egreso  || 0), "debito");
+  else if (m.tipo === "INTERNO") {
+    const monto = Math.abs(+m.montoFinal || +m.egreso || 0);
+    lado(m.cuenta,        monto, "debito");
+    lado(m.cuentaDestino, monto, "credito");
+  }
+  return out;
+}
+
+/** Neto con signo para `cuenta` (+ entra, − sale), o null si el movimiento no paga impuesto ahí. */
+function impDCNetoCuenta(m, cuenta) {
+  const d = impDCDetalle(m).find(x => !cuenta || x.cuenta === cuenta);
+  return d ? (d.sentido === "credito" ? d.neto : -d.neto) : null;
+}
+
+/** Impuesto del mes para una cuenta: alícuota × (Σ créditos + Σ débitos brutos gravados).
+ *  Se calcula sobre la suma y no sumando el redondeo de cada movimiento, igual que el banco.
+ *  `cargado` = egresos del rubro 9 de esa cuenta en el mes (donde va el impuesto). */
+function impDCResumenMes(mes, cuenta) {
+  let base = 0, creditos = 0, debitos = 0, n = 0;
+  for (const m of movimientos) {
+    if (mesFromRecord(m) !== mes) continue;
+    for (const d of impDCDetalle(m)) {
+      if (d.cuenta !== cuenta) continue;
+      base += d.bruto; n++;
+      if (d.sentido === "credito") creditos += d.bruto; else debitos += d.bruto;
+    }
+  }
+  const imp = Math.round(base * impDCAlic(cuenta) * 100) / 100;
+  const cargado = movimientos
+    .filter(m => mesFromRecord(m) === mes && m.tipo === "EGRESO" && m.cuenta === cuenta && String(m.codRubro) === IMPDC_RUBRO)
+    .reduce((s, m) => s + (+m.egreso || 0), 0);
+  return { base, creditos, debitos, n, imp, cargado };
+}
+
+function fmt2(n) {
+  return "$" + Math.abs(+n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtAlic(cuenta) { return (impDCAlic(cuenta) * 100).toLocaleString("es-AR", { maximumFractionDigits: 3 }) + "%"; }
+
+/** Movimiento "de mentira" con lo que hay cargado en el formulario, para aplicarle las reglas.
+ *  Con cobro dividido se arma uno por fila. */
+function impDCMovsDelForm() {
+  const base = { tipo: F.tipo, codRubro: F.codRubro, cuentaDestino: F.cuentaDestino, impDC: F.impDC };
+  const conMonto = (cuenta, monto) => {
+    const v = Math.abs(parseFloat(monto) || 0);
+    return { ...base, cuenta, ingreso: F.tipo === "INGRESO" ? v : 0,
+             egreso: F.tipo === "INGRESO" ? 0 : v, montoFinal: v };
+  };
+  if (F.reparto && repartoDisponible()) return F.reparto.map(f => conMonto(f.cuenta, f.monto));
+  return [conMonto(F.cuenta, F.monto)];
+}
+
+/** Cuentas gravadas que toca el movimiento del formulario (sin importar si está exento). */
+function impDCCuentasDelForm() {
+  const out = new Set();
+  for (const m of impDCMovsDelForm()) {
+    if (impDCAlic(m.cuenta) > 0) out.add(m.cuenta);
+    if (m.tipo === "INTERNO" && impDCAlic(m.cuentaDestino) > 0) out.add(m.cuentaDestino);
+  }
+  return [...out];
+}
+
+/** Casilla + neto calculado. Vacío si el movimiento no toca ninguna cuenta con impuesto. */
+function impDCFieldHtml() {
+  if (F.tipo === "AJUSTE") return "";
+  const cs = impDCCuentasDelForm();
+  if (!cs.length) return "";
+  const movs    = impDCMovsDelForm();
+  const ref     = movs.find(m => m.cuenta === cs[0] || m.cuentaDestino === cs[0]) || movs[0];
+  const gravado = impDCGravado(ref, cs[0]);
+  const regla   = !impDCExentoPorRegla(ref, cs[0]);
+  const lineas  = movs.flatMap(impDCDetalle).map(d => d.sentido === "credito"
+    ? `${esc(d.cuenta)}: entra ${fmt2(d.neto)} <span style="color:var(--text3)">(${fmt2(d.bruto)} − ${fmt2(d.imp)})</span>`
+    : `${esc(d.cuenta)}: sale ${fmt2(d.neto)} <span style="color:var(--text3)">(${fmt2(d.bruto)} + ${fmt2(d.imp)})</span>`);
+  const nota = F.impDC ? " · marcado a mano" : (regla ? "" : " · exento por regla");
+  return `
+        <label style="cursor:pointer">
+          <input type="checkbox" id="f-impdc" style="width:16px;height:16px;accent-color:var(--accent);vertical-align:middle;margin-right:6px;cursor:pointer"
+                 ${gravado ? "checked" : ""} onchange="setImpDCForm(this.checked)">
+          Paga imp. déb/créd (${cs.map(c => esc(c) + " " + fmtAlic(c)).join(", ")})
+        </label>
+        <span style="font-size:11px;color:var(--text3);margin-top:2px">
+          ${lineas.length ? "Neto en el extracto · " + lineas.join(" · ") : "Sin impuesto: se carga y concilia por el bruto"}${nota}
+        </span>`;
+}
+
+/** Si la casilla queda como dice la regla, no se guarda marca manual: así un cambio de
+ *  configuración (p. ej. sumar una cuenta exenta) sigue aplicando a este movimiento. */
+function setImpDCForm(checked) {
+  const cs = impDCCuentasDelForm();
+  if (!cs.length) { F.impDC = ""; return; }
+  const ref   = impDCMovsDelForm().find(m => m.cuenta === cs[0] || m.cuentaDestino === cs[0]);
+  const regla = !impDCExentoPorRegla(ref, cs[0]);
+  F.impDC = checked === regla ? "" : (checked ? "GRAVADO" : "EXENTO");
+  refreshImpDC();
+}
+
+function refreshImpDC() {
+  const el = document.getElementById("f-impdc-field");
+  if (!el) return;
+  const html = impDCFieldHtml();
+  el.innerHTML = html;
+  el.style.display = html ? "" : "none";
+}
+
+/** Tarjeta del cierre en Movimientos: impuesto calculado del mes por cuenta y botón para cargarlo. */
+function impDCCardHtml() {
+  const filas = impDCCuentasGravadas()
+    .filter(c => !listFiltros.cuenta || listFiltros.cuenta === c)
+    .map(c => {
+      const r = impDCResumenMes(sharedMes, c);
+      if (!r.n) return "";
+      const dif = Math.round((r.imp - r.cargado) * 100) / 100;
+      const estado = !r.cargado ? `<span style="color:var(--warn)">sin cargar</span>`
+        : Math.abs(dif) < 1 ? `<span style="color:var(--green)">✓ cargado</span>`
+        : `cargado ${fmt2(r.cargado)} · <span style="color:var(--warn)">dif. ${dif < 0 ? "−" : ""}${fmt2(dif)}</span>`;
+      return `
+      <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap">
+        <div style="font-size:13px;line-height:1.5">
+          <b>${esc(c)}</b> · ${fmtAlic(c)} de ${fmt2(r.base)} <span style="color:var(--text3)">(${r.n} mov.: entradas ${fmt2(r.creditos)} + salidas ${fmt2(r.debitos)})</span><br>
+          Impuesto del mes: <b>${fmt2(r.imp)}</b> · ${estado}
+        </div>
+        <button class="btn-sm accent" onclick="cargarImpDCMes('${escJs(c)}')">＋ Cargar egreso</button>
+      </div>`;
+    }).filter(Boolean);
+  if (!filas.length) return "";
+  return `
+    <div class="cfg-card" style="margin-bottom:14px">
+      <div class="cfg-title">🧾 Imp. débitos y créditos · ${mesLabel(sharedMes)}</div>
+      ${filas.join('<div style="height:8px"></div>')}
+      <div class="cfg-note" style="margin-top:6px">Se calcula sobre los montos brutos. "Cargado" = egresos del rubro 9 de esa cuenta en el mes.</div>
+    </div>`;
+}
+
+/** Abre Nuevo movimiento con el egreso del impuesto ya armado, para revisarlo y guardar. */
+function cargarImpDCMes(cuenta) {
+  if (bloqueadoPorVistaHistorica()) return;
+  const r   = impDCResumenMes(sharedMes, cuenta);
+  const rub = RUBROS.find(x => String(x.cod) === IMPDC_RUBRO);
+  const [y, mm] = sharedMes.split("-").map(Number);
+  const ultimo = `${sharedMes}-${String(new Date(y, mm, 0).getDate()).padStart(2, "0")}`;
+  adjFormArchivos = [];
+  editId = null;
+  F = buildDefaultF();
+  F.tipo      = "EGRESO";
+  F.fecha     = ultimo > today() ? today() : ultimo;
+  F.codRubro  = IMPDC_RUBRO;
+  F.rubro     = rub ? rub.nombre : "INTERESES Y GASTOS CUENTA";
+  F.categoria = rub ? rub.cat : "Administrativos y Financieros";
+  F.concepto  = `Impuesto déb/créd ${cuenta} — ${mesLabel(sharedMes)}`;
+  F.monto     = r.imp.toFixed(2);
+  F.cuenta    = cuenta;
+  F.modoPago  = medioPagoPorCuenta(cuenta);
+  goTab("nuevo");
+  toast("Revisá el monto y guardá", "ok");
 }
 
 // ── Reintegros Médicos (rubro 21) ────────────────────────────────
@@ -12483,6 +12746,30 @@ function renderConfig() {
       <button class="btn-secondary" style="margin-top:10px" id="btn-guardar-cuentas" onclick="saveCuentas()">💾 Guardar cuentas</button>
     </div>
 
+    <!-- Impuesto déb/créd -->
+    <div class="cfg-card">
+      <div class="cfg-title">🧾 Imp. débitos y créditos</div>
+      <div class="cfg-note">% que la cuenta descuenta de cada plata que entra y sale (MP: 0,6). 0 = no cobra. En las cuentas con %, marcá con qué otras cuentas los internos NO pagan (cuentas propias del mismo titular).</div>
+      ${cuentas.map(c => {
+        const cfg = impDebCred[c] || {};
+        const alic = impDCAlic(c) * 100;
+        return `
+      <div style="margin-top:10px">
+        <div class="cfg-item">
+          <span style="flex:1">${esc(c)}</span>
+          <input class="inp" type="number" step="0.01" min="0" inputmode="decimal" style="width:90px"
+                 data-impdc-alic="${esc(c)}" value="${alic || ""}" placeholder="0" onchange="setImpDCAlic('${escJs(c)}', this.value)"> %
+        </div>
+        ${alic ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+          <span class="cfg-note" style="margin:0">Internos sin impuesto con:</span>
+          ${cuentas.filter(o => o !== c).map(o => `<button class="pill sm ${(cfg.internosExentos||[]).includes(o) ? "active" : ""}"
+             onclick="toggleImpDCExenta('${escJs(c)}','${escJs(o)}')">${esc(o)}</button>`).join("")}
+        </div>` : ""}
+      </div>`;
+      }).join("")}
+      <button class="btn-secondary" style="margin-top:10px" id="btn-guardar-impdc" onclick="saveImpDC()">💾 Guardar impuesto</button>
+    </div>
+
     <!-- Métodos de pago -->
     <div class="cfg-card">
       <div class="cfg-title">💳 Métodos de pago</div>
@@ -12930,6 +13217,37 @@ async function saveCuentas() {
     setBtnState(btnId, "saved");
   } catch(e) { handleSaveError(btnId, e); }
 }
+function setImpDCAlic(cuenta, valor) {
+  const a = parseFloat(String(valor).replace(",", ".")) || 0;
+  impDebCred[cuenta] = { internosExentos: [], ...(impDebCred[cuenta] || {}), alic: a > 0 ? a : 0 };
+  renderConfig();
+}
+function toggleImpDCExenta(cuenta, otra) {
+  const cfg = impDebCred[cuenta] = { alic: 0, internosExentos: [], ...(impDebCred[cuenta] || {}) };
+  const l = cfg.internosExentos = [...(cfg.internosExentos || [])];
+  const i = l.indexOf(otra);
+  if (i === -1) l.push(otra); else l.splice(i, 1);
+  renderConfig();
+}
+async function saveImpDC() {
+  const btnId = "btn-guardar-impdc";
+  if (document.getElementById(btnId)?.disabled) return;
+  // Sólo las cuentas que existen y cobran: una cuenta borrada o en 0 no tiene nada que guardar.
+  const limpio = {};
+  for (const c of cuentas) {
+    const a = impDCAlic(c) * 100;
+    if (a > 0) limpio[c] = { alic: a, internosExentos: (impDebCred[c].internosExentos || []).filter(o => cuentas.includes(o)) };
+  }
+  setBtnState(btnId, "saving");
+  try {
+    await Storage.saveConfig("impDebCred", JSON.stringify(limpio));
+    impDebCred = limpio;
+    toast("Impuesto guardado ✓", "ok");
+    renderConfig();
+    setBtnState(btnId, "saved");
+  } catch(e) { handleSaveError(btnId, e); }
+}
+
 async function saveMetodos() {
   const btnId = "btn-guardar-metodos";
   if (document.getElementById(btnId)?.disabled) return; // evita doble envío

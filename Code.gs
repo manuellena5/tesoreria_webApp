@@ -133,7 +133,7 @@ const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
-  "Vinculos","ItemsDetalle","JugadorID","AdherenteID","Adjuntos"
+  "Vinculos","ItemsDetalle","JugadorID","AdherenteID","Adjuntos","ImpDC"
 ];
 // Índices de columna (1-based) de MOV_COLS que se escriben o leen sueltos. Están acá
 // para que agregar una columna nueva al final no vuelva a desalinear una escritura
@@ -145,8 +145,13 @@ const MOV_IX = {
   ITEMS:        24,
   JUGADOR_ID:   25,
   ADHERENTE_ID: 26,
-  ADJUNTOS:     27
+  ADJUNTOS:     27,
+  IMP_DC:       28
 };
+// ImpDC: excepción manual al impuesto a los débitos y créditos (Ley 25.413) de este movimiento.
+// "EXENTO" | "GRAVADO" | "" (vacío = decide la regla del front: cuenta con alícuota, rubro 9,
+// internos entre cuentas marcadas como exentas). En la hoja se guarda siempre el monto BRUTO; el
+// neto y el impuesto del mes se calculan en el front. Ver impDCDetalle en index.html.
 // Adjuntos: JSON de [{id, nombre, url, mime, bytes, subido}] — comprobantes (fotos / PDF) guardados
 // en Drive (ver subirAdjunto). Sólo lo escriben subirAdjunto / borrarAdjunto: saveMov y updateMov
 // no lo tocan, para que editar el movimiento con un estado de cliente viejo no pise un adjunto
@@ -615,6 +620,7 @@ function handleAction(data) {
         jugadorId:     String(r[24]||""),
         adherenteId:   String(r[25]||""),
         adjuntos:      parseAdjuntosJson(r[26]),
+        impDC:         normImpDC_(r[27]),
       }));
       return { ok: true, movimientos };
     }
@@ -638,7 +644,8 @@ function handleAction(data) {
         m.jugadorCT||"", m.adherente||"",
         m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts,
         m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
-        stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||""
+        stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||"",
+        "", normImpDC_(m.impDC)   // Adjuntos (vacío en un alta: se suben después) · ImpDC
       ]);
       if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -686,6 +693,9 @@ function handleAction(data) {
             m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos), stringifyItemsDetalle(m.itemsDetalle),
             m.jugadorId||"", m.adherenteId||""
           ]]);
+          // ImpDC va aparte (está después de Adjuntos) y sólo si el cliente lo manda: un cliente
+          // viejo, o una edición armada desde otra pantalla, no conoce el campo y no debe borrarlo.
+          if (m.impDC !== undefined) sh.getRange(i + 1, MOV_IX.IMP_DC).setValue(normImpDC_(m.impDC));
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
           }
@@ -727,7 +737,8 @@ function handleAction(data) {
           m.comprobante || "", Number(m.seguroReintegro || 0), m.tipo,
           tsToIsoLocal(m.timestamp) || nowTsLocal(),
           m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
-          stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||""
+          stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||"",
+          "", normImpDC_(m.impDC)
         ]);
         if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
           autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -2540,6 +2551,12 @@ function autorizarDrive() {
   const carpeta = carpetaComprobantesRaiz_();
   Logger.log("Carpeta de comprobantes: " + carpeta.getUrl());
   return carpeta.getUrl();
+}
+
+/** Sólo dos valores válidos para la marca manual del impuesto déb/créd; cualquier otra cosa = regla. */
+function normImpDC_(v) {
+  const s = String(v || "").trim().toUpperCase();
+  return s === "EXENTO" || s === "GRAVADO" ? s : "";
 }
 
 function normalizeMovFields(m) {

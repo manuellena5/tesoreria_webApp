@@ -133,7 +133,7 @@ const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
-  "Vinculos","ItemsDetalle","JugadorID","AdherenteID","Adjuntos","ImpDC"
+  "Vinculos","ItemsDetalle","JugadorID","AdherenteID","Adjuntos","ImpDC","CuentaID","CuentaDestinoID"
 ];
 // Índices de columna (1-based) de MOV_COLS que se escriben o leen sueltos. Están acá
 // para que agregar una columna nueva al final no vuelva a desalinear una escritura
@@ -146,8 +146,14 @@ const MOV_IX = {
   JUGADOR_ID:   25,
   ADHERENTE_ID: 26,
   ADJUNTOS:     27,
-  IMP_DC:       28
+  IMP_DC:       28,
+  CUENTA_ID:    29,
+  CUENTA_DEST_ID: 30
 };
+// CuentaID / CuentaDestinoID: vínculo durable con la hoja Cuentas, igual que JugadorID. Las columnas
+// Cuenta / CuentaDestino quedan como copia legible del nombre: renombrar una cuenta las reescribe en
+// cascada por ID (ver saveCuenta). Las filas que se escriben sin ID (altas desde el backend, clientes
+// viejos) se completan por nombre en listCuentas.
 // ImpDC: excepción manual al impuesto a los débitos y créditos (Ley 25.413) de este movimiento.
 // "EXENTO" | "GRAVADO" | "" (vacío = decide la regla del front: cuenta con alícuota, rubro 9,
 // internos entre cuentas marcadas como exentas). En la hoja se guarda siempre el monto BRUTO; el
@@ -172,6 +178,13 @@ const PAG_COLS = ["ID","AdherenteID","AdherenteNombre","Mes","Estado","Movimient
 const JUG_COLS = ["ID","Nombre","Activo"];
 const GRP_COLS = ["ID","Nombre","Miembros","Activo"];
 const CFG_COLS = ["Clave","Valor"];
+// Cuentas (bancos, billeteras, caja). Antes vivían como texto en Config ("cuentas" e "impDebCred");
+// la primera lectura las pasa a esta hoja (ver asegurarCuentas_). Config "cuentas" se sigue
+// escribiendo con los nombres activos para que un index.html viejo cacheado siga andando.
+// AlicImpDC: % del impuesto a los débitos y créditos (0 = no cobra). InternosExentos: JSON de IDs
+// de cuentas con las que un interno no paga ese impuesto (cuentas propias del mismo titular).
+const CTA_SHEET = "Cuentas";
+const CTA_COLS  = ["ID","Nombre","Activa","Orden","AlicImpDC","InternosExentos"];
 const RES_SHEET = "Reservas";
 // Tipo: COSECHA (+kg) · VENTA (−kg, con su movimiento de ingreso y el precio por tonelada) ·
 // AJUSTE (−kg sin movimiento: la comisión) · PEDIDO (liquidación pedida: no mueve el stock, es la
@@ -562,7 +575,8 @@ function handleAction(data) {
         ["eventos",         "listEventos",         "eventos"],
         ["configJugadores", "listConfigJugadores", "configJugadores"],
         ["roster",          "listRoster",          "roster"],
-        ["pagosJugadores",  "listPagosJugadores",  "pagosJugadores"]
+        ["pagosJugadores",  "listPagosJugadores",  "pagosJugadores"],
+        ["cuentas",         "listCuentas",         "cuentas"]
       ];
       for (const p of partes) {
         const destino = p[0], accion = p[1], clave = p[2];
@@ -621,13 +635,15 @@ function handleAction(data) {
         adherenteId:   String(r[25]||""),
         adjuntos:      parseAdjuntosJson(r[26]),
         impDC:         normImpDC_(r[27]),
+        cuentaId:        String(r[28]||""),
+        cuentaDestinoId: String(r[29]||""),
       }));
       return { ok: true, movimientos };
     }
 
     case "saveMov": {
       const sh = getOrCreateSheet(MOV_SHEET, MOV_COLS);
-      const m  = normalizeMovFields(data.mov);
+      const m  = resolverCuentasMov_(normalizeMovFields(data.mov));
       // Si el ID ya existe en la hoja (reintento con estado de formulario viejo,
       // doble click, etc.), generamos uno nuevo en vez de duplicarlo — appendRow
       // siempre agrega una fila nueva, nunca pisa una existente.
@@ -645,7 +661,8 @@ function handleAction(data) {
         m.observacion||"", m.comprobante||"", Number(m.seguroReintegro||0), m.tipo||"", ts,
         m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
         stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||"",
-        "", normImpDC_(m.impDC)   // Adjuntos (vacío en un alta: se suben después) · ImpDC
+        "", normImpDC_(m.impDC),  // Adjuntos (vacío en un alta: se suben después) · ImpDC
+        m.cuentaId||"", m.cuentaDestinoId||""
       ]);
       if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -669,7 +686,7 @@ function handleAction(data) {
 
     case "updateMov": {
       const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
-      const m   = normalizeMovFields(data.mov);
+      const m   = resolverCuentasMov_(normalizeMovFields(data.mov));
       const all = sh.getDataRange().getValues();
       for (let i = 1; i < all.length; i++) {
         if (String(all[i][0]) === String(m.id)) {
@@ -696,6 +713,7 @@ function handleAction(data) {
           // ImpDC va aparte (está después de Adjuntos) y sólo si el cliente lo manda: un cliente
           // viejo, o una edición armada desde otra pantalla, no conoce el campo y no debe borrarlo.
           if (m.impDC !== undefined) sh.getRange(i + 1, MOV_IX.IMP_DC).setValue(normImpDC_(m.impDC));
+          sh.getRange(i + 1, MOV_IX.CUENTA_ID, 1, 2).setValues([[m.cuentaId || "", m.cuentaDestinoId || ""]]);
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
           }
@@ -726,7 +744,7 @@ function handleAction(data) {
 
     case "saveBatch": {
       const sh   = getOrCreateSheet(MOV_SHEET, MOV_COLS);
-      const list = (data.movimientos || []).map(normalizeMovFields);
+      const list = (data.movimientos || []).map(normalizeMovFields).map(resolverCuentasMov_);
       for (const m of list) {
         if (idExisteEnMov(sh, m.id)) m.id = uid_gs();
         sh.appendRow([
@@ -738,7 +756,7 @@ function handleAction(data) {
           tsToIsoLocal(m.timestamp) || nowTsLocal(),
           m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
           stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||"",
-          "", normImpDC_(m.impDC)
+          "", normImpDC_(m.impDC), m.cuentaId||"", m.cuentaDestinoId||""
         ]);
         if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
           autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -1393,6 +1411,79 @@ function handleAction(data) {
       const id = uid_gs();
       sh.appendRow([id, p.adherenteId, p.adherenteNombre, p.mes, p.estado, p.movimientoId || "", nowTsLocal()]);
       return { ok: true, id };
+    }
+
+    // ─── CUENTAS ─────────────────────────────────────────────
+
+    case "listCuentas": {
+      asegurarCuentas_();
+      completarIdsCuentaMov_();
+      return { ok: true, cuentas: leerCuentas_() };
+    }
+
+    // Alta (sin id) o edición. Renombrar reescribe el nombre en Movimientos por ID —y por el nombre
+    // viejo en las filas que todavía no tienen ID—, así ningún movimiento queda apuntando a una
+    // cuenta que ya no existe.
+    case "saveCuenta": {
+      asegurarCuentas_();
+      const c      = data.cuenta || {};
+      const nombre = String(c.nombre || "").trim();
+      if (!nombre) return { ok: false, error: "Ingresá el nombre de la cuenta." };
+      const sh   = getOrCreateSheet(CTA_SHEET, CTA_COLS);
+      const all  = sh.getDataRange().getValues();
+      const otra = all.slice(1).find(r => r[0] && String(r[0]) !== String(c.id || "") &&
+                                          normStr_gs(r[1]) === normStr_gs(nombre));
+      if (otra) return { ok: false, error: "Ya existe una cuenta con ese nombre." };
+      const alic = Math.max(0, Number(String(c.alic || 0).replace(",", ".")) || 0);
+      const exentos = JSON.stringify((c.internosExentos || []).map(String).filter(x => x && x !== String(c.id || "")));
+      const activa  = c.activa === false || String(c.activa) === "false" ? "false" : "true";
+      let fila = -1;
+      if (c.id) fila = all.findIndex((r, i) => i > 0 && String(r[0]) === String(c.id));
+      if (c.id && fila === -1) return { ok: false, error: "La cuenta ya no existe." };
+      let renombrados = 0;
+      let id = String(c.id || "");
+      if (fila === -1) {
+        id = uid_gs();
+        const orden = all.slice(1).reduce((mx, r) => Math.max(mx, Number(r[3]) || 0), 0) + 1;
+        sh.appendRow([id, nombre, activa, orden, alic, exentos]);
+      } else {
+        const viejo = String(all[fila][1] || "");
+        sh.getRange(fila + 1, 2, 1, 1).setValues([[nombre]]);
+        sh.getRange(fila + 1, 3, 1, 1).setValues([[activa]]);
+        sh.getRange(fila + 1, 5, 1, 2).setValues([[alic, exentos]]);
+        if (viejo !== nombre) {
+          renombrados =
+            cascadeNombre_(MOV_SHEET, MOV_COLS, MOV_IX.CUENTA_ID,      11, id, viejo, nombre) +
+            cascadeNombre_(MOV_SHEET, MOV_COLS, MOV_IX.CUENTA_DEST_ID, 12, id, viejo, nombre);
+        }
+      }
+      sincronizarConfigCuentas_();
+      return { ok: true, cuenta: leerCuentas_().find(x => x.id === id), renombrados };
+    }
+
+    // Sólo se borra una cuenta que no usa ningún movimiento; si tiene, se desactiva desde el ABM.
+    case "deleteCuenta": {
+      asegurarCuentas_();
+      const sh  = getOrCreateSheet(CTA_SHEET, CTA_COLS);
+      const all = sh.getDataRange().getValues();
+      const fila = all.findIndex((r, i) => i > 0 && String(r[0]) === String(data.id));
+      if (fila === -1) return { ok: false, error: "La cuenta ya no existe." };
+      const nombre = normStr_gs(all[fila][1]);
+      const movs = getOrCreateSheet(MOV_SHEET, MOV_COLS).getDataRange().getValues().slice(1);
+      const usos = movs.filter(r => r[0] && (
+        String(r[MOV_IX.CUENTA_ID - 1]) === String(data.id) || String(r[MOV_IX.CUENTA_DEST_ID - 1]) === String(data.id) ||
+        normStr_gs(r[10]) === nombre || normStr_gs(r[11]) === nombre)).length;
+      if (usos) return { ok: false, error: "Tiene " + usos + (usos === 1 ? " movimiento" : " movimientos") + ". Desactivala en lugar de borrarla." };
+      sh.deleteRow(fila + 1);
+      // Las demás cuentas que la tenían como interno exento la sueltan.
+      const resto = sh.getDataRange().getValues();
+      for (let i = 1; i < resto.length; i++) {
+        const ex = parseIdsJson_(resto[i][5]);
+        if (ex.indexOf(String(data.id)) !== -1)
+          sh.getRange(i + 1, 6).setValue(JSON.stringify(ex.filter(x => x !== String(data.id))));
+      }
+      sincronizarConfigCuentas_();
+      return { ok: true };
     }
 
     // ─── CONFIG ──────────────────────────────────────────────
@@ -2551,6 +2642,108 @@ function autorizarDrive() {
   const carpeta = carpetaComprobantesRaiz_();
   Logger.log("Carpeta de comprobantes: " + carpeta.getUrl());
   return carpeta.getUrl();
+}
+
+// ── Cuentas ──────────────────────────────────────────────────
+
+function parseIdsJson_(v) {
+  try { const a = JSON.parse(String(v || "[]")); return Array.isArray(a) ? a.map(String) : []; }
+  catch (e) { return []; }
+}
+
+function leerCuentas_() {
+  const all = getOrCreateSheet(CTA_SHEET, CTA_COLS).getDataRange().getValues();
+  return all.slice(1).filter(r => r[0] && String(r[1] || "").trim())
+    .map(r => ({
+      id:      String(r[0]),
+      nombre:  String(r[1]).trim(),
+      activa:  String(r[2]) !== "false",
+      orden:   Number(r[3]) || 0,
+      alic:    Number(r[4]) || 0,
+      internosExentos: parseIdsJson_(r[5])
+    }))
+    .sort((a, b) => a.orden - b.orden);
+}
+
+/** Primera vez: pasa las cuentas de Config (texto) a la hoja Cuentas, con su impuesto, y suma como
+ *  inactivas las que sólo aparecen en movimientos viejos, para que todas tengan ID. */
+function asegurarCuentas_() {
+  const sh = getOrCreateSheet(CTA_SHEET, CTA_COLS);
+  if (sh.getLastRow() > 1) return;
+  const cfg = {};
+  getOrCreateSheet(CFG_SHEET, CFG_COLS).getDataRange().getValues().slice(1)
+    .forEach(r => { if (r[0]) cfg[String(r[0])] = String(r[1] || ""); });
+  const nombres = String(cfg.cuentas || "").split(",").map(x => x.trim()).filter(Boolean);
+  const vistos = {};
+  nombres.forEach(n => { vistos[normStr_gs(n)] = true; });
+  const inactivas = [];
+  getOrCreateSheet(MOV_SHEET, MOV_COLS).getDataRange().getValues().slice(1).forEach(r => {
+    [r[10], r[11]].forEach(v => {
+      const n = String(v || "").trim();
+      if (n && !vistos[normStr_gs(n)]) { vistos[normStr_gs(n)] = true; inactivas.push(n); }
+    });
+  });
+  if (!nombres.length && !inactivas.length) return;
+  let imp = { "MP": { alic: 0.6, internosExentos: [] } };
+  try { if (cfg.impDebCred) imp = JSON.parse(cfg.impDebCred) || {}; } catch (e) {}
+  const filas = nombres.map(n => [uid_gs(), n, "true"]).concat(inactivas.map(n => [uid_gs(), n, "false"]));
+  const idPorNombre = {};
+  filas.forEach(f => { idPorNombre[f[1]] = f[0]; });
+  const out = filas.map((f, i) => {
+    const c = imp[f[1]] || {};
+    const ex = (c.internosExentos || []).map(n => idPorNombre[n]).filter(Boolean);
+    return [f[0], f[1], f[2], i + 1, Number(c.alic) || 0, JSON.stringify(ex)];
+  });
+  sh.getRange(2, 1, out.length, CTA_COLS.length).setValues(out);
+}
+
+/** Completa CuentaID / CuentaDestinoID por nombre en las filas que no lo tienen. */
+function completarIdsCuentaMov_() {
+  const ctas = leerCuentas_();
+  if (!ctas.length) return 0;
+  const porNombre = {};
+  ctas.forEach(c => { porNombre[normStr_gs(c.nombre)] = c.id; });
+  const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+  const all = sh.getDataRange().getValues();
+  if (all.length <= 1) return 0;
+  let cambios = 0;
+  const ids = all.slice(1).map(r => {
+    let a = String(r[MOV_IX.CUENTA_ID - 1] || ""), b = String(r[MOV_IX.CUENTA_DEST_ID - 1] || "");
+    if (!a && r[10] && porNombre[normStr_gs(r[10])]) { a = porNombre[normStr_gs(r[10])]; cambios++; }
+    if (!b && r[11] && porNombre[normStr_gs(r[11])]) { b = porNombre[normStr_gs(r[11])]; cambios++; }
+    return [a, b];
+  });
+  if (cambios) sh.getRange(2, MOV_IX.CUENTA_ID, ids.length, 2).setValues(ids);
+  return cambios;
+}
+
+/** Completa los IDs de cuenta de un movimiento. Si el cliente mandó el ID, manda el ID: el nombre se
+ *  toma de la hoja Cuentas (un movimiento cargado sin conexión antes de un renombre llega con el
+ *  nombre viejo). Si no, se busca por nombre. Sin hoja Cuentas, queda como vino. */
+function resolverCuentasMov_(m) {
+  const ctas = leerCuentas_();
+  if (!ctas.length) return m;
+  const porId = {}, porNombre = {};
+  ctas.forEach(c => { porId[c.id] = c; porNombre[normStr_gs(c.nombre)] = c; });
+  const lado = (campoNom, campoId) => {
+    const c = (m[campoId] && porId[m[campoId]]) || (m[campoNom] ? porNombre[normStr_gs(m[campoNom])] : null);
+    if (c) { m[campoId] = c.id; m[campoNom] = c.nombre; }
+    else if (!m[campoNom]) m[campoId] = "";
+  };
+  lado("cuenta", "cuentaId");
+  lado("cuentaDestino", "cuentaDestinoId");
+  return m;
+}
+
+/** Config "cuentas" = nombres activos, para que un index.html viejo cacheado siga mostrando bien. */
+function sincronizarConfigCuentas_() {
+  const nombres = leerCuentas_().filter(c => c.activa).map(c => c.nombre).join(",");
+  const sh  = getOrCreateSheet(CFG_SHEET, CFG_COLS);
+  const all = sh.getDataRange().getValues();
+  for (let i = 1; i < all.length; i++) {
+    if (String(all[i][0]) === "cuentas") { sh.getRange(i + 1, 2).setValue(nombres); return; }
+  }
+  sh.appendRow(["cuentas", nombres]);
 }
 
 /** Sólo dos valores válidos para la marca manual del impuesto déb/créd; cualquier otra cosa = regla. */

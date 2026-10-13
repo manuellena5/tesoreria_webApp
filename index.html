@@ -1027,6 +1027,10 @@ let metodos     = [...DEFAULT_METODOS];
 const IMPDC_RUBRO   = "9";
 const IMPDC_DEFAULT = { "MP": { alic: 0.6, internosExentos: [] } };
 let impDebCred    = JSON.parse(JSON.stringify(IMPDC_DEFAULT));
+// Cuentas con ID (hoja Cuentas): [{id, nombre, activa, orden, alic, internosExentos:[ids]}]. De acá
+// salen `cuentas` (nombres activos, lo que usan los selectores) e `impDebCred`. Vacío = el backend
+// todavía no tiene la hoja (Code.gs sin redeployar): se sigue con las cuentas de Config.
+let cuentasDet    = [];
 let reservas      = [];
 let preciosGranos = { Soja: 480000, Trigo: 293600 };
 
@@ -1515,6 +1519,9 @@ const Storage = {
   async listPagos(mes)      { return this._post({ action:"listPagos",    mes  }); },
   async togglePago(adhId, adhNombre, mes) { return this._post({ action:"togglePago", adhId, adhNombre, mes }); },
   async getConfig()         { return this._post({ action:"getConfig"          }); },
+  async listCuentas()       { return this._post({ action:"listCuentas"        }); },
+  async saveCuenta(c)       { return this._post({ action:"saveCuenta", cuenta:c }); },
+  async deleteCuenta(id)    { return this._post({ action:"deleteCuenta", id     }); },
   async saveConfig(clave, valor) { return this._post({ action:"saveConfig", clave, valor }); },
   async initSeed(data)      { return this._post({ action:"initSeed", ...data  }); },
   async listPartidos()       { return this._post({ action:"listPartidos"              }); },
@@ -1585,7 +1592,7 @@ function saveSnapshotToCache() {
   const payload = JSON.stringify({
     movimientos, jugadores, grupos, adherentes, pagos, partidos, reservas, eventos,
     configJugadores, rosterPartidos, pagosJugadores,
-    cuentas, metodos, preciosGranos, impDebCred, savedAt: Date.now()
+    cuentas, metodos, preciosGranos, impDebCred, cuentasDet, savedAt: Date.now()
   });
   // El snapshot "en vivo" es el que usa el arranque rápido: tiene prioridad sobre las copias
   // diarias. Guardar el estado completo N veces (una en vivo + una por día) no escala — con
@@ -1688,6 +1695,7 @@ function verSnapshotDe(fecha) {
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
   if (snap.impDebCred) impDebCred = snap.impDebCred;
+  if (snap.cuentasDet && snap.cuentasDet.length) applyCuentasDet(snap.cuentasDet);
   viendoSnapshotHistorico = fecha;
   updateBadge();
   renderOfflineBanner();
@@ -2006,6 +2014,7 @@ async function loadAllData(_esReintento) {
       if (rBoot.configJugadores) configJugadores = rBoot.configJugadores;
       if (rBoot.roster)          rosterPartidos  = rBoot.roster;
       if (rBoot.pagosJugadores)  pagosJugadores  = rBoot.pagosJugadores;
+      if (rBoot.cuentas)         cuentasDet      = rBoot.cuentas;
       const fallaron = Object.keys(rBoot.errores || {});
       if (fallaron.length) toast("No se pudo cargar: " + fallaron.join(", "), "err");
       rCfg = { ok: rBoot.config !== null && rBoot.config !== undefined, config: rBoot.config || {} };
@@ -2045,6 +2054,11 @@ async function loadAllData(_esReintento) {
       } catch (ePagos) {
         toast("No se pudo cargar el módulo de Pagos a Jugadores: " + ePagos.message, "err");
       }
+      // Aparte: un Code.gs sin la hoja Cuentas responde "acción desconocida" y se sigue con Config.
+      try {
+        const rCta = await Storage.listCuentas();
+        if (rCta.ok) cuentasDet = rCta.cuentas || [];
+      } catch (eCta) { /* se usan las cuentas de Config */ }
     }
     if (rCfg.ok) {
       applyCuentasMetodos(rCfg.config || {});
@@ -2071,6 +2085,7 @@ async function loadAllData(_esReintento) {
         if (r3Cfg.ok) applyPreciosGranos(r3Cfg.config || {});
       }
     }
+    applyCuentasDet(cuentasDet);
     updateBadge();
     saveSnapshotToCache();
   } catch(e) {
@@ -2116,6 +2131,7 @@ function loadFromCacheIfAny() {
   if (snap.metodos && snap.metodos.length) metodos = snap.metodos;
   if (snap.preciosGranos) preciosGranos = snap.preciosGranos;
   if (snap.impDebCred) impDebCred = snap.impDebCred;
+  if (snap.cuentasDet && snap.cuentasDet.length) applyCuentasDet(snap.cuentasDet);
   updateBadge();
   return true;
 }
@@ -2161,6 +2177,29 @@ function applyCuentasMetodos(config) {
   if (config.metodos) metodos = config.metodos.split(",").map(s=>s.trim()).filter(Boolean);
   else metodos = [...DEFAULT_METODOS];
   impDebCred = impDCParse(config.impDebCred);
+  // Con la hoja Cuentas cargada, manda ella (Config queda sólo como respaldo para apps viejas).
+  if (cuentasDet.length) applyCuentasDet(cuentasDet);
+}
+
+/** Aplica la lista de cuentas con ID: arma `cuentas` (activas, en orden) e `impDebCred` por nombre. */
+function applyCuentasDet(list) {
+  if (!Array.isArray(list) || !list.length) return false;
+  cuentasDet = [...list].sort((a, b) => (a.orden || 0) - (b.orden || 0));
+  cuentas = cuentasDet.filter(c => c.activa).map(c => c.nombre);
+  const nombrePorId = {};
+  cuentasDet.forEach(c => { nombrePorId[c.id] = c.nombre; });
+  impDebCred = {};
+  cuentasDet.forEach(c => {
+    if (+c.alic > 0) impDebCred[c.nombre] = {
+      alic: +c.alic, internosExentos: (c.internosExentos || []).map(id => nombrePorId[id]).filter(Boolean) };
+  });
+  return true;
+}
+
+/** Opciones de un <select> de cuenta. Incluye la cuenta actual aunque esté desactivada, para que
+ *  editar un movimiento viejo no la cambie en silencio por la primera de la lista. */
+function cuentasParaSelect(actual) {
+  return actual && !cuentas.includes(actual) ? [...cuentas, actual] : cuentas;
 }
 
 function updateBadge() {
@@ -2222,9 +2261,9 @@ function renderNuevo() {
     ? `<option value="${esc(F.jugadorCT)}" selected>${esc(F.jugadorCT)}</option>` : "";
   const adhOptions = adherentes.sort((a,b)=>a.nombre.localeCompare(b.nombre))
     .map(a => `<option value="${esc(a.nombre)}" ${F.adherente===a.nombre?"selected":""}>${esc(a.nombre)}</option>`).join("");
-  const cuentaOptions = cuentas.map(c =>
+  const cuentaOptions = cuentasParaSelect(F.cuenta).map(c =>
     `<option value="${esc(c)}" ${F.cuenta===c?"selected":""}>${esc(c)}</option>`).join("");
-  const cuentaDestOptions = cuentas.map(c =>
+  const cuentaDestOptions = cuentasParaSelect(F.cuentaDestino).map(c =>
     `<option value="${esc(c)}" ${F.cuentaDestino===c?"selected":""}>${esc(c)}</option>`).join("");
   const metodoOptions = metodos.map(m =>
     `<option value="${esc(m)}" ${F.modoPago===m?"selected":""}>${esc(m)}</option>`).join("");
@@ -2621,7 +2660,7 @@ function repartoFilasValidas() {
 function renderRepartoBlock() {
   const filas = F.reparto || [];
   const rows = filas.map((f, i) => {
-    const cuentaOpts = cuentas.map(c => `<option value="${esc(c)}" ${f.cuenta===c?"selected":""}>${esc(c)}</option>`).join("");
+    const cuentaOpts = cuentasParaSelect(f.cuenta).map(c => `<option value="${esc(c)}" ${f.cuenta===c?"selected":""}>${esc(c)}</option>`).join("");
     const metodoOpts = metodos.map(m => `<option value="${esc(m)}" ${f.modoPago===m?"selected":""}>${esc(m)}</option>`).join("");
     return `<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
       <input class="inp ${F.tipo==='INGRESO'?'monto-ing':'monto-egr'}" type="number" min="0" step="any" inputmode="decimal"
@@ -12736,6 +12775,7 @@ function renderConfig() {
     </div>
 
     <!-- Cuentas -->
+    ${cuentasDet.length ? cuentasCardHtml() : `
     <div class="cfg-card">
       <div class="cfg-title">🏦 Cuentas</div>
       ${cuentasHtml}
@@ -12745,30 +12785,7 @@ function renderConfig() {
       </div>
       <button class="btn-secondary" style="margin-top:10px" id="btn-guardar-cuentas" onclick="saveCuentas()">💾 Guardar cuentas</button>
     </div>
-
-    <!-- Impuesto déb/créd -->
-    <div class="cfg-card">
-      <div class="cfg-title">🧾 Imp. débitos y créditos</div>
-      <div class="cfg-note">% que la cuenta descuenta de cada plata que entra y sale (MP: 0,6). 0 = no cobra. En las cuentas con %, marcá con qué otras cuentas los internos NO pagan (cuentas propias del mismo titular).</div>
-      ${cuentas.map(c => {
-        const cfg = impDebCred[c] || {};
-        const alic = impDCAlic(c) * 100;
-        return `
-      <div style="margin-top:10px">
-        <div class="cfg-item">
-          <span style="flex:1">${esc(c)}</span>
-          <input class="inp" type="number" step="0.01" min="0" inputmode="decimal" style="width:90px"
-                 data-impdc-alic="${esc(c)}" value="${alic || ""}" placeholder="0" onchange="setImpDCAlic('${escJs(c)}', this.value)"> %
-        </div>
-        ${alic ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
-          <span class="cfg-note" style="margin:0">Internos sin impuesto con:</span>
-          ${cuentas.filter(o => o !== c).map(o => `<button class="pill sm ${(cfg.internosExentos||[]).includes(o) ? "active" : ""}"
-             onclick="toggleImpDCExenta('${escJs(c)}','${escJs(o)}')">${esc(o)}</button>`).join("")}
-        </div>` : ""}
-      </div>`;
-      }).join("")}
-      <button class="btn-secondary" style="margin-top:10px" id="btn-guardar-impdc" onclick="saveImpDC()">💾 Guardar impuesto</button>
-    </div>
+    `}
 
     <!-- Métodos de pago -->
     <div class="cfg-card">
@@ -13217,35 +13234,191 @@ async function saveCuentas() {
     setBtnState(btnId, "saved");
   } catch(e) { handleSaveError(btnId, e); }
 }
-function setImpDCAlic(cuenta, valor) {
-  const a = parseFloat(String(valor).replace(",", ".")) || 0;
-  impDebCred[cuenta] = { internosExentos: [], ...(impDebCred[cuenta] || {}), alic: a > 0 ? a : 0 };
-  renderConfig();
+// ── ABM de cuentas (hoja Cuentas) ────────────────────────────
+// Nombre, activa, impuesto a los débitos y créditos y con qué cuentas los internos no lo pagan, en
+// un solo modal que sirve para el alta y la edición. Los movimientos apuntan a la cuenta por ID, así
+// que renombrar no pierde nada: el backend reescribe el nombre en todos sus movimientos.
+let ctaEd = null;   // { id, nombre, activa, alic (string del input), exentos:Set<id> }
+
+function cuentasCardHtml() {
+  const lista = [...cuentasDet].sort((a, b) => (b.activa - a.activa) || (a.orden - b.orden));
+  const nombrePorId = {};
+  cuentasDet.forEach(c => { nombrePorId[c.id] = c.nombre; });
+  return `
+    <div class="cfg-card">
+      <div class="cfg-title">🏦 Cuentas</div>
+      ${lista.map(c => {
+        const ex  = (c.internosExentos || []).map(id => nombrePorId[id]).filter(Boolean);
+        const sub = [
+          !c.activa ? "Desactivada" : "",
+          +c.alic > 0 ? "Imp. déb/créd " + (+c.alic).toLocaleString("es-AR", { maximumFractionDigits: 3 }) + "%" : "",
+          +c.alic > 0 && ex.length ? "internos sin impuesto con " + ex.join(", ") : ""
+        ].filter(Boolean).join(" · ");
+        return `
+      <div class="cfg-item" style="cursor:pointer" onclick="abrirCuentaModal('${escJs(c.id)}')">
+        <div style="flex:1;min-width:0">
+          <div style="${c.activa ? "" : "color:var(--text3)"}">${esc(c.nombre)}</div>
+          ${sub ? `<div style="font-size:11px;color:var(--text3)">${esc(sub)}</div>` : ""}
+        </div>
+        <button class="btn-sm" onclick="event.stopPropagation(); abrirCuentaModal('${escJs(c.id)}')">✏️</button>
+      </div>`;
+      }).join("")}
+      <button class="btn-secondary" style="margin-top:10px" onclick="abrirCuentaModal('')">＋ Nueva cuenta</button>
+    </div>`;
 }
-function toggleImpDCExenta(cuenta, otra) {
-  const cfg = impDebCred[cuenta] = { alic: 0, internosExentos: [], ...(impDebCred[cuenta] || {}) };
-  const l = cfg.internosExentos = [...(cfg.internosExentos || [])];
-  const i = l.indexOf(otra);
-  if (i === -1) l.push(otra); else l.splice(i, 1);
-  renderConfig();
+
+function abrirCuentaModal(id) {
+  if (bloqueadoPorVistaHistorica()) return;
+  const c = id ? cuentasDet.find(x => x.id === id) : null;
+  if (id && !c) return;
+  ctaEd = { id: c ? c.id : "", nombre: c ? c.nombre : "", activa: c ? c.activa : true,
+            alic: c && +c.alic > 0 ? String(c.alic) : "", exentos: new Set(c ? c.internosExentos || [] : []) };
+  renderCuentaModal();
 }
-async function saveImpDC() {
-  const btnId = "btn-guardar-impdc";
-  if (document.getElementById(btnId)?.disabled) return;
-  // Sólo las cuentas que existen y cobran: una cuenta borrada o en 0 no tiene nada que guardar.
-  const limpio = {};
-  for (const c of cuentas) {
-    const a = impDCAlic(c) * 100;
-    if (a > 0) limpio[c] = { alic: a, internosExentos: (impDebCred[c].internosExentos || []).filter(o => cuentas.includes(o)) };
+
+/** Movimientos que usan la cuenta (por ID o, en los que todavía no lo tienen, por nombre). */
+function usosCuenta(id) {
+  const c = cuentasDet.find(x => x.id === id);
+  if (!c) return 0;
+  return movimientos.filter(m => m.cuentaId === id || m.cuentaDestinoId === id ||
+    m.cuenta === c.nombre || (m.tipo === "INTERNO" && m.cuentaDestino === c.nombre)).length;
+}
+
+function ctaAlicNum() {
+  const a = parseFloat(String(ctaEd.alic || "").replace(",", "."));
+  return a > 0 ? a : 0;
+}
+
+function ctaExentosHtml() {
+  if (!ctaAlicNum()) return "";
+  const otras = cuentasDet.filter(o => o.id !== ctaEd.id && (o.activa || ctaEd.exentos.has(o.id)));
+  if (!otras.length) return "";
+  return `
+        <label>Internos sin impuesto con</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${otras.map(o => `<button type="button" class="pill sm ${ctaEd.exentos.has(o.id) ? "active" : ""}"
+             onclick="toggleExentoCta('${escJs(o.id)}')">${esc(o.nombre)}</button>`).join("")}
+        </div>
+        <span style="font-size:11px;color:var(--text3);margin-top:2px">Las transferencias entre cuentas propias del mismo titular no pagan.</span>`;
+}
+
+function refrescarExentosCta() {
+  const el = document.getElementById("cta-exentos");
+  if (!el) return;
+  const html = ctaExentosHtml();
+  el.innerHTML = html;
+  el.style.display = html ? "" : "none";
+}
+
+function toggleExentoCta(id) {
+  if (ctaEd.exentos.has(id)) ctaEd.exentos.delete(id); else ctaEd.exentos.add(id);
+  refrescarExentosCta();
+}
+
+function renderCuentaModal() {
+  const e = ctaEd;
+  const usos = e.id ? usosCuenta(e.id) : 0;
+  const exHtml = ctaExentosHtml();
+  document.getElementById("modal-root").innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${e.id ? "Editar cuenta" : "Nueva cuenta"}</div>
+        <div class="fgrid">
+          <div class="field">
+            <label>Nombre</label>
+            <input class="inp" id="cta-nombre" type="text" value="${esc(e.nombre)}" placeholder="Ej.: CD" oninput="ctaEd.nombre=this.value">
+            ${e.id && usos ? `<span style="font-size:11px;color:var(--text3);margin-top:2px">Si le cambiás el nombre, se actualiza en sus ${usos} ${usos === 1 ? "movimiento" : "movimientos"}.</span>` : ""}
+          </div>
+          <div class="field">
+            <label>Imp. débitos y créditos (%)</label>
+            <input class="inp" id="cta-alic" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(e.alic)}"
+                   placeholder="0" oninput="ctaEd.alic=this.value; refrescarExentosCta()">
+            <span style="font-size:11px;color:var(--text3);margin-top:2px">Lo que la cuenta descuenta de cada plata que entra y sale. Mercado Pago: 0,6. Vacío = no cobra.</span>
+          </div>
+          <div class="field" id="cta-exentos" style="${exHtml ? "" : "display:none"}">${exHtml}</div>
+          ${e.id ? `
+          <div class="field">
+            <label style="cursor:pointer">
+              <input type="checkbox" style="width:16px;height:16px;accent-color:var(--accent);vertical-align:middle;margin-right:6px;cursor:pointer"
+                     ${e.activa ? "checked" : ""} onchange="ctaEd.activa=this.checked">
+              Activa
+            </label>
+            <span style="font-size:11px;color:var(--text3);margin-top:2px">Desactivada no aparece para cargar movimientos nuevos. Sus movimientos se mantienen.</span>
+          </div>` : ""}
+        </div>
+        <div class="modal-footer">
+          ${e.id && !usos ? `<button class="btn-sm danger" style="padding:12px 16px" id="btn-borrar-cuenta" onclick="eliminarCuenta()">🗑</button>` : ""}
+          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
+          <button class="btn-main" style="flex:1" id="btn-guardar-cuenta" onclick="guardarCuenta()">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+  if (!e.id) setTimeout(() => document.getElementById("cta-nombre")?.focus(), 50);
+}
+
+/** Después de renombrar: el backend ya reescribió la planilla; esto deja igual lo que está en memoria. */
+function renombrarCuentaLocal(viejo, nuevo, id) {
+  for (const m of movimientos) {
+    if (m.cuentaId === id || (!m.cuentaId && m.cuenta === viejo)) { m.cuenta = nuevo; m.cuentaId = id; }
+    if (m.cuentaDestinoId === id || (!m.cuentaDestinoId && m.cuentaDestino === viejo)) { m.cuentaDestino = nuevo; m.cuentaDestinoId = id; }
   }
+  if (listFiltros.cuenta === viejo) listFiltros.cuenta = nuevo;
+  if (reportesState && Array.isArray(reportesState.cuentas))
+    reportesState.cuentas = reportesState.cuentas.map(c => c === viejo ? nuevo : c);
+  if (typeof movColFiltros === "object" && movColFiltros.cuenta) delete movColFiltros.cuenta;
+  if (F.cuenta === viejo) F.cuenta = nuevo;
+  if (F.cuentaDestino === viejo) F.cuentaDestino = nuevo;
+  (F.reparto || []).forEach(f => { if (f.cuenta === viejo) f.cuenta = nuevo; });
+}
+
+async function guardarCuenta() {
+  const btnId = "btn-guardar-cuenta";
+  if (document.getElementById(btnId)?.disabled) return;
+  const e = ctaEd;
+  const nombre = (e.nombre || "").trim();
+  if (!nombre) { toast("Ingresá el nombre de la cuenta", "err"); document.getElementById("cta-nombre")?.focus(); return; }
+  if (cuentasDet.some(c => c.id !== e.id && normStr(c.nombre) === normStr(nombre))) { toast("Ya existe una cuenta con ese nombre", "err"); return; }
+  const alic = ctaAlicNum();
+  if (alic > 10) { toast("Revisá el porcentaje: es muy alto", "err"); return; }
+  const prev = e.id ? cuentasDet.find(c => c.id === e.id) : null;
   setBtnState(btnId, "saving");
   try {
-    await Storage.saveConfig("impDebCred", JSON.stringify(limpio));
-    impDebCred = limpio;
-    toast("Impuesto guardado ✓", "ok");
+    const r = await Storage.saveCuenta({ id: e.id, nombre, activa: e.activa, alic,
+                                         internosExentos: alic ? [...e.exentos] : [] });
+    if (!r.ok || !r.cuenta) throw new Error(r.error || "No se pudo guardar");
+    if (prev && prev.nombre !== r.cuenta.nombre) renombrarCuentaLocal(prev.nombre, r.cuenta.nombre, r.cuenta.id);
+    applyCuentasDet(cuentasDet.filter(c => c.id !== r.cuenta.id).concat([r.cuenta]));
+    saveSnapshotToCache();
+    closeModal();
+    toast(prev ? "Cuenta actualizada ✓" : "Cuenta creada ✓", "ok");
     renderConfig();
-    setBtnState(btnId, "saved");
-  } catch(e) { handleSaveError(btnId, e); }
+  } catch (err) { handleSaveError(btnId, err); }
+}
+
+async function eliminarCuenta() {
+  const btn = document.getElementById("btn-borrar-cuenta");
+  if (!btn || btn.disabled) return;
+  if (!btn.dataset.confirm) {
+    btn.dataset.confirm = "1"; btn.textContent = "¿Eliminar?"; btn.style.color = "var(--red)";
+    setTimeout(() => { if (btn.isConnected) { btn.dataset.confirm = ""; btn.textContent = "🗑"; btn.style.color = ""; } }, 3000);
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const id = ctaEd.id;
+    const r = await Storage.deleteCuenta(id);
+    if (!r.ok) throw new Error(r.error || "No se pudo eliminar");
+    applyCuentasDet(cuentasDet.filter(c => c.id !== id).map(c =>
+      ({ ...c, internosExentos: (c.internosExentos || []).filter(x => x !== id) })));
+    saveSnapshotToCache();
+    closeModal();
+    toast("Cuenta eliminada", "ok");
+    renderConfig();
+  } catch (err) {
+    btn.disabled = false; btn.dataset.confirm = ""; btn.textContent = "🗑"; btn.style.color = "";
+    toast(isNetworkError(err) ? "Sin conexión — no se pudo eliminar, probá de nuevo" : "Error: " + err.message, "err");
+  }
 }
 
 async function saveMetodos() {

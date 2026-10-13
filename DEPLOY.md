@@ -42,3 +42,12 @@ Está fija en `index.html` (constante `SCRIPT_URL`). No es un secreto: lo que pr
 - Para cambiarla, se edita la propiedad; no hace falta redeployar. Cada dispositivo la pide de nuevo al próximo pedido.
 - Tras 10 intentos fallidos se bloquea todo durante 15 minutos (incluida la clave correcta).
 - Cualquier otro cliente que pegue contra este Web App (p. ej. `importar_movimientos.py`) tiene que mandar `"pin": "<clave>"` en el JSON.
+
+## Cuentas (hoja Cuentas)
+
+Desde la versión del ABM de cuentas, las cuentas viven en la hoja **Cuentas** (ID, nombre, activa, impuesto déb/créd) y cada movimiento guarda el ID de su cuenta en **CuentaID** / **CuentaDestinoID**.
+
+- No hay que correr nada a mano: la primera vez que la app carga con el `Code.gs` nuevo, crea la hoja a partir de Config (`cuentas` e `impDebCred`) y completa los IDs de los movimientos.
+- Las cuentas que sólo aparecen en movimientos viejos entran **desactivadas**.
+- Renombrar una cuenta desde la app actualiza el nombre en todos sus movimientos.
+- Config `cuentas` se sigue actualizando con los nombres activos, para que una app vieja cacheada siga andando.

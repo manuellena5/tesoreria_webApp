@@ -2748,6 +2748,21 @@ function firmaCamposDelRubro() {
 // se avisa por una casilla que el usuario no llegó a ver. Un movimiento así queda fuera de los
 // pendientes de reintegro (ver calcReintegrosPorJugador, que lo manda a `sinReintegro`), y ese
 // olvido no se nota hasta que falta plata en la conciliación del seguro.
+// Rubros que son de un partido: los ingresos de cancha y los gastos que se pagan por partido
+// (árbitros, policía, ambulancia, filmación). Luz, gas y limpieza son de la cancha pero no de un
+// partido puntual, así que no avisan.
+const RUBROS_DE_PARTIDO = ["1", "2", "3", "4", "14a", "12", "13", "36", "14b"];
+
+// Cuota de adherente (rubro 6) sin el adherente elegido: no se marcaría como pagada en su seguimiento.
+function faltaAdherente() {
+  return F.codRubro === "6" && (F.tipo === "INGRESO" || F.tipo === "EGRESO") && !F.adherente;
+}
+
+// Movimiento de cancha sin partido: no suma en el balance de ese partido.
+function faltaPartido() {
+  return RUBROS_DE_PARTIDO.includes(F.codRubro) && (F.tipo === "INGRESO" || F.tipo === "EGRESO") && !F.partidoId;
+}
+
 function faltaMarcarReintegro() {
   return F.codRubro === "21" && F.tipo === "EGRESO" && !F.seguroReintegro;
 }
@@ -2971,6 +2986,18 @@ async function saveMovimiento() {
     if (!confirm("Este gasto médico se va a guardar SIN reintegro del seguro, así que no va a " +
                  "aparecer entre los pendientes de reintegro.\n\n" +
                  "Si el seguro lo reintegra, cancelá y marcá \"Tiene reintegro del seguro\".\n\n" +
+                 "¿Guardar igual?")) return;
+  }
+
+  // Olvidos comunes al cargar: mismo criterio que el reintegro, sólo en altas.
+  if (faltaAdherente() && !editId) {
+    if (!confirm("No elegiste ningún adherente.\n\n" +
+                 "Sin adherente, este pago no queda registrado en su seguimiento de cuotas.\n\n" +
+                 "¿Guardar igual?")) return;
+  }
+  if (faltaPartido() && !editId) {
+    if (!confirm("No elegiste ningún partido.\n\n" +
+                 "Sin partido, este movimiento no suma en el balance del partido.\n\n" +
                  "¿Guardar igual?")) return;
   }
 

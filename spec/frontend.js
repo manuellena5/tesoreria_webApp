@@ -2431,6 +2431,55 @@ igual("el detalle de Mensual trae un único ✏️, el del sueldo pendiente",
 check("en Transferencias (informativo) no va",
       !app.pjDetalleFilasHTML(app.pjFilasMes("j2", "2026-06"), "", { sinQuitar: true }).includes("editarMontoPJ"));
 
+// ══════════════════════════════════════════════════════════════
+// Reimpresión (🧾) de un jugador ya liquidado. Tomaba UN movimiento —el "último"— y un premio
+// liquidado aparte del partido el mismo día no salía: ganaba el del partido.
+seccion("Transferencias · la reimpresión trae los premios");
+sembrar();
+const pag = (id, extra) => Object.assign(app.pagosJugadores.find(p => p.id === id), { estado: "pagado" }, extra);
+pag("f-part",  { movimientoId: "M1", fechaPago: "2026-06-20" });
+pag("f-prem1", { movimientoId: "M2", fechaPago: "2026-06-20" });
+app.pjPartidosSel = ["p1"];
+let rep = app.pjPagoAReimprimir("j1");
+igual("junta el partido y el premio pagados ese día", rep.filas.map(p => p.id).sort(), ["f-part", "f-prem1"]);
+igual("aunque estén en dos movimientos", rep.movIds.sort(), ["M1", "M2"]);
+pag("f-part2", { movimientoId: "M0", fechaPago: "2026-06-10" });
+igual("un pago de otro día no se mezcla", app.pjPagoAReimprimir("j1").movIds.sort(), ["M1", "M2"]);
+app.pjPartidosSel = ["p2"];
+igual("tildando la fecha vieja se reimprime ese pago", app.pjPagoAReimprimir("j1").movIds, ["M0"]);
+app.pjPartidosSel = [];
+igual("sin fechas tildadas, el último día", app.pjPagoAReimprimir("j1").movIds.sort(), ["M1", "M2"]);
+pag("f-prem2", { movimientoId: "M3", fechaPago: "" });
+app.pagosJugadores.forEach(p => { if (p.jugadorId === "j1") p.fechaPago = ""; });
+igual("sin fecha de pago no junta toda la historia: un solo movimiento",
+      app.pjPagoAReimprimir("j1").movIds.length, 1);
+igual("sin nada pagado no hay reimpresión", app.pjPagoAReimprimir("j2"), null);
+
+app.movimientos = [
+  { id: "M1", tipo: "EGRESO", fecha: "2026-06-20", mes: "202606", concepto: "Pago jugador PEREZ", egreso: 50000,
+    jugadorCT: "PEREZ", jugadorId: "j1", itemsDetalle: [{ desc: "Fecha 3 vs Colon", monto: 50000, partidoId: "p1" }] },
+  { id: "M2", tipo: "EGRESO", fecha: "2026-06-20", mes: "202606", concepto: "Pago jugador PEREZ + premios", egreso: 10000,
+    jugadorCT: "PEREZ", jugadorId: "j1", itemsDetalle: [{ desc: "Gol", monto: 10000, partidoId: "p1" }] }];
+const compVarios = app.movsToComprobante(app.movimientos);
+igual("un solo papel con los ítems de los dos", compVarios.items.map(i => i.monto), [50000, 10000]);
+check("el premio dice de qué partido es", compVarios.items.some(i => i.desc === "Gol - Colon"), JSON.stringify(compVarios.items));
+igual("a nombre del jugador", compVarios.receptor, "PEREZ");
+app.movimientos = [];
+
+// Premios tildados por defecto, salvo los que el usuario destildó (sobrevive al repintado).
+sembrar();
+app.pjPartidosSel = ["p1"];
+let htmlT = app.renderTransferencias();
+check("un premio pendiente viene tildado", /value="f-prem1"[^>]*checked/.test(htmlT));
+app.pjPremiosDestildados.add("f-prem1");
+htmlT = app.renderTransferencias();
+check("si el usuario lo destildó, queda destildado", !/value="f-prem1"[^>]*checked/.test(htmlT));
+app.pjPremiosDestildados.clear();
+pag("f-prem1", { movimientoId: "M2", fechaPago: "2026-06-20" });
+htmlT = app.renderTransferencias();
+check("uno ya pagado sigue deshabilitado y sin tildar", /value="f-prem1"[^>]*disabled/.test(htmlT) && !/value="f-prem1"[^>]*checked/.test(htmlT));
+app.pjPartidosSel = [];
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

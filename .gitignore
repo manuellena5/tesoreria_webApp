@@ -11,3 +11,6 @@ PROMPT_desglose_ajuste_comprobante.md
 PROMPT_liquidacion_por_jugador.md
 PROMPT_pagos_multipartido.md
 PROMPT_liquidacion_por_jugador.md
+# La spec funcional y las instrucciones para Claude sí van al repo, aunque *.md esté ignorado.
+!FUNCIONALIDADES.md
+!CLAUDE.md

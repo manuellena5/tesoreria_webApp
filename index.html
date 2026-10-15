@@ -1059,6 +1059,11 @@ let pjExcluirMensuales = false; // filtro de Transferencias: esconder a los que 
 // partido, el mensual se esfumaba). Es de la sesión a propósito — si fuera permanente la tabla
 // acumularía las liquidaciones de todos los meses.
 let pjLiquidadosSesion = new Set();
+// Premios que el usuario destildó a mano en Transferencias. Los premios pendientes vienen tildados
+// por defecto (casi siempre se pagan junto con el partido, y destildados se quedaban afuera de la
+// liquidación sin que nadie lo note). La tabla se repinta seguido —cada liquidación la redibuja—,
+// así que lo destildado se recuerda acá: si no, el repintado lo volvería a tildar solo.
+let pjPremiosDestildados = new Set();
 let pjMesSel      = null; // null = todavía no inicializado (se precarga con el mes actual); "" = "Sin mes asignado"
 let listFiltros   = { rubro: "", cat: "", cuenta: "", tipo: "", adherente: "", jugadorCT: "", partido: "", evento: "", search: "" };
 // Filtros por columna de la tabla de Movimientos, al estilo Excel: colKey → Set de valores que se
@@ -10490,6 +10495,48 @@ function pjPartidoCorto(partidoId) {
   return p.rival + (p.fecha ? " " + p.fecha.slice(8, 10) + "/" + p.fecha.slice(5, 7) : "");
 }
 
+/**
+ * Lo que reemite el 🧾 de un jugador ya liquidado: su último pago, con TODO lo que se le pagó ese
+ * día — partidos, sueldo, premios y descuentos.
+ *
+ * Antes se tomaba un solo movimiento (el "último"), y un premio liquidado aparte del partido el
+ * mismo día —típico cuando quedaba destildado y se lo pagaba después— no salía en la reimpresión:
+ * entre dos pagos del mismo día ganaba cualquiera, casi siempre el del partido. Ahora se juntan
+ * todas las filas pagadas ese día, sea cual sea el movimiento que las registró.
+ *
+ * "Último" se mide sobre lo que está a la vista: si hay fechas tildadas en Transferencias, el día
+ * de pago más reciente de lo de esas fechas (así se puede reimprimir un pago viejo tildando su
+ * fecha); si no hay nada de esas fechas, el más reciente de todos.
+ * Filas sin fecha de pago (cargas viejas) no se agrupan por día —juntaría toda la historia—: ahí
+ * se toma sólo el movimiento más reciente, como antes.
+ * Devuelve { filas, movIds } o null si el jugador no tiene nada pagado.
+ */
+function pjPagoAReimprimir(jugadorId) {
+  const pagadas = pagosJugadores.filter(p => p.jugadorId === jugadorId && p.estado === "pagado" && p.movimientoId);
+  if (!pagadas.length) return null;
+  const sel = pjPartidosSel || [];
+  const partidoDe = p => pjTipoFila(p) === "partido" ? ((p.partidosIncluidos || [])[0] || p.partidoId) : p.partidoId;
+  const deLaVista = pagadas.filter(p => { const pid = partidoDe(p); return pid && sel.includes(pid); });
+  const ancla = (deLaVista.length ? deLaVista : pagadas)
+    .slice().sort((a, b) => (b.fechaPago || "").localeCompare(a.fechaPago || ""));
+  const dia = ancla[0].fechaPago || "";
+  const filas = dia
+    ? pagadas.filter(p => p.fechaPago === dia)
+    : pagadas.filter(p => p.movimientoId === ancla[0].movimientoId);
+  return { filas, movIds: [...new Set(filas.map(p => p.movimientoId))] };
+}
+
+/** Comprobante de varios movimientos de un mismo jugador como un solo papel: los ítems de todos,
+ *  y la fecha y el período del más reciente. */
+function movsToComprobante(movs) {
+  // Del más viejo al más nuevo, que es el orden en que se pagó (el sort es estable: con la misma
+  // fecha queda el orden en que llegan, partido antes que premio).
+  const orden = movs.slice().sort((a, b) => String(a.fecha || "").localeCompare(String(b.fecha || "")));
+  const base  = movToComprobante(orden[orden.length - 1]);
+  base.items = orden.reduce((acc, m) => acc.concat(movToComprobante(m).items), []);
+  return base;
+}
+
 /** MovimientoID del último pago confirmado de un jugador (el más reciente por fecha de pago).
  *  Sirve para poder emitir el comprobante de una transferencia que ya se hizo, cuando en la
  *  tabla no queda nada tildado porque todas sus filas pasaron a "pagado". */
@@ -12483,7 +12530,7 @@ function renderTransferencias() {
           const pagado = p.estado === "pagado";
           return `
           <label class="pj-premio-lbl${pagado ? " pj-premio-pagado" : ""}">
-            <input type="checkbox" class="pj-premio-cb" value="${p.id}" data-monto="${Number(p.montoFinal||0)}" onchange="pjTransfRecalc()" ${pagado?"disabled":""}>
+            <input type="checkbox" class="pj-premio-cb" value="${p.id}" data-monto="${Number(p.montoFinal||0)}" onchange="pjPremioCbCambio(this)" ${pagado?"disabled":(pjPremiosDestildados.has(p.id)?"":"checked")}>
             <span class="mono">${fmtSigned(p.montoFinal)}</span>
             <span>${esc(p.etiqueta || "Premio")}</span>
             <span class="pj-acumulado">${esc(pjPartidoLabel(p.partidoId))}</span>
@@ -12560,11 +12607,17 @@ function renderTransferencias() {
   `;
 }
 
+/** Un premio tildado/destildado a mano: se recuerda para que el próximo repintado lo respete. */
+function pjPremioCbCambio(cb) {
+  if (cb.checked) pjPremiosDestildados.delete(cb.value); else pjPremiosDestildados.add(cb.value);
+  pjTransfRecalc();
+}
+
 // Tilda o destilda todos los checkbox de premio de la tabla. Los ya cobrados están deshabilitados
 // y quedan afuera: están para consultarlos, no para volver a pagarlos.
 function pjMarcarTodos(valor) {
   const cbs = [...document.querySelectorAll("#pj-transf-table .pj-premio-cb:not(:disabled)")];
-  cbs.forEach(cb => cb.checked = valor);
+  cbs.forEach(cb => { cb.checked = valor; if (valor) pjPremiosDestildados.delete(cb.value); else pjPremiosDestildados.add(cb.value); });
   pjTransfRecalc();
   if (!cbs.length) toast("No hay filas para " + (valor ? "tildar" : "destildar"), "err");
 }
@@ -14283,15 +14336,21 @@ function abrirComprobantePrevio(jugadorId, opciones) {
   // Sin filas pendientes: el jugador ya está liquidado. Ahí el comprobante sale del movimiento
   // real, que tiene la fecha de la transferencia que de verdad se hizo y el detalle tal cual quedó
   // grabado — más fiel que rearmarlo de las filas.
+  // Puede ser más de un movimiento: todo lo que se le pagó el último día (ver pjPagoAReimprimir).
   if (!filas.length) {
-    const movId = pjUltimoMovimientoDe(jugadorId);
-    if (!movId) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return false; }
-    const pagadas = pagosJugadores.filter(p => p.movimientoId === movId);
-    if (movimientos.some(m => m.id === movId)) { abrirComprobanteModal(movId); return true; }
-    // El movimiento no está cargado (offline, o todavía no se refrescó la lista): se arma
-    // con las filas que quedaron apuntando a él, que son las mismas que lo componen.
-    filas.push(...pagadas);
-    if (!filas.length) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return false; }
+    const pago = pjPagoAReimprimir(jugadorId);
+    if (!pago) { toast("Este jugador no tiene nada para poner en el comprobante", "err"); return false; }
+    const movs = pago.movIds.map(id => movimientos.find(m => m.id === id));
+    if (movs.every(Boolean)) {
+      if (movs.length === 1) { abrirComprobanteModal(movs[0].id); return true; }
+      compData = movsToComprobante(movs);
+      renderComprobanteModal();
+      escudoBN().then(() => compRefreshDoc());
+      return true;
+    }
+    // Algún movimiento no está cargado (offline, o todavía no se refrescó la lista): se arma
+    // con las filas que quedaron apuntando a ellos, que son las mismas que los componen.
+    filas.push(...pago.filas);
   }
 
   const total = filas.reduce((s,p) => s + Number(p.montoFinal||0), 0);

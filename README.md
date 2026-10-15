@@ -1,5 +1,7 @@
 # Tesorería Club
 
+> **La referencia actualizada de funcionalidades, modelo de datos y reglas es [`FUNCIONALIDADES.md`](FUNCIONALIDADES.md).** Este README describe la primera versión.
+
 Aplicación web de gestión de tesorería para un club de fútbol. Permite registrar movimientos de dinero, administrar jugadores, adherentes y grupos, y hacer seguimiento de pagos mensuales — todo desde el navegador, sin servidor propio.
 
 ## Arquitectura

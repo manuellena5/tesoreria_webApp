@@ -212,6 +212,75 @@ textarea.inp { resize:none; }
 .monto.int { color:var(--int);   }
 .mov-card-monto { font-size:17px; font-weight:700; flex-shrink:0; }
 
+/* ── Movimientos · vista Cards (pensada para el celular). La vista Tabla no usa nada de esto. ── */
+.movc-top { display:flex; gap:6px; align-items:stretch; margin-bottom:10px; }
+.movc-top .mes-sel { flex:1; margin:0; padding:2px 6px; min-height:44px; box-sizing:border-box; }
+.movc-ico-btn { width:44px; flex:none; display:flex; align-items:center; justify-content:center; background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); color:var(--text); cursor:pointer; }
+.movc-ico-btn:active { background:var(--bg3); }
+.movc-kpis { grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; margin-bottom:10px; }
+.movc-kpis .stat-card { padding:8px 12px; }
+.movc-kpis .stat-label { font-size:10px; color:var(--text2); }
+.movc-kpis .stat-val { font-size:16px; font-weight:500; }
+.movc-imp { border:1px solid rgba(251,191,36,.3); background:var(--warn-bg); border-radius:var(--rs); margin-bottom:10px; overflow:hidden; }
+.movc-imp.ok { border-color:rgba(74,222,128,.3); background:rgba(74,222,128,.07); }
+.movc-imp-head { width:100%; min-height:44px; display:flex; align-items:center; gap:8px; padding:0 12px; background:none; border:none; color:var(--text); font-family:var(--font); font-size:13px; text-align:left; cursor:pointer; }
+.movc-imp-tit { flex:1; min-width:0; }
+.movc-imp-tit b { color:var(--warn); font-weight:600; }
+.movc-imp.ok .movc-imp-tit b { color:var(--green); }
+.movc-imp-sub { color:var(--text2); }
+.movc-imp-monto { font-family:var(--mono); font-size:13px; white-space:nowrap; }
+.movc-chev { color:var(--text2); transition:transform .15s; flex:none; }
+.movc-imp.open .movc-chev { transform:rotate(180deg); }
+.movc-imp-body { display:none; border-top:1px solid rgba(251,191,36,.18); padding:2px 12px 10px; }
+.movc-imp.ok .movc-imp-body { border-top-color:rgba(74,222,128,.18); }
+.movc-imp.open .movc-imp-body { display:block; }
+.movc-imp-row { display:flex; align-items:center; gap:10px; padding:6px 0; }
+.movc-imp-row > div { flex:1; min-width:0; font-size:13px; }
+.movc-imp-row small { display:block; font-size:11px; color:var(--text2); }
+.movc-imp-note { font-size:11px; color:var(--text2); margin-top:4px; line-height:1.5; }
+.movc-bar { display:flex; gap:8px; margin-bottom:8px; }
+.movc-bar .search-wrap { flex:1; margin:0; min-width:0; }
+.movc-fil-btn { display:flex; align-items:center; gap:6px; padding:0 12px; background:var(--bg2); border:1px solid var(--border2); border-radius:var(--rs); color:var(--text); font-family:var(--font); font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.movc-fil-btn.on { border-color:var(--accent); }
+.movc-badge { min-width:18px; height:18px; padding:0 5px; box-sizing:border-box; border-radius:9px; background:var(--accent); color:#fff; font-size:11px; display:inline-flex; align-items:center; justify-content:center; }
+.movc-tipos { margin-bottom:8px; }
+.movc-status { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
+.movc-chip { display:inline-flex; align-items:center; gap:2px; height:26px; padding:0 2px 0 10px; border-radius:13px; background:var(--accent-bg); color:var(--blue); font-size:12px; font-weight:600; max-width:100%; }
+.movc-chip > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.movc-chip button { width:24px; height:24px; flex:none; border:none; background:none; color:inherit; cursor:pointer; font-size:12px; }
+.movc-count { margin-left:auto; font-size:12px; color:var(--text2); }
+.movc-orden { width:auto; padding:4px 8px; font-size:12px; }
+.movc-dia-hdr { display:flex; justify-content:space-between; align-items:center; padding:12px 2px 6px; }
+.movc-dia-lbl { font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--text2); }
+.movc-dia-neto { font-family:var(--mono); font-size:11px; }
+.movc-dia-neto.ing { color:var(--green); }
+.movc-dia-neto.egr { color:var(--red); }
+.movc-grupo { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); overflow:hidden; margin-top:8px; }
+.movc-dia-hdr + .movc-grupo { margin-top:0; }
+.movc-row { display:flex; align-items:center; gap:10px; width:100%; min-height:58px; padding:8px 12px; border:none; background:none; color:var(--text); font-family:var(--font); text-align:left; cursor:pointer; }
+.movc-row + .movc-row { border-top:1px solid var(--border); }
+.movc-row:active { background:var(--bg3); }
+.movc-ico { width:32px; height:32px; flex:none; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; }
+.movc-ico.ing { color:var(--green); background:rgba(74,222,128,.12); }
+.movc-ico.egr { color:var(--red);   background:rgba(248,113,113,.12); }
+.movc-ico.int { color:var(--int);   background:var(--int-bg); }
+.movc-ico.adj { color:var(--adj);   background:var(--adj-bg); }
+.movc-mid { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.movc-rubro { font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.movc-sub { font-size:12px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.movc-tags { display:flex; gap:4px; flex-wrap:wrap; margin-top:2px; }
+.movc-der { display:flex; flex-direction:column; align-items:flex-end; gap:3px; flex:none; }
+.movc-der .monto { font-size:14px; font-weight:500; }
+.movc-cta { font-size:10px; font-weight:600; letter-spacing:.03em; color:var(--text2); background:var(--bg4); border-radius:4px; padding:1px 6px; white-space:nowrap; }
+.movc-sheet-hdr { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+.movc-link { background:none; border:none; color:var(--blue); font-family:var(--font); font-size:13px; font-weight:600; cursor:pointer; padding:6px 0; }
+.movc-lbl { font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--text2); margin-bottom:6px; }
+.movc-sheet-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+.movc-sheet-grid .inp { width:100%; box-sizing:border-box; }
+.movc-seg { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:16px; }
+.movc-seg .pill { text-align:center; padding:10px; }
+.movc-ver { width:100%; height:48px; border:none; border-radius:var(--r); background:var(--accent); color:#fff; font-family:var(--font); font-size:15px; font-weight:700; cursor:pointer; }
+
 /* ── Searchable Select (rubro) ── */
 .ss-wrap { position:relative; }
 .ss-drop {
@@ -1142,6 +1211,8 @@ let eventoResExpandido  = new Set();
 let eventoResVista      = getDefaultVista("eventos_vista");
 let movOrden = localStorage.getItem("clubfm_orden_mov") || "fecha_desc";
 let movVista = getDefaultVista("movimientos_vista");
+let movFiltrosOpen = false;   // hoja de filtros abierta (vista Cards)
+let movImpDCOpen   = false;   // detalle del imp. déb/créd desplegado (vista Cards)
 
 // "cards" en mobile (<600px), "tabla" en desktop; el usuario puede override y se persiste
 function getDefaultVista(storageKey) {
@@ -3227,6 +3298,12 @@ function renderMovimientos() {
     `<button class="pill sm ${listFiltros.tipo===t?"active":""}" onclick="setListFilter('tipo','${t}')">${t}</button>`
   ).join("");
 
+  if (movVista === "cards") {
+    setContent(movCardsLayoutHtml(cats, rubrosUniq));
+    renderMovList();
+    return;
+  }
+
   setContent(`
     <div class="mes-sel">
       <button class="mes-sel-btn" onclick="changeMes(-1)">◀</button>
@@ -3355,6 +3432,164 @@ function renderMovimientos() {
   renderMovList();
 }
 
+/* ── Vista Cards de Movimientos (pensada para el celular) ─────────────────────────────────
+ * Mes con exportar/actualizar en una fila, KPIs 2×2 con el monto entero, imp. déb/créd en una
+ * línea desplegable y los filtros secundarios en una hoja aparte, con los activos como chips.
+ * La vista Tabla sigue con el layout de renderMovimientos. Los ids de KPIs, nota, contador y
+ * orden son los mismos en las dos, así renderMovKpis los actualiza igual. */
+const MOVC_ICO = {
+  export:  `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`,
+  refresh: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>`,
+  filtros: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>`,
+  chev:    `<svg class="movc-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`
+};
+
+/** Filtros activos de la hoja (tipo y texto quedan a la vista, no van como chip). */
+function movCardsChips() {
+  const evNombre = id => { const e = eventos.find(x => x.id === id); return e ? e.nombre : id; };
+  const out = [];
+  if (listFiltros.cuenta)    out.push(["Cuenta", listFiltros.cuenta, "cuenta"]);
+  if (listFiltros.rubro)     out.push(["Rubro", listFiltros.rubro, "rubro"]);
+  if (listFiltros.cat)       out.push(["Categoría", listFiltros.cat, "cat"]);
+  if (listFiltros.adherente) out.push(["Adherente", listFiltros.adherente, "adherente"]);
+  if (listFiltros.jugadorCT) out.push(["Jugador/CT", listFiltros.jugadorCT, "jugadorCT"]);
+  if (listFiltros.partido)   out.push(["Partido", listFiltros.partido === "__sin__" ? "sin asignar" : partidoLabel(listFiltros.partido), "partido"]);
+  if (listFiltros.evento)    out.push(["Evento", listFiltros.evento === "__sin__" ? "sin asignar" : evNombre(listFiltros.evento), "evento"]);
+  return out;
+}
+function movCardsQuitar(key) {
+  listFiltros[key] = "";
+  renderMovimientos();
+}
+function movFiltrosToggle(open) {
+  movFiltrosOpen = open;
+  renderMovimientos();
+}
+
+function movCardsLayoutHtml(cats, rubrosUniq) {
+  const tipoPills = ["", "INGRESO", "EGRESO", "INTERNO", "AJUSTE"].map(t => {
+    const label = t ? t.charAt(0) + t.slice(1).toLowerCase() : "Todos";
+    const onclick = t ? `setListFilter('tipo','${t}')` : `listFiltros.tipo=''; renderMovimientos()`;
+    return `<button class="pill sm ${listFiltros.tipo === t ? "active" : ""}" onclick="${onclick}">${label}</button>`;
+  }).join("");
+  const chips = movCardsChips();
+  const chipsHtml = chips.map(([lbl, val, key]) =>
+    `<span class="movc-chip"><span>${esc(lbl)}: ${esc(val)}</span><button aria-label="Quitar filtro ${esc(lbl)}" onclick="movCardsQuitar('${key}')">✕</button></span>`).join("");
+  const anio = sharedMes.slice(0, 4);
+
+  return `
+    <div class="movc-top">
+      <div class="mes-sel">
+        <button class="mes-sel-btn" aria-label="Mes anterior" onclick="changeMes(-1)">◀</button>
+        <span class="mes-sel-label">${mesLabel(sharedMes)}</span>
+        <button class="mes-sel-btn" aria-label="Mes siguiente" onclick="changeMes(1)">▶</button>
+      </div>
+      <button class="movc-ico-btn" title="Exportar a Excel" aria-label="Exportar a Excel" onclick="exportExcelFiltrado()">${MOVC_ICO.export}</button>
+      <button class="movc-ico-btn" title="Actualizar" aria-label="Actualizar" onclick="refreshData()">${MOVC_ICO.refresh}</button>
+    </div>
+
+    <div class="sum-grid movc-kpis">
+      <div class="stat-card"><div class="stat-label">Ingresos</div><div class="stat-val ing" id="kpi-ing">—</div></div>
+      <div class="stat-card"><div class="stat-label">Egresos</div><div class="stat-val egr" id="kpi-egr">—</div></div>
+      <div class="stat-card"><div class="stat-label">Saldo mes</div><div class="stat-val" id="kpi-saldo">—</div></div>
+      <div class="stat-card"><div class="stat-label">Saldo acum. ${anio}</div><div class="stat-val" id="kpi-saldo-acc">—</div></div>
+    </div>
+    <div id="kpi-filter-note" class="note" style="margin:-4px 0 10px"></div>
+    ${impDCCompactHtml()}
+
+    <div class="movc-bar">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input class="inp" type="search" placeholder="Buscar en concepto / observación…" aria-label="Buscar" value="${esc(listFiltros.search)}"
+               oninput="listFiltros.search=this.value; renderMovList()">
+      </div>
+      <button class="movc-fil-btn ${chips.length ? "on" : ""}" onclick="movFiltrosToggle(true)">${MOVC_ICO.filtros} Filtros${chips.length ? ` <span class="movc-badge">${chips.length}</span>` : ""}</button>
+    </div>
+    <div class="filter-row movc-tipos">${tipoPills}</div>
+    <div class="movc-status">
+      ${chipsHtml}
+      <span class="movc-count" id="mov-count"></span>
+      <select class="inp movc-orden" id="mov-orden-sel" aria-label="Orden" onchange="setMovOrden(this.value)">
+        <option value="fecha_desc" ${movOrden==='fecha_desc'?'selected':''}>Recientes</option>
+        <option value="fecha_asc"  ${movOrden==='fecha_asc' ?'selected':''}>Antiguos</option>
+        <option value="monto_desc" ${movOrden==='monto_desc'?'selected':''}>Mayor monto</option>
+        <option value="monto_asc"  ${movOrden==='monto_asc' ?'selected':''}>Menor monto</option>
+      </select>
+    </div>
+
+    <div id="mov-list"></div>
+    ${movFiltrosOpen ? movFiltrosSheetHtml(cats, rubrosUniq) : ""}`;
+}
+
+/** Hoja de filtros de la vista Cards. Los campos filtran en vivo como en la vista Tabla; al
+ *  cerrarla se redibuja la pantalla para actualizar los chips y el contador del botón. */
+function movFiltrosSheetHtml(cats, rubrosUniq) {
+  const cuentaPills = cuentas.map(c =>
+    `<button class="pill sm ${listFiltros.cuenta===c?"active":""}" onclick="setListFilter('cuenta','${esc(c)}')">${esc(c)}</button>`).join("");
+  const campo = (id, dl, key, ph, opciones) => `
+      <div>
+        <div class="movc-lbl">${ph}</div>
+        <div class="ss-filter-wrap">
+          <input class="inp ss-filter-input" id="${id}" list="${dl}" placeholder="Todos" aria-label="${ph}"
+                 value="${esc(listFiltros[key])}"
+                 oninput="listFiltros.${key}=this.value; renderMovList()"
+                 onsearch="listFiltros.${key}=''; renderMovList()">
+          <datalist id="${dl}">${opciones.map(o => `<option value="${esc(o)}">`).join("")}</datalist>
+          ${listFiltros[key] ? `<button class="ss-filter-clear" aria-label="Borrar" onclick="listFiltros.${key}=''; renderMovimientos()">✕</button>` : ""}
+        </div>
+      </div>`;
+  const partidoSel = partidos.length ? `
+      <div>
+        <div class="movc-lbl">Partido</div>
+        <select class="inp" id="fil-partido" aria-label="Partido" onchange="listFiltros.partido=this.value; renderMovList()">
+          <option value="">Todos</option>
+          <option value="__sin__" ${listFiltros.partido==="__sin__"?"selected":""}>Sin partido asignado</option>
+          ${[...partidos].sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(p =>
+            `<option value="${esc(p.id)}" ${listFiltros.partido===p.id?"selected":""}>${esc(p.numeroFecha + " — " + p.rival)}</option>`).join("")}
+        </select>
+      </div>` : "";
+  const eventoSel = eventos.length ? `
+      <div>
+        <div class="movc-lbl">Evento</div>
+        <select class="inp" id="fil-evento" aria-label="Evento" onchange="listFiltros.evento=this.value; renderMovList()">
+          <option value="">Todos</option>
+          <option value="__sin__" ${listFiltros.evento==="__sin__"?"selected":""}>Sin evento asignado</option>
+          ${[...eventos].sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(ev => {
+            const fd = ev.fecha ? ev.fecha.slice(8)+"/"+ev.fecha.slice(5,7)+"/"+ev.fecha.slice(0,4) : "";
+            return `<option value="${esc(ev.id)}" ${listFiltros.evento===ev.id?"selected":""}>${esc(fd ? `${ev.nombre} · ${fd}` : ev.nombre)}</option>`;
+          }).join("")}
+        </select>
+      </div>` : "";
+  return `
+    <div class="modal-overlay" onclick="if(event.target===this) movFiltrosToggle(false)">
+      <div class="modal-card" role="dialog" aria-label="Filtros">
+        <div class="modal-handle"></div>
+        <div class="movc-sheet-hdr">
+          <span class="modal-title" style="margin:0">Filtros</span>
+          <button class="movc-link" onclick="clearListFilters()">Limpiar todo</button>
+        </div>
+        <div class="movc-lbl">Cuenta</div>
+        <div class="pill-row" style="margin-bottom:14px">${cuentaPills}</div>
+        <div class="movc-sheet-grid">
+          ${campo("fil-rubro", "dl-rubros", "rubro", "Rubro", rubrosUniq)}
+          ${campo("fil-cat", "dl-cats", "cat", "Categoría", cats)}
+          ${campo("fil-adh", "dl-adhs", "adherente", "Adherente", [...adherentes].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(a => a.nombre))}
+          ${campo("fil-jug", "dl-jugs", "jugadorCT", "Jugador/CT", [
+              ...[...jugadores].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(j => j.nombre),
+              ...[...grupos].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(g => g.nombre)])}
+          ${partidoSel}
+          ${eventoSel}
+        </div>
+        <div class="movc-lbl">Vista</div>
+        <div class="movc-seg">
+          <button class="pill active">▤ Cards</button>
+          <button class="pill" onclick="setMovVista('tabla')">⊞ Tabla</button>
+        </div>
+        <button class="movc-ver" id="movc-sheet-count" onclick="movFiltrosToggle(false)">Ver movimientos</button>
+      </div>
+    </div>`;
+}
+
 function setMovOrden(v) {
   movOrden = v;
   localStorage.setItem("clubfm_orden_mov", v);
@@ -3364,7 +3599,8 @@ function setMovOrden(v) {
 function setMovVista(v) {
   movVista = v;
   localStorage.setItem("movimientos_vista", v);
-  renderMovList();
+  movFiltrosOpen = false;
+  renderMovimientos();   // Cards y Tabla tienen distinto encabezado (filtros, imp. déb/créd)
 }
 
 // Columnas de la vista tabla de Movimientos (variante propia de DT_COLS: sin "Mes"
@@ -3769,39 +4005,75 @@ function renderMovKpis(movMes) {
   const exportBtn = document.getElementById("mov-export-btn");
   if (exportBtn) exportBtn.innerHTML = `📥 Exportar ${mesLabel(sharedMes)}${filtersActive ? ' (filtrado)' : ''} a Excel`;
 
+  const sheetCnt = document.getElementById("movc-sheet-count");
+  if (sheetCnt) sheetCnt.textContent = "Ver " + movMes.length + " movimiento" + (movMes.length!==1?"s":"");
   const cnt = document.getElementById("mov-count");
   if (cnt) cnt.textContent = movMes.length + " movimiento" + (movMes.length!==1?"s":"");
 }
 
+/** Vista Cards: filas compactas. Ordenado por fecha se agrupan por día con el neto del día (con
+ *  filtro de cuenta, los internos cuentan como en los KPIs); ordenado por monto va una sola lista
+ *  y la fecha pasa a la segunda línea de cada fila. */
 function renderMovCards(el, movMes) {
-  el.innerHTML = movMes.map(m => {
-    const montoClass = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : m.tipo==="AJUSTE" ? "adj" : "int";
-    const montoVal   = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
-    const montoSign  = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : m.tipo==="AJUSTE" ? (m.montoFinal>=0?"⊙+":"⊙−") : "⇄";
-    const tagsHtml = `
-          ${m._pending ? `<span class="tag" style="color:var(--warn);background:var(--warn-bg)">⏳ pendiente de sincronizar</span>` : ""}
-          <span class="tag tag-cuenta">${esc(m.cuenta)}</span>
-          ${m.jugadorCT ? `<span class="tag tag-jug">${esc(m.jugadorCT)}</span>` : ""}
-          ${m.adherente ? `<span class="tag tag-adh">${esc(m.adherente)}</span>` : ""}
-          ${m.partidoId ? `<span class="tag tag-partido">⚽ ${esc(partidoLabel(m.partidoId))}</span>` : ""}
-          ${m.tipo==="INTERNO" ? `<span class="tag tag-int">→ ${esc(m.cuentaDestino||"?")}</span>` : ""}
-          ${m.tipo==="AJUSTE" ? `<span class="tag tag-adj">⊙ ajuste</span>` : ""}
-          ${impDCDetalle(m).map(d => `<span class="tag" title="Neto con imp. déb/créd">${esc(d.cuenta)} neto ${d.sentido==="credito"?"+":"−"}${fmt2(d.neto)}</span>`).join("")}`;
-    return `
-    <div class="mov-card" onclick="openMovModal('${m.id}')">
-      <div class="mov-card-row1">
-        <span class="mov-card-fecha-big">${fechaCorta(m.fecha)}${(m.adjuntos||[]).length ? ` <span style="font-size:12px" title="Tiene comprobante adjunto">📎</span>` : ""}</span>
-        <span class="monto ${montoClass} mov-card-monto">${montoSign}${fmt(montoVal)}</span>
-      </div>
-      <div class="mov-card-rubro-full">${esc(m.rubro)}</div>
-      <div class="mov-card-row3">
-        <span class="mov-card-concepto">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</span>
-        <span class="mov-card-modo">${esc(m.modoPago)}</span>
-      </div>
-      ${tagsHtml.trim() ? `<div class="mov-card-tags">${tagsHtml}</div>` : ""}
-    </div>`;
+  const porFecha = movOrden === "fecha_desc" || movOrden === "fecha_asc";
+  const grupos = [];
+  for (const m of movMes) {
+    const g = grupos[grupos.length - 1];
+    if (g && (!porFecha || g.fecha === m.fecha)) g.movs.push(m);
+    else grupos.push({ fecha: m.fecha, movs: [m] });
+  }
+  const cf = listFiltros.cuenta;
+  el.innerHTML = grupos.map(g => {
+    let hdr = "";
+    if (porFecha) {
+      const neto = g.movs.reduce((s, m) => {
+        if (m.tipo === "INGRESO") return s + (+m.ingreso || 0);
+        if (m.tipo === "EGRESO")  return s - (+m.egreso || 0);
+        if (m.tipo === "INTERNO" && cf) {
+          if (m.cuentaDestino === cf) return s + (+m.montoFinal || 0);
+          if (m.cuenta === cf)        return s - (+m.montoFinal || 0);
+        }
+        return s;
+      }, 0);
+      hdr = `<div class="movc-dia-hdr"><span class="movc-dia-lbl">${esc(fechaCorta(g.fecha))}</span>` +
+            `<span class="movc-dia-neto ${neto >= 0 ? "ing" : "egr"}">${neto >= 0 ? "+" : "−"}${fmt(neto)}</span></div>`;
+    }
+    return hdr + `<div class="movc-grupo">${g.movs.map(m => movCardRowHtml(m, !porFecha)).join("")}</div>`;
   }).join("");
 }
+
+function movCardRowHtml(m, conFecha) {
+  const cls  = m.tipo==="INGRESO" ? "ing" : m.tipo==="EGRESO" ? "egr" : m.tipo==="AJUSTE" ? "adj" : "int";
+  const val  = m.tipo==="INGRESO" ? m.ingreso : m.tipo==="AJUSTE" ? Math.abs(m.montoFinal) : m.egreso || m.montoFinal;
+  const sign = m.tipo==="INGRESO" ? "+" : m.tipo==="EGRESO" ? "−" : m.tipo==="AJUSTE" ? (m.montoFinal>=0 ? "+" : "−") : "";
+  const ico  = { ing: "+", egr: "−", adj: "±", int: "⇄" }[cls];
+  let sub = m.tipo === "INTERNO"
+    ? `${esc(m.cuenta)} → ${esc(m.cuentaDestino || "?")}${m.concepto ? " · " + esc(m.concepto) : ""}`
+    : (esc(m.concepto) || "Sin concepto") + (m.modoPago ? " · " + esc(m.modoPago) : "");
+  if (conFecha) sub = esc(fechaCorta(m.fecha)) + " · " + sub;
+  const tags = [
+    m._pending ? `<span class="tag" style="color:var(--warn);background:var(--warn-bg)">⏳ pendiente de sincronizar</span>` : "",
+    m.jugadorCT ? `<span class="tag tag-jug">${esc(m.jugadorCT)}</span>` : "",
+    m.adherente ? `<span class="tag tag-adh">${esc(m.adherente)}</span>` : "",
+    m.partidoId ? `<span class="tag tag-partido">⚽ ${esc(partidoLabel(m.partidoId))}</span>` : "",
+    m.tipo==="AJUSTE" ? `<span class="tag tag-adj">⊙ ajuste</span>` : "",
+    ...impDCDetalle(m).map(d => `<span class="tag" title="Neto con imp. déb/créd">${esc(d.cuenta)} neto ${d.sentido==="credito"?"+":"−"}${fmt2(d.neto)}</span>`)
+  ].join("");
+  return `
+    <button type="button" class="movc-row" onclick="openMovModal('${m.id}')">
+      <span class="movc-ico ${cls}" aria-hidden="true">${ico}</span>
+      <span class="movc-mid">
+        <span class="movc-rubro">${esc(m.rubro) || "Sin rubro"}${(m.adjuntos||[]).length ? ` <span title="Tiene comprobante adjunto">📎</span>` : ""}</span>
+        <span class="movc-sub">${sub}</span>
+        ${tags ? `<span class="movc-tags">${tags}</span>` : ""}
+      </span>
+      <span class="movc-der">
+        <span class="monto ${cls}">${sign}${fmt(val)}</span>
+        <span class="movc-cta">${esc(m.cuenta)}</span>
+      </span>
+    </button>`;
+}
+
 
 function setListFilter(key, val) {
   if (listFiltros[key] === val) listFiltros[key] = "";
@@ -5859,6 +6131,50 @@ function impDCCardHtml() {
       <div class="cfg-title">🧾 Imp. débitos y créditos · ${mesLabel(sharedMes)}</div>
       ${filas.join('<div style="height:8px"></div>')}
       <div class="cfg-note" style="margin-top:6px">Se calcula sobre los montos brutos. "Cargado" = egresos del rubro 9 de esa cuenta en el mes.</div>
+    </div>`;
+}
+
+/** Imp. déb/créd en la vista Cards: una línea con lo que falta cargar; al tocarla muestra una
+ *  fila por cuenta con el botón para cargarlo. Mismos datos que impDCCardHtml (vista Tabla). */
+function impDCCompactHtml() {
+  const filas = impDCCuentasGravadas()
+    .filter(c => !listFiltros.cuenta || listFiltros.cuenta === c)
+    .map(c => {
+      const r = impDCResumenMes(sharedMes, c);
+      return { c, r, dif: Math.round((r.imp - r.cargado) * 100) / 100 };
+    })
+    .filter(x => x.r.n);
+  if (!filas.length) return "";
+  const pend = filas.filter(x => Math.abs(x.dif) >= 1);
+  const ok = !pend.length;
+  const totalPend = pend.reduce((s, x) => s + x.dif, 0);
+  const titulo = ok
+    ? `<b>✓ Imp. déb/créd cargado</b>`
+    : `<b>Imp. déb/créd ${pend.every(x => !x.r.cargado) ? "sin cargar" : "con diferencias"}</b> <span class="movc-imp-sub">· ${pend.length} cuenta${pend.length !== 1 ? "s" : ""}</span>`;
+  const monto = ok ? fmt2(filas.reduce((s, x) => s + x.r.imp, 0)) : (totalPend < 0 ? "−" : "") + fmt2(totalPend);
+  const rows = filas.map(({ c, r, dif }) => {
+    const estado = !r.cargado ? `<span style="color:var(--warn)">sin cargar</span>`
+      : Math.abs(dif) < 1 ? `<span style="color:var(--green)">✓ cargado</span>`
+      : `cargado ${fmt2(r.cargado)} · <span style="color:var(--warn)">dif. ${dif < 0 ? "−" : ""}${fmt2(dif)}</span>`;
+    return `
+      <div class="movc-imp-row">
+        <div><b>${esc(c)}</b> · <span class="movc-imp-monto">${fmt2(r.imp)}</span> · ${estado}
+          <small>${fmtAlic(c)} de ${fmt2(r.base)} · ${r.n} mov.</small></div>
+        ${Math.abs(dif) >= 1 ? `<button class="btn-sm accent" onclick="cargarImpDCMes('${escJs(c)}')">＋ Cargar</button>` : ""}
+      </div>`;
+  }).join("");
+  return `
+    <div class="movc-imp ${ok ? "ok" : ""} ${movImpDCOpen ? "open" : ""}">
+      <button class="movc-imp-head" aria-expanded="${movImpDCOpen}"
+              onclick="movImpDCOpen=!movImpDCOpen; this.parentElement.classList.toggle('open', movImpDCOpen); this.setAttribute('aria-expanded', movImpDCOpen)">
+        <span class="movc-imp-tit">${titulo}</span>
+        <span class="movc-imp-monto">${monto}</span>
+        ${MOVC_ICO.chev}
+      </button>
+      <div class="movc-imp-body">
+        ${rows}
+        <div class="movc-imp-note">Se calcula sobre los montos brutos. "Cargado" = egresos del rubro 9 de esa cuenta en el mes.</div>
+      </div>
     </div>`;
 }
 

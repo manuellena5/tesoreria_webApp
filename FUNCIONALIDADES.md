@@ -101,6 +101,14 @@ Otros / Internos · Internos.
   (desempata por orden de carga) o monto.
 - Tarjeta **Imp. débitos y créditos del mes** por cuenta gravada, con botón para cargar el
   egreso.
+- **Vista Cards (pensada para el celular)** con encabezado propio; la vista Tabla no cambia:
+  mes + íconos de exportar y actualizar en una fila; KPIs 2×2 con el monto completo; imp.
+  déb/créd en una sola línea (pendiente total y cantidad de cuentas, o "✓ cargado") que se
+  despliega con una fila por cuenta y su botón; buscador + botón **Filtros** (con la cantidad
+  activa) que abre una hoja con cuenta, rubro, categoría, adherente, jugador/CT, partido, evento
+  y el cambio de vista; tipo como chips; filtros activos como chips con ✕. Lista en filas
+  compactas agrupadas por día con el neto del día (ordenada por monto, sin agrupar y con la
+  fecha en cada fila).
 - Detalle del movimiento: editar, eliminar (con confirmación), comprobante imprimible, adjuntos.
 - Exportar a Excel el mes (respeta filtros y vista).
 
@@ -258,6 +266,7 @@ a partir del historial de git.
 
 | Fecha | Cambio |
 |---|---|
+| 2026-10-19 | Movimientos: nuevo layout de la vista Cards para el celular (KPIs 2×2, imp. déb/créd en una línea, filtros en hoja, filas compactas por día). |
 | 2026-10-14 | Avisos al guardar: rubro 6 sin adherente y rubros de partido sin partido. |
 | 2026-10-14 | Este documento. |
 | 2026-10-13 | ABM de cuentas en modal, hoja Cuentas con ID, `CuentaID`/`CuentaDestinoID` en Movimientos, renombre en cascada, desactivar/borrar. |

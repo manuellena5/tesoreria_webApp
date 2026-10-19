@@ -106,7 +106,7 @@ Otros / Internos · Internos.
   déb/créd en una sola línea (pendiente total y cantidad de cuentas, o "✓ cargado") que se
   despliega con una fila por cuenta y su botón; buscador + botón **Filtros** (con la cantidad
   activa) que abre una hoja con cuenta, rubro, categoría, adherente, jugador/CT, partido, evento
-  y el cambio de vista; tipo como chips; filtros activos como chips con ✕. Lista en filas
+  y el cambio de vista (también a la vista junto al orden); tipo como chips; filtros activos como chips con ✕. Lista en filas
   compactas agrupadas por día con el neto del día (ordenada por monto, sin agrupar y con la
   fecha en cada fila).
 - Detalle del movimiento: editar, eliminar (con confirmación), comprobante imprimible, adjuntos.

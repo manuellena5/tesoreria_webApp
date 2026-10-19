@@ -3515,6 +3515,10 @@ function movCardsLayoutHtml(cats, rubrosUniq) {
         <option value="monto_desc" ${movOrden==='monto_desc'?'selected':''}>Mayor monto</option>
         <option value="monto_asc"  ${movOrden==='monto_asc' ?'selected':''}>Menor monto</option>
       </select>
+      <div class="reint-view-toggle">
+        <button class="reint-view-btn" onclick="setMovVista('tabla')">⊞ Tabla</button>
+        <button class="reint-view-btn active">▤ Cards</button>
+      </div>
     </div>
 
     <div id="mov-list"></div>

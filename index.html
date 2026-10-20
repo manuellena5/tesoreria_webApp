@@ -281,6 +281,47 @@ textarea.inp { resize:none; }
 .movc-seg .pill { text-align:center; padding:10px; }
 .movc-ver { width:100%; height:48px; border:none; border-radius:var(--r); background:var(--accent); color:#fff; font-family:var(--font); font-size:15px; font-weight:700; cursor:pointer; }
 
+/* ── Resumen › Reportes · vista Cards (pensada para el celular). La vista Tabla no usa esto. ──
+   Los montos achican la letra según el ancho de su celda (unidades cqi) en vez de partirse. */
+.repc-tot { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); margin-bottom:10px; }
+.repc-kpi { padding:8px 10px; min-width:0; container-type:inline-size; }
+.repc-kpi + .repc-kpi { border-left:1px solid var(--border); }
+.repc-kpi .stat-label { font-size:10px; color:var(--text2); }
+.repc-val { font-family:var(--mono); font-weight:500; white-space:nowrap; font-size:12px; font-size:min(16px, 12cqi); margin-top:2px; }
+.repc-val.ing, .repc-num.ing, .repc-mov-m.ing { color:var(--green); }
+.repc-val.egr, .repc-num.egr, .repc-mov-m.egr { color:var(--red); }
+.repc-seg { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:3px; padding:3px; border-radius:var(--rs); background:var(--bg2); border:1px solid var(--border); margin-bottom:8px; }
+.repc-seg button { height:34px; border:none; border-radius:6px; background:none; color:var(--text2); font-family:var(--font); font-size:13px; font-weight:600; cursor:pointer; }
+.repc-seg button.active { background:var(--accent-bg); color:var(--blue); }
+.repc-info { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.repc-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--r); overflow:hidden; margin-bottom:8px; }
+.repc-fila { display:flex; flex-direction:column; gap:6px; width:100%; padding:10px 12px; border:none; background:none; color:var(--text); font-family:var(--font); text-align:left; cursor:pointer; }
+.repc-fila:active { background:var(--bg3); }
+.repc-nom { display:flex; align-items:center; gap:8px; }
+.repc-chev { color:var(--text2); font-size:12px; width:14px; flex:none; transition:transform .15s; text-align:center; }
+.repc-chev.open { transform:rotate(90deg); }
+.repc-nom-txt { flex:1; min-width:0; font-size:15px; font-weight:600; }
+.repc-cnt { font-size:11px; color:var(--text2); background:var(--bg4); border-radius:10px; padding:1px 7px; flex:none; }
+.repc-nums { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:6px; padding-left:22px; }
+.repc-cel { display:flex; flex-direction:column; min-width:0; container-type:inline-size; }
+.repc-cel:last-child { align-items:flex-end; }
+.repc-cel-lbl { font-size:10px; color:var(--text2); }
+.repc-num { font-family:var(--mono); white-space:nowrap; font-size:12px; font-size:min(14px, 12cqi); }
+.repc-num.cero { color:var(--text3); }
+.repc-cel:last-child .repc-num { font-weight:600; }
+.repc-sub { border-top:1px solid var(--border); background:rgba(0,0,0,.15); }
+.repc-sub > * + * { border-top:1px solid rgba(255,255,255,.04); }
+.repc-fila.sub { padding:8px 12px 8px 34px; gap:4px; }
+.repc-fila.sub .repc-nom-txt { font-size:13px; font-weight:500; }
+.repc-fila.sub .repc-nums { padding-left:22px; }
+.repc-fila.sub .repc-cel-lbl { display:none; }
+.repc-movs { padding:4px 12px 8px 56px; }
+.repc-sub > .repc-movs:first-child { padding-left:34px; }
+.repc-mov { display:flex; align-items:center; gap:8px; padding:5px 0; font-size:12px; }
+.repc-mov-f { font-family:var(--mono); color:var(--text2); flex:none; }
+.repc-mov-c { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.repc-mov-m { font-family:var(--mono); flex:none; }
+
 /* ── Searchable Select (rubro) ── */
 .ss-wrap { position:relative; }
 .ss-drop {
@@ -1213,6 +1254,10 @@ let movOrden = localStorage.getItem("clubfm_orden_mov") || "fecha_desc";
 let movVista = getDefaultVista("movimientos_vista");
 let movFiltrosOpen = false;   // hoja de filtros abierta (vista Cards)
 let movImpDCOpen   = false;   // detalle del imp. déb/créd desplegado (vista Cards)
+let repVista       = getDefaultVista("reportes_vista");   // Resumen › Reportes: "cards" | "tabla"
+let repFiltrosOpen = false;                               // hoja de filtros de Reportes (vista Cards)
+// Celular apaisado: Reportes se ve en Tabla, como en la computadora, aunque se haya elegido Cards.
+const MQ_CEL_APAISADO = window.matchMedia("(orientation: landscape) and (max-height: 500px)");
 
 // "cards" en mobile (<600px), "tabla" en desktop; el usuario puede override y se persiste
 function getDefaultVista(storageKey) {
@@ -5580,6 +5625,7 @@ function buildReportesPlano(movs, nivel) {
 }
 
 function renderReportesTab() {
+  if (repVistaEfectiva() === "cards") return repCardsTabHtml();
   const anio = reportesState.anio;
   const mesesAnio = Array.from({length:12}, (_,i) => anio + "-" + String(i+1).padStart(2,"0"));
   const anioCompletoActivo = mesesAnio.every(m => reportesState.meses.includes(m));
@@ -5653,10 +5699,232 @@ function renderReportesTab() {
     <div class="filter-row" style="align-items:center">
       <span class="note" style="white-space:nowrap">Ver por</span>
       ${nivelChips}
+      <span style="flex:1"></span>
+      ${repVistaToggleHtml()}
     </div>
 
     <div id="reportes-body">${renderReportesBody()}</div>
   `;
+}
+
+/* ── Reportes · vista Cards (pensada para el celular) ──────────────────────────────────────
+ * Mismo esquema que la vista Cards de Movimientos: período y exportar en una fila, meses como
+ * chips, buscador + hoja de Filtros, totales arriba y cada grupo como tarjeta con el nombre a lo
+ * ancho y Ing. / Egr. / Neto en tres columnas fijas debajo. Con el celular apaisado se ve la
+ * Tabla (repVistaEfectiva). Usa los mismos filtros, niveles y abiertos que la Tabla. */
+function repVistaEfectiva() {
+  return repVista === "cards" && !MQ_CEL_APAISADO.matches ? "cards" : "tabla";
+}
+function setRepVista(v) {
+  repVista = v;
+  localStorage.setItem("reportes_vista", v);
+  repFiltrosOpen = false;
+  renderResumen();
+}
+function repFiltrosToggle(open) {
+  repFiltrosOpen = open;
+  renderResumen();
+}
+/** Cambio Tabla/Cards. Apaisado no se muestra: ahí siempre es Tabla. */
+function repVistaToggleHtml() {
+  if (MQ_CEL_APAISADO.matches) return "";
+  const v = repVistaEfectiva();
+  return `<div class="reint-view-toggle">
+      <button class="reint-view-btn ${v==='tabla'?'active':''}" onclick="setRepVista('tabla')">⊞ Tabla</button>
+      <button class="reint-view-btn ${v==='cards'?'active':''}" onclick="setRepVista('cards')">▤ Cards</button>
+    </div>`;
+}
+(function () {
+  const alRotar = () => { if (currentTab === "resumen" && resumenSubTab === "reportes") renderResumen(); };
+  if (MQ_CEL_APAISADO.addEventListener) MQ_CEL_APAISADO.addEventListener("change", alRotar);
+  else if (MQ_CEL_APAISADO.addListener) MQ_CEL_APAISADO.addListener(alRotar);
+})();
+
+function repLimpiarFiltros() {
+  Object.assign(reportesState, { cuentas: [], filtroCat: null, filtroRubro: null, filtroConcepto: null, jugadorCT: "", adherente: "", search: "" });
+  renderResumen();
+}
+/** Abre un filtro estilo Excel desde la hoja: primero se cierra la hoja, para no apilar modales. */
+function repFiltroDesdeHoja(dim) {
+  repFiltrosOpen = false;
+  renderResumen();
+  repFiltroAbrir(dim);
+}
+/** Filtros activos de la hoja como [rótulo, onclick para quitarlo]. */
+function repCardsChips() {
+  const out = reportesState.cuentas.map(c => [`Cuenta: ${c}`, `toggleReportesCuenta('${esc(escJs(c))}')`]);
+  for (const [dim, lbl] of [["cat", "Categorías"], ["rubro", "Rubros"], ["concepto", "Conceptos"]]) {
+    const clave = REP_FILTROS[dim].clave;
+    if (reportesState[clave]) out.push([`${lbl}: ${repFiltroResumen(dim)}`, `reportesState.${clave}=null; renderResumen()`]);
+  }
+  if (reportesState.jugadorCT) out.push([`Jugador/CT: ${reportesState.jugadorCT}`, `reportesState.jugadorCT=''; renderResumen()`]);
+  if (reportesState.adherente) out.push([`Adherente: ${reportesState.adherente}`, `reportesState.adherente=''; renderResumen()`]);
+  return out;
+}
+
+function repCardsTabHtml() {
+  const anio = reportesState.anio;
+  const mesesAnio = Array.from({length:12}, (_,i) => anio + "-" + String(i+1).padStart(2,"0"));
+  const anioCompleto = mesesAnio.every(m => reportesState.meses.includes(m));
+  const selAnio = mesesAnio.filter(m => reportesState.meses.includes(m));
+  const etiqueta = anioCompleto ? "Año completo"
+    : selAnio.length === 1 ? MESES_ABBR[mesesAnio.indexOf(selAnio[0])]
+    : selAnio.length ? `${selAnio.length} meses` : "Sin meses";
+  const mesChips = mesesAnio.map((m,i) =>
+    `<button class="pill sm ${reportesState.meses.includes(m)?"active":""}" onclick="toggleReportesMes('${m}')">${MESES_ABBR[i]}</button>`).join("");
+  const chips = repCardsChips();
+  const chipsHtml = chips.map(([lbl, onclickJs]) =>
+    `<span class="movc-chip"><span>${esc(lbl)}</span><button aria-label="Quitar filtro" onclick="${onclickJs}">✕</button></span>`).join("");
+  const refrescar = "document.getElementById('reportes-body').innerHTML=renderReportesBody()";
+
+  return `
+    <div class="sec-hdr" style="margin-top:16px"><span class="sec-title">Reportes</span></div>
+    <div class="movc-top">
+      <div class="mes-sel">
+        <button class="mes-sel-btn" aria-label="Año anterior" onclick="changeReportesAnio(-1)">◀</button>
+        <span class="mes-sel-label">${anio} · ${etiqueta}</span>
+        <button class="mes-sel-btn" aria-label="Año siguiente" onclick="changeReportesAnio(1)">▶</button>
+      </div>
+      <button class="movc-ico-btn" title="Exportar a Excel" aria-label="Exportar a Excel" onclick="exportReportesExcel()">${MOVC_ICO.export}</button>
+    </div>
+    <div class="filter-row">
+      <button class="pill sm ${anioCompleto?"active":""}" onclick="toggleReportesAnioCompleto()">Año</button>
+      ${mesChips}
+    </div>
+    <div class="movc-bar">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input class="inp" type="search" placeholder="Buscar en concepto / observación…" aria-label="Buscar" value="${esc(reportesState.search)}"
+               oninput="reportesState.search=this.value; ${refrescar}">
+      </div>
+      <button class="movc-fil-btn ${chips.length ? "on" : ""}" onclick="repFiltrosToggle(true)">${MOVC_ICO.filtros} Filtros${chips.length ? ` <span class="movc-badge">${chips.length}</span>` : ""}</button>
+    </div>
+    ${chipsHtml ? `<div class="movc-status" style="margin-bottom:8px">${chipsHtml}</div>` : ""}
+    <div id="reportes-body">${renderReportesBody()}</div>
+    ${repFiltrosOpen ? repFiltrosSheetHtml() : ""}`;
+}
+
+function repFiltrosSheetHtml() {
+  const refrescar = "document.getElementById('reportes-body').innerHTML=renderReportesBody()";
+  const cuentaChips = cuentas.map(c =>
+    `<button class="pill sm ${reportesState.cuentas.includes(c)?"active":""}" onclick="toggleReportesCuenta('${esc(escJs(c))}')">${esc(c)}</button>`).join("");
+  const excelBtn = (dim, label) => {
+    const activo = !!reportesState[REP_FILTROS[dim].clave];
+    return `<button class="btn-secondary${activo ? " rep-filt-activo" : ""}" style="width:100%;text-align:left;margin-bottom:8px" onclick="repFiltroDesdeHoja('${dim}')">
+        ${label}: ${repFiltroResumen(dim)} <span style="float:right">▾</span></button>`;
+  };
+  return `
+    <div class="modal-overlay" onclick="if(event.target===this) repFiltrosToggle(false)">
+      <div class="modal-card" role="dialog" aria-label="Filtros">
+        <div class="modal-handle"></div>
+        <div class="movc-sheet-hdr">
+          <span class="modal-title" style="margin:0">Filtros</span>
+          <button class="movc-link" onclick="repLimpiarFiltros()">Limpiar todo</button>
+        </div>
+        <div class="movc-lbl">Cuentas</div>
+        <div class="pill-row" style="margin-bottom:14px">${cuentaChips || '<span class="note">Sin cuentas configuradas</span>'}</div>
+        ${excelBtn("cat", "Categorías")}
+        ${excelBtn("rubro", "Rubros")}
+        ${excelBtn("concepto", "Conceptos")}
+        <div class="movc-sheet-grid" style="margin-top:6px">
+          <div>
+            <div class="movc-lbl">Jugador/CT</div>
+            <div class="ss-filter-wrap">
+              <input class="inp ss-filter-input" id="rep-fil-jug" list="dl-rep-jugs" placeholder="Todos" aria-label="Jugador/CT"
+                     value="${esc(reportesState.jugadorCT)}" oninput="reportesState.jugadorCT=this.value; ${refrescar}">
+              <datalist id="dl-rep-jugs">${[
+                  ...jugadores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(j=>`<option value="${esc(j.nombre)}">`),
+                  ...grupos.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(g=>`<option value="${esc(g.nombre)}">`),
+                ].join("")}</datalist>
+              ${reportesState.jugadorCT ? `<button class="ss-filter-clear" aria-label="Borrar" onclick="reportesState.jugadorCT=''; renderResumen()">✕</button>` : ""}
+            </div>
+          </div>
+          <div>
+            <div class="movc-lbl">Adherente</div>
+            <div class="ss-filter-wrap">
+              <input class="inp ss-filter-input" id="rep-fil-adh" list="dl-rep-adhs" placeholder="Todos" aria-label="Adherente"
+                     value="${esc(reportesState.adherente)}" oninput="reportesState.adherente=this.value; ${refrescar}">
+              <datalist id="dl-rep-adhs">${adherentes.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(a=>`<option value="${esc(a.nombre)}">`).join("")}</datalist>
+              ${reportesState.adherente ? `<button class="ss-filter-clear" aria-label="Borrar" onclick="reportesState.adherente=''; renderResumen()">✕</button>` : ""}
+            </div>
+          </div>
+        </div>
+        <button class="movc-ver" onclick="repFiltrosToggle(false)">Ver resultados</button>
+      </div>
+    </div>`;
+}
+
+/** Cuerpo de la vista Cards: totales, "Ver por", contador + Tabla/Cards y las tarjetas. */
+function repCardsBodyHtml() {
+  const movs = getMovimientosReportes();
+  const nivel = repNivel();
+  const totIng = movs.filter(m => m.tipo === "INGRESO").reduce((s,m) => s+m.ingreso, 0);
+  const totEgr = movs.filter(m => m.tipo === "EGRESO" ).reduce((s,m) => s+m.egreso,  0);
+  const totNeto = totIng - totEgr;
+  const kpi = (lbl, val, cls) => `<div class="repc-kpi"><div class="stat-label">${lbl}</div><div class="repc-val ${cls}">${val}</div></div>`;
+  const seg = REP_NIVELES.map(n =>
+    `<button class="${nivel===n.id?"active":""}" onclick="setReportesNivel('${n.id}')">${n.id === "catrubro" ? "Cat. / Rubro" : n.label}</button>`).join("");
+  const head = `
+    <div class="repc-tot">
+      ${kpi("Ingresos", fmt(totIng), "ing")}
+      ${kpi("Egresos", fmt(totEgr), "egr")}
+      ${kpi("Neto", (totNeto>=0?"+":"−") + fmt(totNeto), totNeto>=0 ? "ing" : "egr")}
+    </div>
+    <div class="repc-seg" role="group" aria-label="Ver por">${seg}</div>
+    <div class="repc-info">
+      <span class="note">${movs.length} movimiento${movs.length!==1?"s":""}</span>
+      ${repVistaToggleHtml()}
+    </div>`;
+  if (!movs.length) return head + `<p class="note">Sin movimientos para estos filtros</p>`;
+
+  let cards;
+  if (nivel === "catrubro") {
+    cards = buildReportesJerarquia(movs).map(cat => {
+      const abierto = reportesState.catExpandido.has(cat.cat);
+      const rubros = !abierto ? "" : `<div class="repc-sub">${cat.rubros.map(r => {
+        const rKey = cat.cat + "||" + r.key;
+        const rExp = reportesState.rubroExpandido.has(rKey);
+        return repcFilaHtml(r, rExp, `toggleReportesRubro('${esc(escJs(rKey))}')`, true) + (rExp ? repcMovsHtml(r.movs) : "");
+      }).join("")}</div>`;
+      return `<div class="repc-card">${repcFilaHtml({ ...cat, nombre: cat.cat }, abierto, `toggleReportesCat('${esc(escJs(cat.cat))}')`)}${rubros}</div>`;
+    }).join("");
+  } else {
+    cards = buildReportesPlano(movs, nivel).map(g => {
+      const rKey = "||" + g.key;
+      const abierto = nivel === "cat" ? reportesState.catExpandido.has(g.key) : reportesState.rubroExpandido.has(rKey);
+      const onclickJs = nivel === "cat" ? `toggleReportesCat('${esc(escJs(g.key))}')` : `toggleReportesRubro('${esc(escJs(rKey))}')`;
+      return `<div class="repc-card">${repcFilaHtml(g, abierto, onclickJs)}${abierto ? `<div class="repc-sub">${repcMovsHtml(g.movs)}</div>` : ""}</div>`;
+    }).join("");
+  }
+  return head + cards;
+}
+
+/** Fila de un grupo en la vista Cards: nombre a lo ancho y Ing. / Egr. / Neto en columnas fijas. */
+function repcFilaHtml(g, abierto, onclickJs, sub) {
+  const neto = g.ing - g.egr;
+  const cel = (lbl, v, cls) => `<span class="repc-cel"><span class="repc-cel-lbl">${lbl}</span><span class="repc-num ${cls}">${v}</span></span>`;
+  return `<button type="button" class="repc-fila${sub ? " sub" : ""}" aria-expanded="${abierto}" onclick="${onclickJs}">
+      <span class="repc-nom"><span class="repc-chev${abierto ? " open" : ""}" aria-hidden="true">▸</span><span class="repc-nom-txt">${esc(g.nombre)}</span><span class="repc-cnt">${g.count}</span></span>
+      <span class="repc-nums">
+        ${cel("Ing.", g.ing ? fmt(g.ing) : "—", g.ing ? "ing" : "cero")}
+        ${cel("Egr.", g.egr ? fmt(g.egr) : "—", g.egr ? "egr" : "cero")}
+        ${cel("Neto", (neto>=0?"+":"−") + fmt(neto), neto>=0 ? "ing" : "egr")}
+      </span>
+    </button>`;
+}
+
+/** Movimientos de un grupo abierto en la vista Cards, del más nuevo al más viejo. */
+function repcMovsHtml(movs) {
+  return `<div class="repc-movs">${[...movs].sort((a,b) => (b.fecha||"").localeCompare(a.fecha||"")).map(m => {
+    const ing = m.tipo === "INGRESO";
+    const f = m.fecha ? m.fecha.slice(8,10) + "/" + m.fecha.slice(5,7) : "";
+    return `<div class="repc-mov">
+        <span class="repc-mov-f">${esc(f)}</span>
+        <span class="repc-mov-c">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</span>
+        <span class="repc-mov-m ${ing ? "ing" : "egr"}">${ing ? "+" : "−"}${fmt(ing ? m.ingreso : m.egreso)}</span>
+        <span class="movc-cta">${esc(m.cuenta)}</span>
+      </div>`;
+  }).join("")}</div>`;
 }
 
 /** Fila de un grupo de la tabla (categoría o rubro) con sus totales. `sangria` = va debajo de otra. */
@@ -5693,6 +5961,7 @@ function repMovsDetalleHtml(movs) {
 }
 
 function renderReportesBody() {
+  if (repVistaEfectiva() === "cards") return repCardsBodyHtml();
   const movs = getMovimientosReportes();
   if (!movs.length) {
     return `<p class="note">Sin movimientos para estos filtros</p>`;

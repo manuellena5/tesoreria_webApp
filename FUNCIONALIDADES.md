@@ -128,6 +128,12 @@ Otros / Internos · Internos.
 - **Patrimonio:** saldo de cuentas + valor de los granos en stock.
 - **Reportes:** tabla Categoría → Rubro → Movimiento (o sólo categoría, o sólo rubro), filtros
   por mes y cuenta, exportación.
+  Vista Tabla o **Cards** (pensada para el celular, con el mismo cambio Tabla/Cards que
+  Movimientos): período + exportar en una fila, meses como chips, buscador + hoja de **Filtros**
+  (cuentas, categorías, rubros, conceptos, jugador/CT, adherente) con los activos como chips,
+  totales Ingresos/Egresos/Neto arriba, "Ver por" como selector y cada grupo como tarjeta con el
+  nombre a lo ancho e Ing./Egr./Neto en columnas fijas; los montos achican la letra según el
+  espacio en vez de partirse. Con el celular apaisado se ve siempre la Tabla.
 - Eventos (peñas): resumen por evento (rubros 54–62 con `EventoID`).
 
 ### 3.4 Entidades (sub-pestañas)
@@ -266,6 +272,7 @@ a partir del historial de git.
 
 | Fecha | Cambio |
 |---|---|
+| 2026-10-20 | Reportes: vista Cards para el celular con cambio Tabla/Cards; apaisado muestra la Tabla; la app ya no queda fija en vertical (`manifest.json` → `orientation: any`). |
 | 2026-10-19 | Movimientos: nuevo layout de la vista Cards para el celular (KPIs 2×2, imp. déb/créd en una línea, filtros en hoja, filas compactas por día). |
 | 2026-10-14 | Avisos al guardar: rubro 6 sin adherente y rubros de partido sin partido. |
 | 2026-10-14 | Este documento. |

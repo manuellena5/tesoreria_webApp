@@ -2672,6 +2672,20 @@ function clearForm()  { resetF(); renderNuevo(); }
 // ── Rubro Searchable Select ───────────────────────────────────
 let ssRubroActiveIndex = -1;
 
+// Un rubro que suma o saca campos (21, 49, los de partido…) redibuja el formulario entero y el
+// campo de rubro se reemplaza por uno nuevo: sin esto el foco se pierde y Tab arranca de arriba.
+let ssRubroNoAbrir = false;   // el próximo foco del rubro es para devolverlo, no para abrir la lista
+function rubroFocoSinAbrir() {
+  const i = document.getElementById("ss-rubro-input");
+  if (!i) return;
+  ssRubroNoAbrir = true;
+  i.focus();
+}
+function rubroFocoSiguiente() {
+  const c = document.getElementById("f-concepto");
+  if (c) c.focus(); else rubroFocoSinAbrir();
+}
+
 function initRubroSelect() {
   const input = document.getElementById("ss-rubro-input");
   const drop  = document.getElementById("ss-rubro-drop");
@@ -2679,6 +2693,7 @@ function initRubroSelect() {
 
   input.oninput = function() { filterRubros(this.value); drop.style.display = "block"; };
   input.onfocus = function() {
+    if (ssRubroNoAbrir) { ssRubroNoAbrir = false; return; }
     if (F.rubro) input.select(); else input.value = "";
     filterRubros(input.value);
     drop.style.display = "block";
@@ -2710,11 +2725,15 @@ function initRubroSelect() {
       const item = items[ssRubroActiveIndex >= 0 ? ssRubroActiveIndex : 0];
       if (e.key === "Enter") {
         e.preventDefault(); // evita submit accidental
-        selectRubroItem(item, input, drop, true);
+        if (selectRubroItem(item, input, drop, true)) rubroFocoSinAbrir();
       } else {
         // Tab: no forzamos blur ni preventDefault, así el navegador mueve el foco
         // de forma nativa al siguiente campo (Concepto) después de seleccionar.
-        selectRubroItem(item, input, drop, false);
+        // Si el rubro redibujó el formulario, el Tab nativo ya no tiene de dónde seguir: se hace a mano.
+        if (selectRubroItem(item, input, drop, false)) {
+          e.preventDefault();
+          if (e.shiftKey) rubroFocoSinAbrir(); else rubroFocoSiguiente();
+        }
       }
     }
   };
@@ -2722,7 +2741,8 @@ function initRubroSelect() {
     const item = e.target.closest("[data-cod]");
     if (!item) return;
     e.preventDefault(); // Previene que el input pierda el foco
-    selectRubroItem(item, input, drop, true);
+    // Con mouse se devuelve el foco al rubro para seguir con Tab; en el celular no, para no abrir el teclado.
+    if (selectRubroItem(item, input, drop, true) && window.matchMedia("(pointer: fine)").matches) rubroFocoSinAbrir();
   };
   filterRubros("");
 }
@@ -2939,8 +2959,9 @@ function adjFormQuitar(i) {
   adjFormRefrescar();
 }
 
+/** Devuelve true si el formulario se redibujó (el campo de rubro es otro elemento). */
 function selectRubroItem(item, input, drop, blurAfter) {
-  if (!item) return;
+  if (!item) return false;
   const firmaAntes = firmaCamposDelRubro();
   F.codRubro  = item.dataset.cod;
   F.rubro     = item.dataset.nombre;
@@ -2949,8 +2970,8 @@ function selectRubroItem(item, input, drop, blurAfter) {
   drop.style.display = "none";
   if (blurAfter) input.blur(); // Forzamos el blur después de seleccionar (clic / Enter)
   // Auto-set tipo to INTERNO if rubro 49
-  if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return; }
-  if (F.codRubro === "49" || firmaCamposDelRubro() !== firmaAntes) { renderNuevo(); return; }
+  if (F.codRubro === "49" && F.tipo !== "INTERNO") { F.tipo = "INTERNO"; renderNuevo(); return true; }
+  if (F.codRubro === "49" || firmaCamposDelRubro() !== firmaAntes) { renderNuevo(); return true; }
   // Highlight adherente row
   const adhRow = document.getElementById("adherente-row");
   if (adhRow) {
@@ -2959,6 +2980,7 @@ function selectRubroItem(item, input, drop, blurAfter) {
   }
   syncEntradasPartidoRow();
   refreshImpDC();   // el rubro 9 (gastos/intereses de cuenta) cambia la regla
+  return false;
 }
 
 function filterRubros(query) {

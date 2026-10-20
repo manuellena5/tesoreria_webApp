@@ -272,6 +272,7 @@ a partir del historial de git.
 
 | Fecha | Cambio |
 |---|---|
+| 2026-10-20 | Nuevo movimiento: al elegir un rubro que redibuja el formulario (21, 49, de partido…) el foco no se pierde; Tab sigue en Concepto. |
 | 2026-10-20 | Reportes: vista Cards para el celular con cambio Tabla/Cards; apaisado muestra la Tabla; la app ya no queda fija en vertical (`manifest.json` → `orientation: any`). |
 | 2026-10-19 | Movimientos: nuevo layout de la vista Cards para el celular (KPIs 2×2, imp. déb/créd en una línea, filtros en hoja, filas compactas por día). |
 | 2026-10-14 | Avisos al guardar: rubro 6 sin adherente y rubros de partido sin partido. |

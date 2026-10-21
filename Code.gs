@@ -133,7 +133,7 @@ const MOV_COLS = [
   "ID","MES","Fecha","CodRubro","Rubro","Categoria","Concepto",
   "Egreso","Ingreso","MontoFinal","Cuenta","CuentaDestino","ModoPago",
   "JugadorCT","Adherente","Observacion","Comprobante","SeguroReintegro","Tipo","timestamp","PartidoID","EventoID",
-  "Vinculos","ItemsDetalle","JugadorID","AdherenteID","Adjuntos","ImpDC","CuentaID","CuentaDestinoID"
+  "Vinculos","ItemsDetalle","JugadorID","AdherenteID","Adjuntos","ImpDC","CuentaID","CuentaDestinoID","MiembrosGrupo"
 ];
 // Índices de columna (1-based) de MOV_COLS que se escriben o leen sueltos. Están acá
 // para que agregar una columna nueva al final no vuelva a desalinear una escritura
@@ -148,8 +148,15 @@ const MOV_IX = {
   ADJUNTOS:     27,
   IMP_DC:       28,
   CUENTA_ID:    29,
-  CUENTA_DEST_ID: 30
+  CUENTA_DEST_ID: 30,
+  MIEMBROS_GRUPO: 31
 };
+// MiembrosGrupo: JSON de IDs de jugadores — quiénes formaban el grupo (JugadorID apunta a la hoja
+// Grupos) cuando se cargó el movimiento. Con eso el reparto por persona (Resumen › Jugadores,
+// Reportes) no cambia si después alguien sale del grupo. Vacío en los movimientos que no son de
+// grupo. saveMov / saveBatch lo fijan en el alta; updateMov lo conserva salvo que el movimiento
+// pase a otro grupo; fijarMiembrosGrupos lo completa (con la composición de hoy) en las filas que
+// no lo tienen — las altas hechas por otras acciones (pagos, premios) lo toman en esa pasada.
 // CuentaID / CuentaDestinoID: vínculo durable con la hoja Cuentas, igual que JugadorID. Las columnas
 // Cuenta / CuentaDestino quedan como copia legible del nombre: renombrar una cuenta las reescribe en
 // cascada por ID (ver saveCuenta). Las filas que se escriben sin ID (altas desde el backend, clientes
@@ -637,6 +644,7 @@ function handleAction(data) {
         impDC:         normImpDC_(r[27]),
         cuentaId:        String(r[28]||""),
         cuentaDestinoId: String(r[29]||""),
+        miembrosGrupo:   parseMiembrosGrupo_(r[30]),
       }));
       return { ok: true, movimientos };
     }
@@ -662,7 +670,8 @@ function handleAction(data) {
         m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
         stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||"",
         "", normImpDC_(m.impDC),  // Adjuntos (vacío en un alta: se suben después) · ImpDC
-        m.cuentaId||"", m.cuentaDestinoId||""
+        m.cuentaId||"", m.cuentaDestinoId||"",
+        (m.jugadorId || m.jugadorCT) ? miembrosParaAlta_(m, gruposIx_()) : ""
       ]);
       if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
         autoUpsertPago(id, m.adherente, m.mes, "PAGADO");
@@ -714,6 +723,14 @@ function handleAction(data) {
           // viejo, o una edición armada desde otra pantalla, no conoce el campo y no debe borrarlo.
           if (m.impDC !== undefined) sh.getRange(i + 1, MOV_IX.IMP_DC).setValue(normImpDC_(m.impDC));
           sh.getRange(i + 1, MOV_IX.CUENTA_ID, 1, 2).setValues([[m.cuentaId || "", m.cuentaDestinoId || ""]]);
+          // Los integrantes guardados se conservan mientras el movimiento siga en el mismo grupo:
+          // editar el monto o el concepto no tiene por qué cambiar entre quiénes se repartía.
+          const prevMiem = String(all[i][MOV_IX.MIEMBROS_GRUPO - 1] || "").trim();
+          const mismoDestino = String(m.jugadorId || "") === String(all[i][MOV_IX.JUGADOR_ID - 1] || "") &&
+                               normStr_gs(m.jugadorCT || "") === normStr_gs(String(all[i][MOV_IX.JUGADOR_CT - 1] || ""));
+          sh.getRange(i + 1, MOV_IX.MIEMBROS_GRUPO).setValue(
+            mismoDestino && prevMiem ? prevMiem
+            : (m.jugadorId || m.jugadorCT) ? miembrosParaAlta_(m, gruposIx_()) : "");
           if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
             autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
           }
@@ -745,6 +762,7 @@ function handleAction(data) {
     case "saveBatch": {
       const sh   = getOrCreateSheet(MOV_SHEET, MOV_COLS);
       const list = (data.movimientos || []).map(normalizeMovFields).map(resolverCuentasMov_);
+      const ixGrp = gruposIx_();
       for (const m of list) {
         if (idExisteEnMov(sh, m.id)) m.id = uid_gs();
         sh.appendRow([
@@ -756,7 +774,8 @@ function handleAction(data) {
           tsToIsoLocal(m.timestamp) || nowTsLocal(),
           m.partidoId||"", m.eventoId||"", stringifyVinculos(m.vinculos),
           stringifyItemsDetalle(m.itemsDetalle), m.jugadorId||"", m.adherenteId||"",
-          "", normImpDC_(m.impDC), m.cuentaId||"", m.cuentaDestinoId||""
+          "", normImpDC_(m.impDC), m.cuentaId||"", m.cuentaDestinoId||"",
+          miembrosParaAlta_(m, ixGrp)
         ]);
         if (m.adherente && m.tipo === "INGRESO" && isAdherenteRubro(m.codRubro)) {
           autoUpsertPago(m.id, m.adherente, m.mes, "PAGADO");
@@ -940,6 +959,28 @@ function handleAction(data) {
     // texto contra los nombres de las entidades. Idempotente: sólo toca filas con el ID vacío,
     // así que se puede volver a correr después de dar de alta entidades que faltaban.
     // Devuelve los nombres que no matchearon con nada, para revisarlos a mano.
+    // Completa MiembrosGrupo con la composición ACTUAL del grupo en los movimientos de grupo que no
+    // lo tienen (los cargados antes de que existiera la columna, o por acciones que no lo fijan).
+    // Idempotente: no toca los que ya tienen integrantes, así lo pasado no cambia al correrla de nuevo.
+    case "fijarMiembrosGrupos": {
+      const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
+      const all = sh.getDataRange().getValues();
+      const out = { ok: true, fijados: 0, yaTenian: 0, sinMiembros: 0 };
+      if (all.length <= 1) return out;
+      const ix  = gruposIx_();
+      const col = [];
+      for (let i = 1; i < all.length; i++) {
+        const actual = String(all[i][MOV_IX.MIEMBROS_GRUPO - 1] || "").trim();
+        if (actual) { col.push([actual]); out.yaTenian++; continue; }
+        const g = all[i][0] ? grupoDeMov_(ix, all[i][MOV_IX.JUGADOR_ID - 1], all[i][MOV_IX.JUGADOR_CT - 1]) : null;
+        const v = g ? miembrosGrupoJson_(g.miembros) : "";
+        if (g && v) out.fijados++; else if (g) out.sinMiembros++;
+        col.push([v]);
+      }
+      sh.getRange(2, MOV_IX.MIEMBROS_GRUPO, col.length, 1).setValues(col);
+      return out;
+    }
+
     case "backfillIds": {
       const sh  = getOrCreateSheet(MOV_SHEET, MOV_COLS);
       const all = sh.getDataRange().getValues();
@@ -2530,6 +2571,44 @@ function parseVinculosJson(raw) {
 function stringifyVinculos(vinculos) {
   if (!vinculos || !Array.isArray(vinculos) || !vinculos.length) return "";
   return JSON.stringify(vinculos);
+}
+
+// ── MiembrosGrupo: integrantes de un grupo al cargar el movimiento ───────────
+// Índice de grupos (incluye los dados de baja: un movimiento viejo puede apuntar a uno).
+function gruposIx_() {
+  const rows = getOrCreateSheet(GRP_SHEET, GRP_COLS).getDataRange().getValues();
+  const porId = {}, porNombre = {};
+  for (let i = 1; i < rows.length; i++) {
+    if (!rows[i][0]) continue;
+    let miembros = safeParseJSON(String(rows[i][2] || "[]"), []);
+    if (!Array.isArray(miembros)) miembros = [];
+    const g = { id: String(rows[i][0]), miembros: miembros.map(String) };
+    porId[g.id] = g;
+    porNombre[normStr_gs(String(rows[i][1] || ""))] = g;
+  }
+  return { porId, porNombre };
+}
+/** Grupo al que apunta un movimiento: por JugadorID; sin ID, por el nombre (filas viejas). */
+function grupoDeMov_(ix, jugadorId, jugadorCT) {
+  if (jugadorId) return ix.porId[String(jugadorId)] || null;
+  return ix.porNombre[normStr_gs(String(jugadorCT || "").replace(/^GRP:/i, "").trim())] || null;
+}
+function miembrosGrupoJson_(ids) {
+  return Array.isArray(ids) && ids.length ? JSON.stringify(ids.map(String)) : "";
+}
+function parseMiembrosGrupo_(raw) {
+  if (!raw) return [];
+  const a = safeParseJSON(String(raw), []);
+  return Array.isArray(a) ? a.map(String) : [];
+}
+/** Lo que se guarda en MiembrosGrupo al dar de alta: los integrantes que vio el cliente al guardar
+ *  (un alta offline se sincroniza más tarde) o, si no los manda, los del grupo hoy. "" si no es
+ *  un movimiento de grupo. */
+function miembrosParaAlta_(m, ix) {
+  const g = grupoDeMov_(ix, m.jugadorId, m.jugadorCT);
+  if (!g) return "";
+  if (Array.isArray(m.miembrosGrupo) && m.miembrosGrupo.length) return miembrosGrupoJson_(m.miembrosGrupo);
+  return miembrosGrupoJson_(g.miembros);
 }
 
 function parseItemsDetalleJson(raw) {

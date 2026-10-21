@@ -2480,6 +2480,45 @@ htmlT = app.renderTransferencias();
 check("uno ya pagado sigue deshabilitado y sin tildar", /value="f-prem1"[^>]*disabled/.test(htmlT) && !/value="f-prem1"[^>]*checked/.test(htmlT));
 app.pjPartidosSel = [];
 
+seccion("Reportes · gasto de grupo por persona y filtro Ingresos/Egresos");
+app.jugadores = [{ id: "j1", nombre: "LENCINA" }, { id: "j2", nombre: "PEREZ" }, { id: "j3", nombre: "GOMEZ" }];
+app.grupos = [{ id: "g1", nombre: "CASA 1", miembros: ["j1", "j2", "j3"] }];
+const repMov = (o) => Object.assign({ fecha: "2026-10-05", mes: "202610", tipo: "EGRESO", ingreso: 0, egreso: 0, cuenta: "MP",
+  categoria: "Jugadores y Cuerpo Técnico", codRubro: "45", rubro: "ALQUILER", concepto: "" }, o);
+app.movimientos = [
+  repMov({ id: "R1", jugadorCT: "CASA 1", jugadorId: "g1", egreso: 100000, montoFinal: 100000 }),
+  repMov({ id: "R2", jugadorCT: "LENCINA", jugadorId: "j1", egreso: 5000, montoFinal: 5000 }),
+  repMov({ id: "R3", jugadorCT: "PEREZ", jugadorId: "j2", tipo: "INGRESO", ingreso: 2000, montoFinal: 2000 })];
+app.reportesState.meses = ["2026-10"]; app.reportesState.cuentas = []; app.reportesState.tipo = "";
+app.reportesState.filtroCat = app.reportesState.filtroRubro = app.reportesState.filtroConcepto = null;
+app.reportesState.adherente = ""; app.reportesState.search = "";
+app.reportesState.jugadorCT = "lencina";
+let repMs = app.getMovimientosReportes();
+igual("buscando a un integrante entra lo suyo y lo del grupo", repMs.map(m => m.id).sort(), ["R1", "R2"]);
+const r1 = repMs.find(m => m.id === "R1");
+igual("del grupo, sólo su parte (100.000 / 3, el peso de resto al primero por id)", r1.egreso, 33334);
+igual("y dice de qué grupo viene", app.repTextoGrupo(r1), "(1/3 de CASA 1)");
+igual("el movimiento original no se toca", app.movimientos[0].egreso, 100000);
+app.reportesState.jugadorCT = "casa 1";
+igual("buscando el grupo, va entero", app.getMovimientosReportes().map(m => m.egreso), [100000]);
+app.reportesState.jugadorCT = "";
+app.reportesState.tipo = "INGRESO";
+igual("Mostrar: Ingresos deja sólo ingresos", app.getMovimientosReportes().map(m => m.id), ["R3"]);
+app.reportesState.tipo = "EGRESO";
+igual("Mostrar: Egresos deja sólo egresos", app.getMovimientosReportes().map(m => m.id).sort(), ["R1", "R2"]);
+app.reportesState.tipo = "";
+// Integrantes guardados en el movimiento (MiembrosGrupo): mandan sobre la composición actual.
+app.movimientos = [repMov({ id: "R4", jugadorCT: "CASA 1", jugadorId: "g1", egreso: 100000, montoFinal: 100000, miembrosGrupo: ["j1", "j2"] })];
+app.reportesState.jugadorCT = "lencina";
+igual("con integrantes guardados se reparte entre ellos, no entre los de hoy", app.getMovimientosReportes()[0].egreso, 50000);
+app.reportesState.jugadorCT = "gomez";
+igual("y quien entró después al grupo no carga con ese gasto", app.getMovimientosReportes().length, 0);
+app.reportesState.jugadorCT = "";
+app.editId = null;
+igual("al guardar un movimiento de grupo se toman los integrantes de hoy", app.miembrosGrupoParaGuardar("CASA 1", "g1"), ["j1", "j2", "j3"]);
+igual("y uno de un jugador suelto no guarda nada", app.miembrosGrupoParaGuardar("PEREZ", "j2"), []);
+app.movimientos = []; app.grupos = []; app.jugadores = [];
+
 console.log("\n" + "═".repeat(64));
 console.log(_fail === 0 ? `TODO OK — ${_ok} verificaciones` : `${_fail} FALLARON — ${_ok} ok`);
 process.exitCode = _fail === 0 ? 0 : 1;

@@ -88,12 +88,13 @@ function movRow(campos) {
     egreso: 7, ingreso: 8, montoFinal: 9, cuenta: 10, cuentaDestino: 11, modoPago: 12,
     jugadorCT: 13, adherente: 14, observacion: 15, comprobante: 16, seguroReintegro: 17,
     tipo: 18, timestamp: 19, partidoId: 20, eventoId: 21,
-    vinculos: 22, itemsDetalle: 23, jugadorId: 24, adherenteId: 25, adjuntos: 26, impDC: 27
+    vinculos: 22, itemsDetalle: 23, jugadorId: 24, adherenteId: 25, adjuntos: 26, impDC: 27,
+    cuentaId: 28, cuentaDestinoId: 29, miembrosGrupo: 30
   };
   for (const k of Object.keys(campos)) {
     if (ix[k] === undefined) throw new Error("Campo desconocido en movRow: " + k);
     const v = campos[k];
-    r[ix[k]] = (k === "vinculos" || k === "itemsDetalle" || k === "adjuntos") && typeof v !== "string" ? JSON.stringify(v) : v;
+    r[ix[k]] = (k === "vinculos" || k === "itemsDetalle" || k === "adjuntos" || k === "miembrosGrupo") && typeof v !== "string" ? JSON.stringify(v) : v;
   }
   return r;
 }

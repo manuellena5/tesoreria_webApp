@@ -41,7 +41,7 @@ Convenciones transversales:
 
 | Hoja | Columnas |
 |---|---|
-| **Movimientos** | ID, MES (`YYYYMM`), Fecha, CodRubro, Rubro, Categoria, Concepto, Egreso, Ingreso, MontoFinal, Cuenta, CuentaDestino, ModoPago, JugadorCT, Adherente, Observacion, Comprobante, SeguroReintegro, Tipo, timestamp, PartidoID, EventoID, Vinculos, ItemsDetalle, JugadorID, AdherenteID, Adjuntos, ImpDC, CuentaID, CuentaDestinoID |
+| **Movimientos** | ID, MES (`YYYYMM`), Fecha, CodRubro, Rubro, Categoria, Concepto, Egreso, Ingreso, MontoFinal, Cuenta, CuentaDestino, ModoPago, JugadorCT, Adherente, Observacion, Comprobante, SeguroReintegro, Tipo, timestamp, PartidoID, EventoID, Vinculos, ItemsDetalle, JugadorID, AdherenteID, Adjuntos, ImpDC, CuentaID, CuentaDestinoID, MiembrosGrupo |
 | **Cuentas** | ID, Nombre, Activa, Orden, AlicImpDC, InternosExentos |
 | **Jugadores** | ID, Nombre, Activo |
 | **Grupos** | ID, Nombre, Miembros (JSON de IDs de jugadores), Activo |
@@ -134,6 +134,10 @@ Otros / Internos · Internos.
   totales Ingresos/Egresos/Neto arriba, "Ver por" como selector y cada grupo como tarjeta con el
   nombre a lo ancho e Ing./Egr./Neto en columnas fijas; los montos achican la letra según el
   espacio en vez de partirse. Con el celular apaisado se ve siempre la Tabla.
+  Filtro **Mostrar: Neto / Ingresos / Egresos** (en las dos vistas). Filtrando por Jugador/CT, un
+  movimiento cargado a un grupo que lo incluye entra con **su parte** (monto ÷ miembros, mismo
+  reparto que Resumen › Jugadores, ver `miembrosDelMovimiento`) y la marca "(1/N de GRUPO)", también
+  en el Excel; buscando por el nombre del grupo va entero.
 - Eventos (peñas): resumen por evento (rubros 54–62 con `EventoID`).
 
 ### 3.4 Entidades (sub-pestañas)
@@ -168,7 +172,7 @@ Otros / Internos · Internos.
   internos no pagan. Renombrar actualiza todos sus movimientos. Sólo se borra una cuenta sin
   movimientos; si tiene, se desactiva (deja de ofrecerse para cargar, sus movimientos quedan).
 - Métodos de pago, exportar/importar Excel, recargar datos, backups locales por día (ver una
-  copia vieja en sólo lectura), versión de la app, auditoría, vincular movimientos por ID,
+  copia vieja en sólo lectura), versión de la app, auditoría, vincular movimientos por ID, fijar integrantes de grupos,
   completar tipo de pagos a jugadores, diagnóstico de arranque, integridad de datos (referencias
   rotas en IDs y en los JSON), atajos de teclado.
 
@@ -210,8 +214,14 @@ Otros / Internos · Internos.
   esto entra en Resumen por Partido.
 
 ### 4.5 Grupos
-- `JugadorCT` guarda un solo nombre (jugador **o** grupo). La composición del grupo es la
-  actual (sin historia); el prorrateo por cabeza es una imputación, no una medición.
+- `JugadorCT` guarda un solo nombre (jugador **o** grupo); el prorrateo por cabeza es una
+  imputación, no una medición.
+- **Integrantes guardados (`MiembrosGrupo`):** un movimiento de grupo guarda los IDs de quienes lo
+  formaban al cargarlo, y el reparto por persona (Resumen › Jugadores, Reportes) usa esos. Editar el
+  movimiento los conserva mientras siga en el mismo grupo; pasarlo a otro grupo toma los de ese.
+  Sacar a alguien de un grupo no cambia lo ya cargado. Los movimientos sin integrantes guardados
+  (anteriores a la columna, o dados de alta por pagos/premios) usan la composición actual hasta
+  correr **Fijar integrantes de grupos** (Configuración), que los completa con la de ese momento.
 
 ### 4.6 Integridad
 - Borrar sólo si el ID identifica exactamente una fila; IDs duplicados no se pisan (`saveMov`
@@ -247,12 +257,13 @@ cargan el `<script>` de index.html en Node.
 
 | Archivo | Cubre |
 |---|---|
-| frontend.js | Reglas del front (pagos a jugadores, premios, filtros, etc.) |
+| frontend.js | Reglas del front (pagos a jugadores, premios, filtros, reparto de grupos en Reportes, etc.) |
 | harness.js / bootstrap.js | Backend básico y carga inicial en una sola consulta |
 | premios.js, reparto.js, entradas.js, granos.js, adjuntos.js, publico.js, seguridad.js | Cada módulo |
 | impdc.js | Impuesto a los débitos y créditos |
 | cuentas.js | ABM de cuentas, migración, renombre en cascada |
 | avisos.js | Avisos de olvido al guardar |
+| grupos.js | Integrantes de grupo guardados en el movimiento (alta, edición, Fijar integrantes) |
 
 ---
 
@@ -272,6 +283,8 @@ a partir del historial de git.
 
 | Fecha | Cambio |
 |---|---|
+| 2026-10-21 | Grupos: cada movimiento de grupo guarda sus integrantes (`MiembrosGrupo`); el reparto por persona ya no cambia si alguien sale del grupo. Botón Fijar integrantes en Configuración. |
+| 2026-10-21 | Reportes: filtro Mostrar Neto/Ingresos/Egresos; filtrando por jugador, el gasto de grupo entra con su parte individual. |
 | 2026-10-20 | Nuevo movimiento: al elegir un rubro que redibuja el formulario (21, 49, de partido…) el foco no se pierde; Tab sigue en Concepto. |
 | 2026-10-20 | Reportes: vista Cards para el celular con cambio Tabla/Cards; apaisado muestra la Tabla; la app ya no queda fija en vertical (`manifest.json` → `orientation: any`). |
 | 2026-10-19 | Movimientos: nuevo layout de la vista Cards para el celular (KPIs 2×2, imp. déb/créd en una línea, filtros en hoja, filas compactas por día). |

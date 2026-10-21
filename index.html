@@ -1195,6 +1195,7 @@ let reportesState = {
   filtroConcepto: null,   // conceptos (repConceptoValor)
   // A qué nivel se ve la tabla: "catrubro" (categoría → rubro), "cat" o "rubro". Ver REP_NIVELES.
   nivel: "catrubro",
+  tipo: "",   // "" = ingresos y egresos (neto) · "INGRESO" · "EGRESO"
   jugadorCT: "",
   adherente: "",
   search: "",
@@ -1629,6 +1630,7 @@ const Storage = {
   async renameJugador(id, nombre) { return this._post({ action:"renameJugador", id, nombre }); },
   async deleteJugador(id)   { return this._post({ action:"deleteJugador", id  }); },
   async backfillIds()       { return this._post({ action:"backfillIds"         }); },
+  async fijarMiembrosGrupos() { return this._post({ action:"fijarMiembrosGrupos" }); },
   async checkIntegridad()   { return this._post({ action:"checkIntegridad"     }); },
   async repararPagosHuerfanos() { return this._post({ action:"repararPagosHuerfanos" }); },
   async listGrupos()        { return this._post({ action:"listGrupos"         }); },
@@ -3088,6 +3090,7 @@ async function saveMovimiento() {
       cuentaDestino: F.cuentaDestino || "",
       modoPago: usaReparto ? filasRep[0].modoPago : F.modoPago,
       jugadorCT: F.jugadorCT || "", jugadorId: entidadIdPorNombre(F.jugadorCT),
+      miembrosGrupo: miembrosGrupoParaGuardar(F.jugadorCT || "", entidadIdPorNombre(F.jugadorCT)),
       adherente: F.adherente || "", adherenteId: adherenteIdPorNombre(F.adherente),
       observacion: F.observacion || "", comprobante: F.comprobante || "",
       seguroReintegro: F.seguroReintegro || 0,
@@ -5529,19 +5532,67 @@ function renderPartidoResumen() {
 // `excepto` ("cat" | "rubro" | "concepto") saltea ese filtro: los valores que ofrece el filtro de
 // Rubros salen de lo que dejan pasar los demás (incluida Categoría), como en Excel — así, con una
 // categoría elegida, la lista de rubros sólo trae los de esa categoría.
+/** Grupo al que apunta un movimiento: por ID si lo tiene, si no por nombre. */
+function grupoDelMovimiento(m) {
+  return (m.jugadorId && grupos.find(g => g.id === m.jugadorId))
+      || grupos.find(g => g.nombre === stripGrpPrefix(m.jugadorCT)) || null;
+}
+
+/** Filtro Jugador/CT de Reportes. Un movimiento de grupo que se encuentra por uno de sus
+ *  integrantes vuelve como COPIA con la parte de esa persona —mismo reparto que Resumen ›
+ *  Jugadores: miembrosDelMovimiento + repartirEntero sobre los ids ordenados—, así los totales
+ *  muestran el gasto individual. Buscado por el nombre del grupo (o de un jugador suelto), va
+ *  entero. null = el movimiento no entra. */
+function repAplicarJugador(m, q) {
+  const n = normStr(q);
+  if (!n) return m;
+  if (normStr(stripGrpPrefix(m.jugadorCT)).includes(n)) return m;
+  const grupo = grupoDelMovimiento(m);
+  if (!grupo) return null;
+  const ids = miembrosDelMovimiento(m, grupo).slice().sort();
+  if (!ids.length) return null;
+  const monto  = m.tipo === "INGRESO" ? m.ingreso : m.egreso;
+  const partes = repartirEntero(monto, ids.length);
+  let parte = 0, cuantos = 0;
+  ids.forEach((id, i) => {
+    const j = jugadores.find(x => x.id === id);
+    if (j && normStr(j.nombre).includes(n)) { parte += partes[i]; cuantos++; }
+  });
+  if (!cuantos) return null;
+  return { ...m,
+    ingreso: m.tipo === "INGRESO" ? parte : 0,
+    egreso:  m.tipo === "EGRESO"  ? parte : 0,
+    montoFinal: parte,
+    repGrupo: grupo.nombre, repDivisor: ids.length, repCuantos: cuantos, repMontoGrupo: monto };
+}
+/** "(1/4 de GRUPO)" para un movimiento prorrateado por repAplicarJugador; "" si no lo es. */
+function repTextoGrupo(m) {
+  return m.repGrupo ? `(${m.repCuantos}/${m.repDivisor} de ${m.repGrupo})` : "";
+}
+function repNotaGrupoHtml(m) {
+  return m.repGrupo ? ` <span class="note" style="font-size:10px" title="Total del grupo: ${fmt(m.repMontoGrupo)}">${esc(repTextoGrupo(m))}</span>` : "";
+}
+
+const REP_TIPOS = [{ id: "", label: "Neto" }, { id: "INGRESO", label: "Ingresos" }, { id: "EGRESO", label: "Egresos" }];
+function setReportesTipo(t) {
+  reportesState.tipo = t;
+  renderResumen();
+}
+
 function getMovimientosReportes(excepto) {
-  const jugExpReportes = gruposQueContienen(reportesState.jugadorCT);
   const fCat = excepto === "cat" ? null : reportesState.filtroCat;
   const fRub = excepto === "rubro" ? null : reportesState.filtroRubro;
   const fCon = excepto === "concepto" ? null : reportesState.filtroConcepto;
   return movimientos
     .filter(m => m.tipo === "INGRESO" || m.tipo === "EGRESO")
+    .filter(m => !reportesState.tipo || m.tipo === reportesState.tipo)
     .filter(m => !reportesState.meses.length  || reportesState.meses.includes(mesFromRecord(m)))
     .filter(m => !reportesState.cuentas.length || reportesState.cuentas.includes(m.cuenta))
     .filter(m => !fCat || fCat.has(repCatValor(m)))
     .filter(m => !fRub || fRub.has(repRubroClave(m)))
     .filter(m => !fCon || fCon.has(repConceptoValor(m)))
-    .filter(m => matchJugadorOGrupo(m.jugadorCT, reportesState.jugadorCT, jugExpReportes))
+    .map(m => repAplicarJugador(m, reportesState.jugadorCT))
+    .filter(Boolean)
     .filter(m => !reportesState.adherente || normStr(m.adherente).includes(normStr(reportesState.adherente)))
     .filter(m => {
       const q = normStr(reportesState.search);
@@ -5724,6 +5775,10 @@ function renderReportesTab() {
       <span style="flex:1"></span>
       ${repVistaToggleHtml()}
     </div>
+    <div class="filter-row" style="align-items:center">
+      <span class="note" style="white-space:nowrap">Mostrar</span>
+      ${REP_TIPOS.map(x => `<button class="pill sm ${(reportesState.tipo||"")===x.id?"active":""}" onclick="setReportesTipo('${x.id}')">${x.label}</button>`).join("")}
+    </div>
 
     <div id="reportes-body">${renderReportesBody()}</div>
   `;
@@ -5892,6 +5947,8 @@ function repCardsBodyHtml() {
       ${kpi("Egresos", fmt(totEgr), "egr")}
       ${kpi("Neto", (totNeto>=0?"+":"−") + fmt(totNeto), totNeto>=0 ? "ing" : "egr")}
     </div>
+    <div class="repc-seg" role="group" aria-label="Mostrar">${REP_TIPOS.map(x =>
+      `<button class="${(reportesState.tipo||"")===x.id?"active":""}" onclick="setReportesTipo('${x.id}')">${x.label}</button>`).join("")}</div>
     <div class="repc-seg" role="group" aria-label="Ver por">${seg}</div>
     <div class="repc-info">
       <span class="note">${movs.length} movimiento${movs.length!==1?"s":""}</span>
@@ -5942,7 +5999,7 @@ function repcMovsHtml(movs) {
     const f = m.fecha ? m.fecha.slice(8,10) + "/" + m.fecha.slice(5,7) : "";
     return `<div class="repc-mov">
         <span class="repc-mov-f">${esc(f)}</span>
-        <span class="repc-mov-c">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</span>
+        <span class="repc-mov-c">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}${repNotaGrupoHtml(m)}</span>
         <span class="repc-mov-m ${ing ? "ing" : "egr"}">${ing ? "+" : "−"}${fmt(ing ? m.ingreso : m.egreso)}</span>
         <span class="movc-cta">${esc(m.cuenta)}</span>
       </div>`;
@@ -5973,7 +6030,7 @@ function repMovsDetalleHtml(movs) {
           const montoSign  = m.tipo === "INGRESO" ? "+" : "−";
           return `<tr>
             <td style="font-size:11px">${esc(fechaD)}</td>
-            <td style="font-size:11px">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}</td>
+            <td style="font-size:11px">${esc(m.concepto) || '<span style="color:var(--text3)">Sin concepto</span>'}${repNotaGrupoHtml(m)}</td>
             <td class="${montoClass}" style="font-size:11px">${montoSign}${fmt(montoVal)}</td>
             <td style="font-size:11px">${esc(m.cuenta)}</td>
           </tr>`;
@@ -6088,7 +6145,7 @@ function toggleReportesRubro(key) {
 /** Filas del Excel de Reportes para el nivel elegido: los mismos grupos que se ven en pantalla,
  *  cada uno con sus movimientos debajo. Puro, para poder probarlo. → { headers, rows, anchos } */
 function reportesFilasExcel(movs, nivel) {
-  const filaMov = m => [m.fecha, m.concepto || "",
+  const filaMov = m => [m.fecha, [m.concepto || "", repTextoGrupo(m)].filter(Boolean).join(" "),
     m.tipo==="INGRESO" ? m.ingreso : "", m.tipo==="EGRESO" ? m.egreso : "", m.cuenta || ""];
   const porFecha = lista => [...lista].sort((a,b) => a.fecha.localeCompare(b.fecha));
   const rows = [];
@@ -8311,13 +8368,24 @@ function jugadorResMiembrosNombres(grupo) {
 // Devuelve ids de jugadores que existen (los borrados se descartan acá, no río abajo:
 // si se filtraran después, el reparto perdería plata y los totales dejarían de cerrar).
 //
-// Nivel 0 (hoy)  → la composición actual del grupo. Los meses viejos se reparten con el
-//                  plantel de hoy; si el grupo rotó, los promedios históricos se corren.
-// Nivel 1 (después) → devolver m.miembrosSnapshot si el movimiento lo trae, y caer al actual
-//                  si no. Arregla de acá en adelante sin tocar lo viejo.
+// Nivel 1 (implementado) → los integrantes guardados en el movimiento (columna MiembrosGrupo:
+//                  se fija al cargarlo, y "Fijar integrantes de grupos" en Configuración la
+//                  completa en los viejos). Si el movimiento no los trae, la composición actual.
 // Nivel 2 (si hace falta) → filtrar por fecha de alta/baja contra m.fecha.
 function miembrosDelMovimiento(m, grupo) {
-  return (grupo.miembros || []).filter(id => jugadores.some(j => j.id === id));
+  const base = Array.isArray(m.miembrosGrupo) && m.miembrosGrupo.length ? m.miembrosGrupo : (grupo.miembros || []);
+  return base.filter(id => jugadores.some(j => j.id === id));
+}
+
+/** Integrantes que se guardan con un movimiento de grupo (columna MiembrosGrupo). Al editar se
+ *  conservan los que ya tenía mientras siga en el mismo grupo — lo mismo decide updateMov. */
+function miembrosGrupoParaGuardar(jugadorCT, jugadorId) {
+  const grupo = grupoDelMovimiento({ jugadorCT, jugadorId });
+  if (!grupo) return [];
+  const prev = editId ? movimientos.find(x => x.id === editId) : null;
+  if (prev && (prev.jugadorId || "") === (jugadorId || "") && normStr(prev.jugadorCT) === normStr(jugadorCT)
+      && Array.isArray(prev.miembrosGrupo) && prev.miembrosGrupo.length) return prev.miembrosGrupo.slice();
+  return (grupo.miembros || []).slice();
 }
 
 // Reparte un entero en n partes cuya suma es EXACTAMENTE el monto original.
@@ -13554,6 +13622,14 @@ function renderConfig() {
       <div id="backfill-result" style="margin-top:10px"></div>
     </div>
 
+    <!-- Fijar integrantes de grupos -->
+    <div class="cfg-card">
+      <div class="cfg-title">👥 Fijar integrantes de grupos</div>
+      <p class="cfg-note" style="margin-bottom:10px">Guarda en cada movimiento cargado a un grupo quiénes lo formaban, así el gasto por persona (Resumen › Jugadores, Reportes) no cambia cuando alguien sale del grupo. Los movimientos nuevos ya lo guardan solos; esto completa los que no lo tienen, con los integrantes de hoy. Se puede volver a correr sin riesgo — sólo toca los que están vacíos. Conviene correrlo antes de sacar a alguien de un grupo.</p>
+      <button class="btn-secondary" id="btn-fijar-miembros" onclick="runFijarMiembrosGrupos()">Fijar ahora</button>
+      <div id="fijar-miembros-result" style="margin-top:10px"></div>
+    </div>
+
     <!-- Completar tipo de los pagos a jugadores -->
     <div class="cfg-card">
       <div class="cfg-title">🏷️ Completar tipo de pagos a jugadores</div>
@@ -13591,6 +13667,30 @@ function renderConfig() {
 // Completa JugadorID y AdherenteID en los movimientos que sólo tienen el nombre. Los que no
 // matchean ninguna entidad se listan para revisarlos a mano (nombres sueltos de importaciones
 // viejas): esos siguen vinculados sólo por texto y un rename no los va a arrastrar.
+async function runFijarMiembrosGrupos() {
+  const btnId = "btn-fijar-miembros";
+  const box   = document.getElementById("fijar-miembros-result");
+  setBtnState(btnId, "saving");
+  showOverlay("Fijando integrantes…");
+  try {
+    const r = await Storage.fijarMiembrosGrupos();
+    if (!r.ok) throw new Error(r.error || "Error");
+    const rMov = await Storage.listMov();
+    if (rMov.ok) {
+      movimientos = (rMov.movimientos || []).map(m => ({ ...m, jugadorCT: stripGrpPrefix(m.jugadorCT) }));
+      saveSnapshotToCache();
+    }
+    hideOverlay();
+    setBtnState(btnId, "saved");
+    box.innerHTML = `<p class="cfg-note"><b>${r.fijados}</b> movimiento${r.fijados!==1?"s":""} de grupo fijado${r.fijados!==1?"s":""}` +
+      ` · ${r.yaTenian} ya lo tenían` + (r.sinMiembros ? ` · ${r.sinMiembros} de grupos sin integrantes (quedan sin fijar)` : "") + `.</p>`;
+  } catch(e) {
+    hideOverlay();
+    setBtnState(btnId, "error");
+    box.innerHTML = `<p class="cfg-note" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
+  }
+}
+
 async function runBackfillIds() {
   const btnId = "btn-backfill-ids";
   const box   = document.getElementById("backfill-result");

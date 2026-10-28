@@ -5265,7 +5265,9 @@ function armarPlacaJson({p, pg}) {
   return {
     fecha:   placaNumeroFecha(p.numeroFecha),   // sólo el identificador: el generador pone "FECHA" adelante
     titulo:  "RECAUDACIÓN",
-    sub:     "vs. " + (p.rival || "") + (fechaDMY ? " · " + fechaDMY : ""),
+    // condicion vacía = LOCAL (mismo default que el backend); sólo se marca el visitante.
+    sub:     "vs. " + (p.rival || "") + (fechaDMY ? " · " + fechaDMY : "")
+             + (p.condicion && p.condicion !== "LOCAL" ? " (Visitante)" : ""),
     final:   "SALDO FINAL",
     pie:     "@depmitrefutbolmayor · Fútbol Mayor",
     asisTit: "ASISTENCIA",
@@ -5301,6 +5303,20 @@ function armarPlacaJson({p, pg}) {
       ]},
     ]
   };
+}
+
+// Generador de placas publicado en GitHub Pages. El JSON viaja en el #hash (base64url): el hash no
+// se manda al servidor y el generador lo borra de la barra apenas lo lee.
+const PLACA_GENERADOR_URL = "https://manuellena5.github.io/Generador_Placas/Placas_Recaudacion.html";
+
+function abrirPlacaEnGenerador() {
+  if (!placaEdit) return;
+  const bytes = new TextEncoder().encode(JSON.stringify(placaEdit.json));
+  let bin = "";
+  bytes.forEach(b => { bin += String.fromCharCode(b); });
+  const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const w = window.open(PLACA_GENERADOR_URL + "#datos=" + b64, "_blank");
+  if (!w) toast("No se pudo abrir el generador — usá Copiar JSON", "err");
 }
 
 // Suma de todos los items de todos los bloques = el saldo final que va a mostrar la placa.
@@ -5460,10 +5476,11 @@ function openPlacaModal(partidoId) {
         <textarea id="placa-json" class="inp" readonly rows="8"
                   style="width:100%;font-family:monospace;font-size:11px;white-space:pre;resize:vertical"
                   onclick="this.select()"></textarea>
-        <p class="note">Pegalo en "Importar / exportar datos" del generador de placas.</p>
+        <p class="note">"Abrir en el generador" carga estos datos directo. Si preferís, copialo y pegalo en "Importar / exportar datos".</p>
+        <button class="btn-main" style="width:100%;margin-top:6px" onclick="abrirPlacaEnGenerador()">🖼️ Abrir en el generador</button>
         <div class="modal-footer">
           <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cerrar</button>
-          <button class="btn-main" style="flex:1" onclick="copiarPlacaJson()">📋 Copiar JSON para placa</button>
+          <button class="btn-secondary" style="flex:1" onclick="copiarPlacaJson()">📋 Copiar JSON</button>
         </div>
       </div>
     </div>`;

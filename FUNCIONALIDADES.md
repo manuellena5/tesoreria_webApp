@@ -116,7 +116,8 @@ Otros / Internos · Internos.
 - **Mensual:** totales, saldo por cuenta, tabla por categoría → rubro.
 - **Por partido:** entradas (rubros 1 y 4), buffet (2, ingreso/egreso), gastos de cancha
   (12, 13, 14b, 36), otros; excluye Movilidad y Jugadores y CT. Los movimientos con
-  `ItemsDetalle` se prorratean entre partidos. Placa para redes (JSON) y balance del partido.
+  `ItemsDetalle` se prorratean entre partidos. Placa para redes (JSON, o botón que abre el generador de placas con los datos ya cargados;
+  la bajada lleva "(Visitante)" si el partido es de visitante) y balance del partido.
 - **Adherentes:** planilla mes a mes de cuotas, deudores, buscador, exportación.
   Rubros de aporte de adherente: 5, 6 y 42. Aportes de combustible sin adherente se agrupan.
 - **Jugadores:** gasto por jugador/grupo por mes (multi-mes), columnas por tipo de gasto
@@ -283,6 +284,7 @@ a partir del historial de git.
 
 | Fecha | Cambio |
 |---|---|
+| 2026-10-28 | Placa: botón "Abrir en el generador" (pasa los datos sin copiar/pegar) y "(Visitante)" en la bajada de los partidos de visitante. |
 | 2026-10-21 | Grupos: cada movimiento de grupo guarda sus integrantes (`MiembrosGrupo`); el reparto por persona ya no cambia si alguien sale del grupo. Botón Fijar integrantes en Configuración. |
 | 2026-10-21 | Reportes: filtro Mostrar Neto/Ingresos/Egresos; filtrando por jugador, el gasto de grupo entra con su parte individual. |
 | 2026-10-20 | Nuevo movimiento: al elegir un rubro que redibuja el formulario (21, 49, de partido…) el foco no se pierde; Tab sigue en Concepto. |

@@ -5354,7 +5354,7 @@ function renderPlacaCampos() {
           </span>
           <input class="inp" type="number" min="0" step="any" inputmode="decimal" placeholder="0"
                  style="flex:0 0 118px;text-align:right;padding:6px 9px;font-size:13px"
-                 value="${Math.abs(it.m) || ""}" oninput="setPlacaMonto(${bi},${ii},this.value)">
+                 value="${Math.abs(it.m) || (it.cero ? "0" : "")}" oninput="setPlacaMonto(${bi},${ii},this.value)">
         </div>`).join("")}
     </div>`).join("");
 
@@ -5415,6 +5415,8 @@ function setPlacaMonto(bi, ii, v) {
   const it = placaEdit.json.bloques[bi].items[ii];
   const n  = Math.round(Math.abs(Number(v) || 0));   // al peso, sin signo: el signo lo fija `neg`
   it.m = it.neg ? -n : n;
+  // Un 0 escrito a propósito (ej. "no hubo GoPass") se muestra en la placa como $0; vacío lo oculta.
+  if (String(v).trim() !== "" && n === 0) it.cero = true; else delete it.cero;
   refrescarPlacaJson();
 }
 

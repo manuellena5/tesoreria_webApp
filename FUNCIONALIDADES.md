@@ -284,6 +284,7 @@ a partir del historial de git.
 
 | Fecha | Cambio |
 |---|---|
+| 2026-10-28 | Placa: escribir 0 en un renglón (ej. GoPass) lo muestra en la placa como $0; vacío lo oculta. |
 | 2026-10-28 | Placa: botón "Abrir en el generador" (pasa los datos sin copiar/pegar) y "(Visitante)" en la bajada de los partidos de visitante. |
 | 2026-10-21 | Grupos: cada movimiento de grupo guarda sus integrantes (`MiembrosGrupo`); el reparto por persona ya no cambia si alguien sale del grupo. Botón Fijar integrantes en Configuración. |
 | 2026-10-21 | Reportes: filtro Mostrar Neto/Ingresos/Egresos; filtrando por jugador, el gasto de grupo entra con su parte individual. |

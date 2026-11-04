@@ -100,7 +100,7 @@ Otros / Internos · Internos.
 - Vista tabla (columnas configurables, con "Neto extracto") o tarjetas; orden por fecha
   (desempata por orden de carga) o monto.
 - Tarjeta **Imp. débitos y créditos del mes** por cuenta gravada, con botón para cargar el
-  egreso.
+  egreso y, si hubo, lo que se restó de la base por descuentos de sueldo.
 - **Vista Cards (pensada para el celular)** con encabezado propio; la vista Tabla no cambia:
   mes + íconos de exportar y actualizar en una fila; KPIs 2×2 con el monto completo; imp.
   déb/créd en una sola línea (pendiente total y cantidad de cuentas, o "✓ cargado") que se
@@ -187,9 +187,23 @@ Otros / Internos · Internos.
 - Pagan: ingresos y egresos de la cuenta, y **cada lado** de un interno (origen como débito,
   destino como crédito), salvo que la otra cuenta esté en `InternosExentos`.
 - No pagan: rubro 9 (rendimientos y el propio impuesto), ajustes.
+- **Sueldo pagado neto de un descuento con contrapartida** (camiseta, botines, entradas…): la
+  liquidación graba el egreso por el bruto y un ingreso por el descuento, pero por la cuenta
+  sale una sola transferencia por el neto. El ingreso del descuento no paga (no entró plata) y
+  el egreso paga sobre bruto − descuentos; su neto da lo del extracto: (bruto − descuentos) ×
+  1,006. El vínculo es el de la liquidación: las filas de Pagos Jugadores con `CodRubroContra`
+  tienen `MovimientoID` = egreso del sueldo (siempre hace falta), y el ingreso tiene `Vinculos`
+  → ese egreso. Si el ingreso perdió el vínculo (el de un estudio médico, rubro 21, se edita
+  desde Reintegros), se reconoce por coincidir con una fila de contrapartida: mismo jugador,
+  fecha y cuenta que el egreso, rubro = `CodRubroContra` y mismo monto. Si el ingreso se marca GRAVADO a mano, paga como crédito y el sueldo vuelve
+  a pagar por el bruto. Los descuentos que netean un adelanto (`MovimientoOrigenID`) no generan
+  movimiento y no cambian nada. La tarjeta del mes muestra cuánto se restó ("descuentos de
+  sueldo").
 - Excepción manual por movimiento en `ImpDC`: `EXENTO` / `GRAVADO` / vacío (= regla). Si la
   casilla queda como dice la regla, no se guarda marca, así un cambio de configuración sigue
-  aplicando.
+  aplicando. Casos de MP que se marcan EXENTO a mano: devoluciones que llegan desde la cuenta
+  del Club Deportivo Mitre y pagos de servicio sin impuesto (p. ej. el seguro espectador). La
+  EPE **sí** paga (MP debita la factura × 1,006).
 - Impuesto del mes = alícuota × (Σ créditos + Σ débitos brutos gravados), calculado sobre la
   suma. Se registra como **un** egreso del rubro 9 a fin de mes; la app lo arma con un botón.
 
@@ -243,7 +257,12 @@ Otros / Internos · Internos.
 - **Backup diario** de la planilla a Drive (trigger), sin duplicar el del día.
 - **Excel:** exportar movimientos (mes, filtrado, todo) e importar.
 - **Offline / PWA:** arranque desde la copia local, cola de movimientos pendientes que se
-  sincroniza al volver la conexión, aviso de nueva versión (`SW_VERSION` en `sw.js`), botón
+  sincroniza al volver la conexión, al volver a la app y después de cada guardado exitoso; un
+  error que responde el servidor saca el ítem de la cola (sólo un corte de red lo deja para
+  después). Borrar un pendiente: si es un alta offline se borra sólo en local; si es una
+  edición offline se borra también en el servidor (si allá ya no existe, cuenta como borrado).
+  Guardar online una edición descarta la edición offline vieja del mismo movimiento. Aviso de
+  nueva versión (`SW_VERSION` en `sw.js`), botón
   atrás en Android que pide un segundo toque para salir.
 - **Seguridad:** clave numérica en la propiedad `CLAVE_APP` del Apps Script, validada en cada
   pedido; 10 intentos fallidos bloquean 15 minutos. La URL del backend está fija en el código.
@@ -261,10 +280,11 @@ cargan el `<script>` de index.html en Node.
 | frontend.js | Reglas del front (pagos a jugadores, premios, filtros, reparto de grupos en Reportes, etc.) |
 | harness.js / bootstrap.js | Backend básico y carga inicial en una sola consulta |
 | premios.js, reparto.js, entradas.js, granos.js, adjuntos.js, publico.js, seguridad.js | Cada módulo |
-| impdc.js | Impuesto a los débitos y créditos |
+| impdc.js | Impuesto a los débitos y créditos (incluye sueldos pagados netos de un descuento) |
 | cuentas.js | ABM de cuentas, migración, renombre en cascada |
 | avisos.js | Avisos de olvido al guardar |
 | grupos.js | Integrantes de grupo guardados en el movimiento (alta, edición, Fijar integrantes) |
+| pendientes.js | Cola offline: borrar altas y ediciones pendientes, que la cola no se trabe |
 
 ---
 
@@ -284,6 +304,8 @@ a partir del historial de git.
 
 | Fecha | Cambio |
 |---|---|
+| 2026-11-04 | Cola offline: borrar una edición pendiente la borra también en el servidor (antes reaparecía al refrescar); un error del servidor con "failed" en el texto ya no traba la cola; se reintenta al volver a la app y tras cada guardado. |
+| 2026-11-04 | Imp. déb/créd: un sueldo pagado neto de un descuento con contrapartida paga sobre lo transferido y el ingreso del descuento no paga; la tarjeta del mes muestra "descuentos de sueldo". La EPE ya no figura como exenta. |
 | 2026-10-28 | Placa: escribir 0 en un renglón (ej. GoPass) lo muestra en la placa como $0; vacío lo oculta. |
 | 2026-10-28 | Placa: botón "Abrir en el generador" (pasa los datos sin copiar/pegar) y "(Visitante)" en la bajada de los partidos de visitante. |
 | 2026-10-21 | Grupos: cada movimiento de grupo guarda sus integrantes (`MiembrosGrupo`); el reparto por persona ya no cambia si alguien sale del grupo. Botón Fijar integrantes en Configuración. |

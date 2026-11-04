@@ -1855,6 +1855,11 @@ function addPendingMov(mov, isEdit, descontar) {
 function removePendingMov(id) {
   setPendingMovs(getPendingMovs().filter(p => p.mov.id !== id));
 }
+/** ¿El movimiento `id` está en la cola como ALTA (todavía no existe en la hoja)? Una edición
+ *  offline de un alta que tampoco se sincronizó sigue siendo un alta: la cola tiene las dos. */
+function pendienteEsAlta(id) {
+  return getPendingMovs().some(p => p.mov && p.mov.id === id && !p.isEdit);
+}
 
 // Intenta sincronizar los movimientos cargados offline. Se llama al volver la conexión
 // y también manualmente desde el banner. Si un envío falla por red, corta y reintenta después.
@@ -1871,14 +1876,22 @@ async function syncPendingMovs() {
       try {
         const r = item.isEdit ? await Storage.updateMov(item.mov, item.descontar)
                               : await Storage.saveMov(item.mov, item.descontar);
-        if (!r.ok) throw new Error(r.error || "Error al sincronizar");
-        pjAplicarCambioDescuento(r);
+        // Respuesta del servidor con error: es un problema de datos, nunca de red, aunque el
+        // texto diga "failed" o "fetch" (isNetworkError lo miraría por el mensaje). Tomarlo como
+        // corte de red dejaba el ítem trabado en la cola para siempre, y a todos los de atrás.
+        if (!r.ok) throw Object.assign(new Error(r.error || "Error al sincronizar"), { delServidor: true });
+        // El servidor ya lo guardó: se saca de la cola ANTES de tocar el estado local. Si algo de
+        // acá abajo tirara un TypeError, se tomaría como red y el ítem se reenviaría en cada
+        // arranque sin salir nunca de la cola.
         removePendingMov(item.mov.id);
-        const idx = movimientos.findIndex(m => m.id === item.mov.id);
-        if (idx >= 0) { movimientos[idx] = { ...movimientos[idx] }; delete movimientos[idx]._pending; }
         synced++;
+        try {
+          pjAplicarCambioDescuento(r);
+          const idx = movimientos.findIndex(m => m.id === item.mov.id);
+          if (idx >= 0) { movimientos[idx] = { ...movimientos[idx] }; delete movimientos[idx]._pending; }
+        } catch (eLocal) { console.error("syncPendingMovs: estado local", eLocal); }
       } catch (e) {
-        if (isNetworkError(e)) break; // seguimos offline, reintentar más tarde
+        if (!e.delServidor && isNetworkError(e)) break; // seguimos offline, reintentar más tarde
         removePendingMov(item.mov.id); // error de datos, no de red: lo sacamos de la cola para no bloquear el resto
       }
     }
@@ -2032,6 +2045,13 @@ function renderOfflineBanner() {
 }
 
 window.addEventListener("online",  () => { renderOfflineBanner(); syncPendingMovs().then(renderOfflineBanner); });
+// El evento "online" sólo llega si el navegador pasó por offline. Un guardado que falló por un
+// fetch caído (Apps Script lento, señal floja) encola sin que eso pase, y la cola quedaba
+// esperando hasta el próximo arranque. Se reintenta también al volver a la app.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && navigator.onLine && getPendingMovs().length)
+    syncPendingMovs().then(renderOfflineBanner);
+});
 window.addEventListener("offline", renderOfflineBanner);
 
 // ══════════════════════════════════════════════════════════════
@@ -3231,6 +3251,11 @@ async function saveMovimiento() {
     if (entradasPend) guardarEntradasDelPartido(entradasPend.partidoId, entradasPend.damas, entradasPend.caballeros);
     updateBadge();
     saveSnapshotToCache();
+    // Una edición offline de este mismo movimiento que siguiera en la cola es más vieja que la que
+    // se acaba de guardar: si se mandara después, la pisaría.
+    if (editId) setPendingMovs(getPendingMovs().filter(p => !(p.isEdit && p.mov && p.mov.id === mov.id)));
+    // El servidor acaba de responder: buen momento para mandar lo que quedó en la cola.
+    if (getPendingMovs().length) syncPendingMovs().then(renderOfflineBanner);
     resetF();
     hideOverlay();        // ocultar spinner antes del re-render
     renderNuevo();
@@ -4425,11 +4450,13 @@ function openMovModal(id, volverALiquidar) {
 /** Línea del detalle: neto por cuenta, o por qué no paga (sólo si toca una cuenta con impuesto). */
 function impDCDetalleTxt(m) {
   const det = impDCDetalle(m);
-  if (det.length) return det.map(d => `${d.cuenta}: ${d.sentido==="credito"?"entra":"sale"} ${fmt2(d.neto)} (imp. ${fmt2(d.imp)})`).join(" · ")
+  if (det.length) return det.map(d => `${d.cuenta}: ${d.sentido==="credito"?"entra":"sale"} ${fmt2(d.neto)} (imp. ${fmt2(d.imp)}`
+      + (d.descuento ? ` sobre ${fmt2(d.bruto)}, descontado ${fmt2(d.descuento)}` : "") + ")").join(" · ")
     + (m.impDC === "GRAVADO" ? " · marcado a mano" : "");
   const toca = [m.cuenta, m.tipo === "INTERNO" ? m.cuentaDestino : ""].some(c => c && impDCAlic(c) > 0);
   if (!toca || m.tipo === "AJUSTE") return "";
-  return m.impDC === "EXENTO" ? "Exento (marcado a mano)" : "Exento por regla";
+  if (m.impDC === "EXENTO") return "Exento (marcado a mano)";
+  return impDCEgresoDelDescuento(m) ? "Exento: descontado del sueldo, no entró plata" : "Exento por regla";
 }
 
 function confirmDelete(id) {
@@ -4449,10 +4476,12 @@ async function deleteMovimiento(id) {
   if (bloqueadoPorVistaHistorica()) return;
   closeModal();
   const mov = movimientos.find(m => m.id === id);
-  // Cargado offline y todavía no sincronizado con el backend: no existe allá
-  // todavía, así que Storage.deleteMov devolvería "no encontrado". Lo sacamos
-  // directo de la cola local en vez de pegarle al servidor.
-  if (mov && mov._pending) {
+  // ALTA cargada offline y todavía no sincronizada: no existe en la hoja, así que
+  // Storage.deleteMov devolvería "no encontrado". Se saca sólo de la cola local.
+  // Una EDICIÓN offline es otra cosa: el movimiento ya está en la hoja y, si sólo se lo sacara
+  // de la cola, volvería a aparecer al refrescar. Esa sigue el camino normal de abajo, que lo
+  // borra en el servidor y además lo saca de la cola (también si el servidor ya no lo tiene).
+  if (mov && mov._pending && pendienteEsAlta(id)) {
     movimientos = movimientos.filter(m => m.id !== id);
     removePendingMov(id);
     updateBadge();
@@ -6315,8 +6344,13 @@ function calcSaldosCuentas(movs) {
 //     propias del mismo titular, que la ley exime).
 //   · Rubro 9 (INTERESES Y GASTOS CUENTA) → no: son los rendimientos y el propio impuesto.
 //   · AJUSTE → nunca (no es plata que se movió).
-// La regla se puede pisar por movimiento (impDC = "EXENTO" | "GRAVADO"), p. ej. el pago de la EPE,
-// que MP no grava.
+//   · Sueldo pagado neto de un descuento con contrapartida (camiseta, botines, entradas…): la
+//     liquidación graba el EGRESO por el bruto y un INGRESO por el descuento, pero por la cuenta
+//     sale UNA transferencia por el neto. Ese INGRESO no paga (no entró plata) y el EGRESO paga
+//     sobre bruto − descuentos. Ver impDCDescuentoSueldo.
+// La regla se puede pisar por movimiento (impDC = "EXENTO" | "GRAVADO"), p. ej. una devolución
+// que llega desde una cuenta del mismo titular o un pago de servicio que MP no grava. (La EPE sí
+// paga: MP debita la factura × 1,006.)
 // ══════════════════════════════════════════════════════════════
 // IMPDC_RUBRO, IMPDC_DEFAULT e impDebCred se declaran arriba, junto a `cuentas`: la config se
 // aplica (applyCuentasMetodos / snapshot) antes de que el script llegue hasta acá.
@@ -6339,10 +6373,69 @@ function impDCAlic(cuenta) {
 
 function impDCCuentasGravadas() { return cuentas.filter(c => impDCAlic(c) > 0); }
 
+// ── Sueldos pagados netos de un descuento con contrapartida ──
+// El vínculo lo graba confirmarPagosJugadores (Code.gs): el INGRESO del descuento lleva
+// vinculos = [{egresoId}] apuntando al EGRESO del sueldo, y las filas de Pagos Jugadores de esa
+// liquidación con CodRubroContra tienen MovimientoID = ese egreso. Siempre hace falta la fila de
+// Pagos Jugadores: un vínculo suelto (p. ej. un reintegro de seguro) no alcanza.
+// El vínculo del ingreso se puede perder: el de un descuento del rubro 21 (estudios médicos) se
+// edita desde la pantalla de reintegros, y en sep. 2026 la resonancia de Camargo quedó sin él.
+// Por eso, sin vínculo, también vale que el ingreso coincida con una fila de contrapartida de
+// la liquidación: mismo jugador, fecha y cuenta que el egreso, rubro = CodRubroContra y monto =
+// lo descontado. Es lo que graba confirmarPagosJugadores en el mismo momento.
+// Los descuentos que netean un adelanto (MovimientoOrigenID, sin CodRubroContra) no generan
+// movimiento —el egreso ya sale por el neto— así que acá no aparecen.
+
+/** Filas de contrapartida (descuentos imputados a un rubro) de la liquidación `egresoId`. */
+function impDCFilasContra(egresoId) {
+  return egresoId ? (pagosJugadores || []).filter(p => p.codRubroContra && p.movimientoId === egresoId) : [];
+}
+
+/** ¿El INGRESO `i` es un descuento con contrapartida del sueldo `e`? */
+function impDCEsDescuentoDe(i, e) {
+  if (!i || !e || i.tipo !== "INGRESO" || e.tipo !== "EGRESO" || i.cuenta !== e.cuenta) return false;
+  const filas = impDCFilasContra(e.id);
+  if (!filas.length) return false;
+  if ((i.vinculos || []).some(v => v.egresoId === e.id)) return true;
+  const monto = Math.abs(+i.ingreso || 0);
+  return !!i.jugadorId && i.jugadorId === e.jugadorId && i.fecha === e.fecha
+    && filas.some(p => String(p.codRubroContra) === String(i.codRubro)
+                    && Math.abs(Math.abs(+p.montoFinal || 0) - monto) < 0.005);
+}
+
+/** Si `m` es el INGRESO de un descuento de sueldo, el EGRESO del sueldo del que se descontó. */
+function impDCEgresoDelDescuento(m) {
+  if (!m || m.tipo !== "INGRESO") return null;
+  const ids = new Set((m.vinculos || []).map(v => v.egresoId));
+  const monto = Math.abs(+m.ingreso || 0);
+  for (const p of (pagosJugadores || [])) {
+    if (p.codRubroContra && p.movimientoId && String(p.codRubroContra) === String(m.codRubro)
+        && Math.abs(Math.abs(+p.montoFinal || 0) - monto) < 0.005) ids.add(p.movimientoId);
+  }
+  for (const id of ids) {
+    const e = movimientos.find(x => x.id === id);
+    if (impDCEsDescuentoDe(m, e)) return e;
+  }
+  return null;
+}
+
+/** Σ de los descuentos con contrapartida de la liquidación `e` que no salieron por `cuenta`:
+ *  lo que hay que restarle al bruto del sueldo para llegar a lo que se transfirió. Sólo cuentan
+ *  los ingresos que efectivamente no pagan: si uno se marca GRAVADO a mano, paga como crédito y
+ *  el sueldo vuelve a pagar por el bruto (así no se pierde ni se duplica nada). */
+function impDCDescuentoSueldo(e, cuenta) {
+  if (!e || e.tipo !== "EGRESO" || !e.id || !impDCFilasContra(e.id).length) return 0;
+  return movimientos
+    .filter(i => i.tipo === "INGRESO" && i.cuenta === cuenta && impDCEsDescuentoDe(i, e)
+              && !impDCGravado(i, cuenta))
+    .reduce((s, i) => s + Math.abs(+i.ingreso || 0), 0);
+}
+
 /** Lo que dice la regla para `cuenta`, sin mirar la marca manual del movimiento. */
 function impDCExentoPorRegla(m, cuenta) {
   if (m.tipo === "AJUSTE") return true;
   if (String(m.codRubro || "") === IMPDC_RUBRO) return true;
+  if (impDCEgresoDelDescuento(m)) return true;
   if (m.tipo === "INTERNO") {
     const otra = m.cuenta === cuenta ? m.cuentaDestino : m.cuenta;
     const cfg  = impDebCred[cuenta];
@@ -6359,18 +6452,23 @@ function impDCGravado(m, cuenta) {
 }
 
 /** Efecto del impuesto de un movimiento sobre cada cuenta gravada que toca:
- *  [{cuenta, sentido:"credito"|"debito", bruto, imp, neto}]. `neto` es lo que muestra el extracto:
- *  en un crédito entra bruto − imp; en un débito sale bruto + imp. */
+ *  [{cuenta, sentido:"credito"|"debito", bruto, descuento, imp, neto}]. `bruto` es la base que
+ *  paga: el monto cargado, salvo en un sueldo con descuentos con contrapartida, donde es lo que se
+ *  transfirió (cargado − `descuento`). `neto` es lo que muestra el extracto: en un crédito entra
+ *  bruto − imp; en un débito sale bruto + imp. */
 function impDCDetalle(m) {
   const out = [];
-  const lado = (cuenta, bruto, sentido) => {
+  const lado = (cuenta, monto, sentido, descuento) => {
     const t = impDCAlic(cuenta);
-    if (!t || !(bruto > 0) || !impDCGravado(m, cuenta)) return;
+    if (!t || !(monto > 0) || !impDCGravado(m, cuenta)) return;
+    descuento = Math.min(descuento || 0, monto);
+    const bruto = Math.round((monto - descuento) * 100) / 100;
+    if (!(bruto > 0)) return;
     const imp = Math.round(bruto * t * 100) / 100;
-    out.push({ cuenta, sentido, bruto, imp, neto: sentido === "credito" ? bruto - imp : bruto + imp });
+    out.push({ cuenta, sentido, bruto, descuento, imp, neto: sentido === "credito" ? bruto - imp : bruto + imp });
   };
   if (m.tipo === "INGRESO")      lado(m.cuenta, Math.abs(+m.ingreso || 0), "credito");
-  else if (m.tipo === "EGRESO")  lado(m.cuenta, Math.abs(+m.egreso  || 0), "debito");
+  else if (m.tipo === "EGRESO")  lado(m.cuenta, Math.abs(+m.egreso  || 0), "debito", impDCDescuentoSueldo(m, m.cuenta));
   else if (m.tipo === "INTERNO") {
     const monto = Math.abs(+m.montoFinal || +m.egreso || 0);
     lado(m.cuenta,        monto, "debito");
@@ -6387,22 +6485,25 @@ function impDCNetoCuenta(m, cuenta) {
 
 /** Impuesto del mes para una cuenta: alícuota × (Σ créditos + Σ débitos brutos gravados).
  *  Se calcula sobre la suma y no sumando el redondeo de cada movimiento, igual que el banco.
- *  `cargado` = egresos del rubro 9 de esa cuenta en el mes (donde va el impuesto). */
+ *  `descSueldo` = lo que se restó de los sueldos por descuentos con contrapartida (ya afuera de
+ *  `debitos`). `cargado` = egresos del rubro 9 de esa cuenta en el mes (donde va el impuesto). */
 function impDCResumenMes(mes, cuenta) {
-  let base = 0, creditos = 0, debitos = 0, n = 0;
+  let base = 0, creditos = 0, debitos = 0, descSueldo = 0, n = 0;
   for (const m of movimientos) {
     if (mesFromRecord(m) !== mes) continue;
     for (const d of impDCDetalle(m)) {
       if (d.cuenta !== cuenta) continue;
       base += d.bruto; n++;
       if (d.sentido === "credito") creditos += d.bruto; else debitos += d.bruto;
+      descSueldo += d.descuento || 0;
     }
   }
+  base = Math.round(base * 100) / 100;
   const imp = Math.round(base * impDCAlic(cuenta) * 100) / 100;
   const cargado = movimientos
     .filter(m => mesFromRecord(m) === mes && m.tipo === "EGRESO" && m.cuenta === cuenta && String(m.codRubro) === IMPDC_RUBRO)
     .reduce((s, m) => s + (+m.egreso || 0), 0);
-  return { base, creditos, debitos, n, imp, cargado };
+  return { base, creditos, debitos, descSueldo, n, imp, cargado };
 }
 
 function fmt2(n) {
@@ -6420,7 +6521,10 @@ function impDCMovsDelForm() {
              egreso: F.tipo === "INGRESO" ? 0 : v, montoFinal: v };
   };
   if (F.reparto && repartoDisponible()) return F.reparto.map(f => conMonto(f.cuenta, f.monto));
-  return [conMonto(F.cuenta, F.monto)];
+  // Con el id del que se edita: así un sueldo con descuentos muestra su neto real y el ingreso de
+  // un descuento figura como exento (ver impDCEgresoDelDescuento).
+  const orig = editId ? movimientos.find(x => x.id === editId) : null;
+  return [Object.assign(conMonto(F.cuenta, F.monto), orig ? { id: orig.id, vinculos: orig.vinculos || [], jugadorId: orig.jugadorId, fecha: orig.fecha } : {})];
 }
 
 /** Cuentas gravadas que toca el movimiento del formulario (sin importar si está exento). */
@@ -6444,8 +6548,10 @@ function impDCFieldHtml() {
   const regla   = !impDCExentoPorRegla(ref, cs[0]);
   const lineas  = movs.flatMap(impDCDetalle).map(d => d.sentido === "credito"
     ? `${esc(d.cuenta)}: entra ${fmt2(d.neto)} <span style="color:var(--text3)">(${fmt2(d.bruto)} − ${fmt2(d.imp)})</span>`
-    : `${esc(d.cuenta)}: sale ${fmt2(d.neto)} <span style="color:var(--text3)">(${fmt2(d.bruto)} + ${fmt2(d.imp)})</span>`);
-  const nota = F.impDC ? " · marcado a mano" : (regla ? "" : " · exento por regla");
+    : `${esc(d.cuenta)}: sale ${fmt2(d.neto)} <span style="color:var(--text3)">(${d.descuento ? fmt2(d.bruto + d.descuento) + " − descuentos " + fmt2(d.descuento) : fmt2(d.bruto)} + ${fmt2(d.imp)})</span>`);
+  const nota = F.impDC ? " · marcado a mano"
+    : impDCEgresoDelDescuento(ref) ? " · descontado del sueldo: no entró plata"
+    : (regla ? "" : " · exento por regla");
   return `
         <label style="cursor:pointer">
           <input type="checkbox" id="f-impdc" style="width:16px;height:16px;accent-color:var(--accent);vertical-align:middle;margin-right:6px;cursor:pointer"
@@ -6476,6 +6582,11 @@ function refreshImpDC() {
   el.style.display = html ? "" : "none";
 }
 
+/** "descuentos de sueldo: $510.000" — lo que se restó de la base por sueldos pagados netos. */
+function impDCDescSueldoTxt(r) {
+  return r.descSueldo > 0 ? `descuentos de sueldo: ${fmt2(r.descSueldo)} (no pagan)` : "";
+}
+
 /** Tarjeta del cierre en Movimientos: impuesto calculado del mes por cuenta y botón para cargarlo. */
 function impDCCardHtml() {
   const filas = impDCCuentasGravadas()
@@ -6490,7 +6601,7 @@ function impDCCardHtml() {
       return `
       <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap">
         <div style="font-size:13px;line-height:1.5">
-          <b>${esc(c)}</b> · ${fmtAlic(c)} de ${fmt2(r.base)} <span style="color:var(--text3)">(${r.n} mov.: entradas ${fmt2(r.creditos)} + salidas ${fmt2(r.debitos)})</span><br>
+          <b>${esc(c)}</b> · ${fmtAlic(c)} de ${fmt2(r.base)} <span style="color:var(--text3)">(${r.n} mov.: entradas ${fmt2(r.creditos)} + salidas ${fmt2(r.debitos)})</span>${impDCDescSueldoTxt(r) ? `<br><span style="color:var(--text3)">${impDCDescSueldoTxt(r)}</span>` : ""}<br>
           Impuesto del mes: <b>${fmt2(r.imp)}</b> · ${estado}
         </div>
         <button class="btn-sm accent" onclick="cargarImpDCMes('${escJs(c)}')">＋ Cargar egreso</button>
@@ -6501,7 +6612,7 @@ function impDCCardHtml() {
     <div class="cfg-card" style="margin-bottom:14px">
       <div class="cfg-title">🧾 Imp. débitos y créditos · ${mesLabel(sharedMes)}</div>
       ${filas.join('<div style="height:8px"></div>')}
-      <div class="cfg-note" style="margin-top:6px">Se calcula sobre los montos brutos. "Cargado" = egresos del rubro 9 de esa cuenta en el mes.</div>
+      <div class="cfg-note" style="margin-top:6px">Se calcula sobre los montos brutos; un sueldo con descuentos, sobre lo que se transfirió. "Cargado" = egresos del rubro 9 de esa cuenta en el mes.</div>
     </div>`;
 }
 
@@ -6530,7 +6641,7 @@ function impDCCompactHtml() {
     return `
       <div class="movc-imp-row">
         <div><b>${esc(c)}</b> · <span class="movc-imp-monto">${fmt2(r.imp)}</span> · ${estado}
-          <small>${fmtAlic(c)} de ${fmt2(r.base)} · ${r.n} mov.</small></div>
+          <small>${fmtAlic(c)} de ${fmt2(r.base)} · ${r.n} mov.${impDCDescSueldoTxt(r) ? " · " + impDCDescSueldoTxt(r) : ""}</small></div>
         ${Math.abs(dif) >= 1 ? `<button class="btn-sm accent" onclick="cargarImpDCMes('${escJs(c)}')">＋ Cargar</button>` : ""}
       </div>`;
   }).join("");
@@ -6544,7 +6655,7 @@ function impDCCompactHtml() {
       </button>
       <div class="movc-imp-body">
         ${rows}
-        <div class="movc-imp-note">Se calcula sobre los montos brutos. "Cargado" = egresos del rubro 9 de esa cuenta en el mes.</div>
+        <div class="movc-imp-note">Se calcula sobre los montos brutos; un sueldo con descuentos, sobre lo que se transfirió. "Cargado" = egresos del rubro 9 de esa cuenta en el mes.</div>
       </div>
     </div>`;
 }

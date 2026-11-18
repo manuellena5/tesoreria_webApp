@@ -120,6 +120,8 @@ Otros / Internos · Internos.
   la bajada lleva "(Visitante)" si el partido es de visitante) y balance del partido.
 - **Adherentes:** planilla mes a mes de cuotas, deudores, buscador, exportación.
   Rubros de aporte de adherente: 5, 6 y 42. Aportes de combustible sin adherente se agrupan.
+  La cuota es ingresos − egresos: un egreso de rubro 6 con adherente elegido (devolución en
+  efectivo de una transferencia o de un cheque descambiado) resta de lo aportado en su mes.
 - **Jugadores:** gasto por jugador/grupo por mes (multi-mes), columnas por tipo de gasto
   (viandas, almacén, alquiler y gastos casa, movilidad = rubros 15, 22, 40, 41), totales y
   promedios, orden por columna, exportación.
@@ -220,6 +222,9 @@ Otros / Internos · Internos.
 ### 4.3 Adherentes
 - Un ingreso de rubro de adherente con adherente elegido marca PAGADO el mes en `Pagos_Adh`;
   borrar el movimiento lo revierte a PENDIENTE.
+- Un egreso de rubro 6 con adherente elegido es una devolución: en Resumen > Adherentes resta de
+  la cuota del mes (neto = ingresos − egresos) y aparece en el detalle con monto negativo. No
+  toca `Pagos_Adh`. Egresos de otros rubros con adherente no restan.
 
 ### 4.4 Pagos a jugadores
 - Monto por partido según rol; mensual/quincenal según ficha.
@@ -284,6 +289,7 @@ cargan el `<script>` de index.html en Node.
 | cuentas.js | ABM de cuentas, migración, renombre en cascada |
 | avisos.js | Avisos de olvido al guardar |
 | grupos.js | Integrantes de grupo guardados en el movimiento (alta, edición, Fijar integrantes) |
+| adherentes.js | Cuota neta de adherentes: devoluciones de rubro 6 restan, otros rubros no |
 | pendientes.js | Cola offline: borrar altas y ediciones pendientes, que la cola no se trabe |
 
 ---
@@ -304,6 +310,7 @@ a partir del historial de git.
 
 | Fecha | Cambio |
 |---|---|
+| 2026-11-18 | Adherentes: los egresos de rubro 6 con adherente elegido (devoluciones) restan de su cuota; la planilla muestra ingreso − egreso. |
 | 2026-11-04 | Cola offline: borrar una edición pendiente la borra también en el servidor (antes reaparecía al refrescar); un error del servidor con "failed" en el texto ya no traba la cola; se reintenta al volver a la app y tras cada guardado. |
 | 2026-11-04 | Imp. déb/créd: un sueldo pagado neto de un descuento con contrapartida paga sobre lo transferido y el ingreso del descuento no paga; la tarjeta del mes muestra "descuentos de sueldo". La EPE ya no figura como exenta. |
 | 2026-10-28 | Placa: escribir 0 en un renglón (ej. GoPass) lo muestra en la placa como $0; vacío lo oculta. |

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ' *)",
+      "Bash(git push *)",
+      "Bash(node --check Code.gs)"
+    ]
+  }
+}

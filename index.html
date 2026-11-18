@@ -7689,10 +7689,23 @@ function esAporteAdherente(m) {
   return m.tipo === "INGRESO" && ((m.adherente && m.adherente.trim() !== "") || ADH_RUBROS.includes(m.codRubro));
 }
 
+// Devolución a un adherente: egreso de rubro 6 con el adherente elegido (ej. transfirió a MP y se
+// le devolvió una parte en efectivo, o se le descambió un cheque y se le dio el vuelto). Resta de
+// lo que aportó. Sólo rubro 6: un egreso de otro rubro con adherente (ej. comprarle combustible a
+// una estación que es adherente) es un gasto, no una devolución de su cuota.
+function esEgresoAdherente(m) {
+  return m.tipo === "EGRESO" && !!(m.adherente && m.adherente.trim() !== "") && m.codRubro === "6";
+}
+function esMovAdherente(m) { return esAporteAdherente(m) || esEgresoAdherente(m); }
+// Monto con signo para la planilla de adherentes: cuota neta = ingresos − egresos.
+function montoAdherente(m) {
+  return m.tipo === "INGRESO" ? (+m.ingreso || 0) : -(+m.egreso || 0);
+}
+
 // anio: string "YYYY" para filtrar, o "" para todos los años
 function calcAdherentesPorAnio(anio) {
   const movs6 = movimientos.filter(m =>
-    esAporteAdherente(m) && (!anio || m.fecha.slice(0,4) === anio)
+    esMovAdherente(m) && (!anio || m.fecha.slice(0,4) === anio)
   );
   const map = {};
   for (const a of adherentes) {
@@ -7702,28 +7715,30 @@ function calcAdherentesPorAnio(anio) {
     // Aportes de combustible (rubro 42) sin adherente asignado se agrupan como "⛽ Combustible"
     const key = m.adherente || (m.codRubro === "42" ? "⛽ Combustible" : "Sin adherente");
     if (!map[key]) map[key] = { adherente: key, cuotaMensual: 0, cuotasAnuales: 0, totalAportado: 0, movs: [] };
-    map[key].totalAportado += m.ingreso;
+    map[key].totalAportado += montoAdherente(m);
     map[key].movs.push(m);
   }
   return Object.values(map)
-    .filter(r => r.totalAportado > 0 || (r.cuotaMensual > 0 && r.cuotasAnuales > 0))
+    .filter(r => r.movs.length > 0 || (r.cuotaMensual > 0 && r.cuotasAnuales > 0))
     .map(r => {
       const compromisoAnual = r.cuotaMensual * r.cuotasAnuales;
       // pagosCount = cantidad real de movimientos (2 pagos en el mismo mes cuentan 2)
-      const pagosCount = r.movs.length;
+      // (las devoluciones se cuentan aparte: no son pagos)
+      const pagosCount = r.movs.filter(m => m.tipo === "INGRESO").length;
+      const devolucionesCount = r.movs.length - pagosCount;
       // porMes: monto sumado por mes (celda de la planilla); el detalle por movimiento
       // sigue disponible en r.movs al expandir la fila
       const porMes = {};
       for (const m of r.movs) {
         const k = mesFromRecord(m);
-        porMes[k] = (porMes[k] || 0) + m.ingreso;
+        porMes[k] = (porMes[k] || 0) + montoAdherente(m);
       }
       let diferencia = null, estado = null;
       if (compromisoAnual > 0) {
         diferencia = r.totalAportado - compromisoAnual;
         estado = diferencia >= 0 ? "OK" : (r.totalAportado > 0 ? "PARCIAL" : "SIN");
       }
-      return { ...r, compromisoAnual, pagosCount, porMes, diferencia, estado };
+      return { ...r, compromisoAnual, pagosCount, devolucionesCount, porMes, diferencia, estado };
     });
 }
 
@@ -7733,10 +7748,10 @@ function calcPendientesMesActual() {
   const mesActual = nowMes();
   const aportadoPorNombre = {};
   for (const m of movimientos) {
-    if (!esAporteAdherente(m)) continue;
+    if (!esMovAdherente(m)) continue;
     if (mesFromRecord(m) !== mesActual) continue;
     const key = m.adherente || (m.codRubro === "42" ? "⛽ Combustible" : "Sin adherente");
-    aportadoPorNombre[key] = (aportadoPorNombre[key] || 0) + m.ingreso;
+    aportadoPorNombre[key] = (aportadoPorNombre[key] || 0) + montoAdherente(m);
   }
   let totalPendiente = 0;
   const pendientePorNombre = {};
@@ -7766,10 +7781,10 @@ function calcPendientesEnMes(mes) {
   const aportadoPorNombre = {};
   const nombres = new Set(adherentes.map(a => a.nombre));
   for (const m of movimientos) {
-    if (!esAporteAdherente(m)) continue;
+    if (!esMovAdherente(m)) continue;
     const key = m.adherente || (m.codRubro === "42" ? "⛽ Combustible" : "Sin adherente");
     nombres.add(key);
-    if (mesFromRecord(m) === mes) aportadoPorNombre[key] = (aportadoPorNombre[key] || 0) + m.ingreso;
+    if (mesFromRecord(m) === mes) aportadoPorNombre[key] = (aportadoPorNombre[key] || 0) + montoAdherente(m);
   }
   const cuotaPorNombre = {};
   for (const a of adherentes) cuotaPorNombre[a.nombre] = a.cuotaMensual || 0;
@@ -7857,7 +7872,7 @@ function filasAdherentesRes() {
 }
 
 function renderAdherentesResumen() {
-  const movs6All = movimientos.filter(esAporteAdherente);
+  const movs6All = movimientos.filter(esMovAdherente);
   const anios = [...new Set(movs6All.map(m => m.fecha.slice(0,4)))].filter(Boolean).sort().reverse();
   if (adherenteAnio !== "" && !anios.includes(adherenteAnio) && anios.length) {
     adherenteAnio = anios[0];
@@ -7906,7 +7921,7 @@ function renderAdherentesResumen() {
 // números tienen que ser los de ese adherente, no los de la lista entera. La única excepción es
 // "Pendiente cobrar", que es del mes en curso y del club completo por definición.
 function renderAdherentesResBody() {
-  const movs6All = movimientos.filter(esAporteAdherente);
+  const movs6All = movimientos.filter(esMovAdherente);
   const pendMes  = calcPendientesMesActual();
   const rows     = filasAdherentesRes();
 
@@ -7926,7 +7941,7 @@ function renderAdherentesResBody() {
     <div class="sum-grid three" style="margin-bottom:12px">
       <div class="stat-card">
         <div class="stat-label">Acumulado</div>
-        <div class="stat-val ing">${fmt(totAportado)}</div>
+        <div class="stat-val ${totAportado<0?'egr':'ing'}">${fmtSigned(totAportado)}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Pendiente cobrar ${esc(mesLabel(pendMes.mesActual))}</div>
@@ -8005,7 +8020,7 @@ function renderAdherentesTabla(rows, meses) {
       totPorMes[mk] = (totPorMes[mk]||0) + monto;
       const multi = (nMovPorMes[mk]||0) > 1;
       if (multi) hayMultiPago = true;
-      return `<td style="text-align:right;font-family:var(--mono)" class="ing"${multi?` title="${nMovPorMes[mk]} pagos"`:""}>${fmt(monto)}${multi?` <span style="color:var(--text3);font-weight:600">*</span>`:""}</td>`;
+      return `<td style="text-align:right;font-family:var(--mono)" class="${monto<0?'egr':'ing'}"${multi?` title="${nMovPorMes[mk]} movimientos"`:""}>${fmtSigned(monto)}${multi?` <span style="color:var(--text3);font-weight:600">*</span>`:""}</td>`;
     }).join("");
 
     const cuotaCell = showMeses ? `<td style="text-align:right;font-family:var(--mono);color:var(--text2)">${r.cuotaMensual>0?fmt(r.cuotaMensual):"—"}</td>` : "";
@@ -8021,14 +8036,14 @@ function renderAdherentesTabla(rows, meses) {
       ${cuotaCell}
       ${mesCells}
       ${prometidoCell}
-      <td style="text-align:right;font-family:var(--mono)" class="ing">${fmt(r.totalAportado)}</td>
+      <td style="text-align:right;font-family:var(--mono)" class="${r.totalAportado<0?'egr':'ing'}">${fmtSigned(r.totalAportado)}</td>
       ${restaCell}
     </tr>${isExp ? `
     <tr><td colspan="${colspan}" style="padding:0;border-bottom:none">${detalle}</td></tr>` : ""}`;
   }).join("");
 
   const totResta = totCompromiso - totAportado;
-  const totMesCells = mesCols.map(mk => `<td style="text-align:right;font-family:var(--mono)">${totPorMes[mk]?fmt(totPorMes[mk]):"—"}</td>`).join("");
+  const totMesCells = mesCols.map(mk => `<td style="text-align:right;font-family:var(--mono)">${totPorMes[mk]?fmtSigned(totPorMes[mk]):"—"}</td>`).join("");
   const totRow = `<tr class="reint-tot-row">
     <td class="jugador-col">TOTALES</td>
     ${showMeses ? `<td></td>` : ""}
@@ -8043,7 +8058,7 @@ function renderAdherentesTabla(rows, meses) {
   const mesHeaders = mesCols.map(mk => thOrdenAdhRes("mes:" + mk, mesCortoHeader(mk))).join("");
   const footnote = isMobile
     ? `<p class="note" style="margin-top:6px;font-size:11px">* Vista reducida — cambiá a Cards para ver el detalle mes a mes</p>`
-    : (hayMultiPago ? `<p class="note" style="margin-top:6px;font-size:11px">* Mes con más de un pago — tocá la fila para ver el detalle</p>` : "");
+    : (hayMultiPago ? `<p class="note" style="margin-top:6px;font-size:11px">* Mes con más de un movimiento (pagos o devoluciones) — tocá la fila para ver el detalle</p>` : "");
 
   return `
     <div class="reint-table-wrap">
@@ -8068,7 +8083,7 @@ function renderAdherentesTabla(rows, meses) {
 function exportAdherentesResExcel() {
   if (typeof XLSX === "undefined") { toast("SheetJS no cargó", "err"); return; }
 
-  const movs6All = movimientos.filter(esAporteAdherente);
+  const movs6All = movimientos.filter(esMovAdherente);
   const rows = filasAdherentesRes();
   if (!rows.length) { toast("No hay datos para exportar con estos filtros", "err"); return; }
 
@@ -8130,7 +8145,7 @@ function renderAdherenteCard(r) {
     <div class="reint-card-body">
       <div class="reint-card-col">
         <label>Aportado</label>
-        <div class="val ing">${fmt(r.totalAportado)}</div>
+        <div class="val ${r.totalAportado<0?'egr':'ing'}">${fmtSigned(r.totalAportado)}</div>
       </div>
       <div class="reint-card-col">
         <label>Compromiso</label>
@@ -8141,11 +8156,11 @@ function renderAdherenteCard(r) {
         <div class="val ${r.diferencia>=0?'ing':'egr'}">${r.diferencia>=0?"+":"-"}${fmt(Math.abs(r.diferencia))}</div>
       </div>
     </div>
-    <p class="note" style="text-align:center;margin-top:6px">${r.pagosCount} pago${r.pagosCount!==1?"s":""} registrado${r.pagosCount!==1?"s":""}</p>` : `
+    <p class="note" style="text-align:center;margin-top:6px">${r.pagosCount} pago${r.pagosCount!==1?"s":""} registrado${r.pagosCount!==1?"s":""}${r.devolucionesCount?` · ${r.devolucionesCount} devoluci${r.devolucionesCount!==1?"ones":"ón"}`:""}</p>` : `
     <div style="text-align:center">
       <label style="display:block;font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Total aportado</label>
-      <div class="val ing" style="font-size:16px;font-family:var(--mono);font-weight:600">${fmt(r.totalAportado)}</div>
-      <p class="note" style="margin-top:4px">${r.pagosCount} pago${r.pagosCount!==1?"s":""} registrado${r.pagosCount!==1?"s":""}</p>
+      <div class="val ${r.totalAportado<0?'egr':'ing'}" style="font-size:16px;font-family:var(--mono);font-weight:600">${fmtSigned(r.totalAportado)}</div>
+      <p class="note" style="margin-top:4px">${r.pagosCount} pago${r.pagosCount!==1?"s":""} registrado${r.pagosCount!==1?"s":""}${r.devolucionesCount?` · ${r.devolucionesCount} devoluci${r.devolucionesCount!==1?"ones":"ón"}`:""}</p>
     </div>`;
 
   return `
@@ -8403,10 +8418,11 @@ function renderAdherenteDetalle(r) {
       const sorted = [...movsMes].sort((a,b) => a.fecha.localeCompare(b.fecha));
       for (const m of sorted) {
         const fechaD = m.fecha ? m.fecha.slice(8)+"/"+m.fecha.slice(5,7)+"/"+m.fecha.slice(0,4) : "";
-        const concepto = m.codRubro === "42" ? "Aporte combustible" : (m.concepto || "Adhesion");
+        const concepto = m.codRubro === "42" ? "Aporte combustible"
+          : (m.concepto || (m.tipo === "EGRESO" ? "Devolución" : "Adhesion"));
         items.push({
           fechaRaw: m.fecha||"", fechaD, mesRaw: k, mesTxt: mesLabel(k),
-          concepto, monto: m.ingreso, rubro: m.rubro||"", categoria: m.categoria||"",
+          concepto, monto: montoAdherente(m), rubro: m.rubro||"", categoria: m.categoria||"",
           entidad: m.cuenta||"", extra: "",
         });
       }
